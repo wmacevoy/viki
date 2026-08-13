@@ -38,21 +38,30 @@ src/            viki CLI source (C)
   viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
   viki_serve.c/.h `viki serve`: single-threaded POSIX-sockets HTTP server (no external HTTP library). `/` = static HTML search page (renders results via textContent, never innerHTML -- indexed content isn't trusted markup). `/api/ask`, `/api/chunk`, `/api/health` = JSON, for agents. No static-file serving (every response is generated, not read off disk), so no path-traversal surface.
   viki_cache.c/.h `viki cache push|pull`: fossil uv wrappers (subprocess)
-  sha256.c/.h     content_hash keying, via LibreSSL EVP (not hand-rolled)
+  sha256.c/.h     content_hash keying, standalone vendored SHA-256 (see FINDINGS.md -- used to be a LibreSSL
+                  EVP wrapper, decoupled so viki's build has no other project as a prerequisite)
   tokenizer.c/.h  BERT WordPiece tokenization against vocab.txt (ASCII-scoped, see FINDINGS.md/tokenizer.h)
-  embed.c/.h      ONNX Runtime C API: session, tokenize -> Run -> mean-pool -> L2-normalize
+  embed.c/.h      ONNX Runtime C API: session, tokenize -> Run -> mean-pool -> L2-normalize (Windows model-path
+                  handling is a real wrinkle here -- see FINDINGS.md)
 build/
-  build.sh        builds build/dist/viki + downloads/verifies ONNX Runtime + the pinned model; see its header comment
-  versions.env    pins: onnxruntime release (3 platforms) + the embedding model/vocab, all SHA256-verified
+  build.sh        self-contained: downloads/verifies the SQLite amalgamation, ONNX Runtime, and the pinned
+                  model, no other project needs to be built first (see FINDINGS.md); see its header comment
+  versions.env    pins: SQLite amalgamation, onnxruntime release (4 platforms incl. Windows), and the
+                  embedding model/vocab, all SHA256-verified
 vendor/
   fossil-see/     git submodule -- NOT a build dependency of viki itself (see FINDINGS.md); kept only so a
                   fossil-see binary is available at runtime if $VIKI_FOSSIL_BIN/PATH don't already have one
-  sqlite-ndvss/   git submodule -- Warren's fork of JarkkoPar/sqlite-ndvss, statically linked
+  sqlite-ndvss/   git submodule -- Warren's fork of JarkkoPar/sqlite-ndvss, statically linked (has a real
+                  aarch64-Linux-only build bug -- see FINDINGS.md, CI's linux-arm64 job is marked experimental)
   download-cache/ gitignored -- cached onnxruntime tarball + model/vocab downloads (build/build.sh's fetch_verify)
 experiments/      FFI_RISK.md's proof-of-concept (in-process fossil), inherited from fossil-app
 server/           hub deployment scripts: setup-hub.sh (fossil server + Caddy TLS, D-8) and
                   setup-viki-serve.sh (adds viki serve behind the same Caddy, Basic Auth) -- see
                   SERVER_SETUP.md; inherited from fossil-app (pre-encryption; see ENCRYPTION.md TODOs)
+.github/workflows/
+  build.yml       CI matrix: linux-x86_64, linux-arm64 (experimental, see FINDINGS.md), macos-arm64,
+                  windows-x86_64 (MSYS2's plain MSYS environment, not MINGW64 -- see FINDINGS.md for why).
+                  Each green job uploads build/dist/ as a build artifact.
 ```
 
 ## Build and run
@@ -154,10 +163,21 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   `model_id` let two epochs coexist during migration). Right now bumping
   the pin just means new content gets embedded under a new model_id;
   nothing re-embeds old content or cleans up the old epoch's vectors.
-- **Cross-arch model verification.** The pinned model is the `arm64`
-  quantization recipe (picked because it could be verified on this dev
-  machine). Not yet verified on x86_64 -- see FINDINGS.md and
-  `build/versions.env`'s caveat on this.
+- ~~Cross-arch model verification~~ **Done.** The pinned model is the
+  `arm64` quantization recipe, picked originally because it could only be
+  verified on this arm64 dev machine -- CI (`.github/workflows/build.yml`)
+  now runs `embed-selftest` on linux-x86_64 and windows-x86_64 too, both
+  green: the same semantic-property check passes on x86 as on arm64.
+  `build/versions.env`'s caveat about this tension is now resolved in
+  practice, if not in the design (still one universal pinned model, not
+  per-arch).
+- **Windows binary depends on `msys-2.0.dll` at runtime, not bundled.**
+  `viki.exe` is built under MSYS2's plain MSYS environment (needed for
+  `fork()`/BSD sockets -- see FINDINGS.md), which means it links against
+  `msys-2.0.dll`, not a fully standalone native Windows binary. CI
+  doesn't currently copy that DLL into the release artifact alongside
+  `viki.exe` the way `onnxruntime.dll` is -- a real gap for anyone who
+  downloads just `viki.exe` without an MSYS2 install on their machine.
 - **Tech notes / other artifact types** aren't indexed (checkout files,
   wiki pages, tickets, and forum posts are, so far -- forum indexing is
   implemented but not verified against a live post, see FINDINGS.md).

@@ -203,6 +203,17 @@ if [ "$ORT_OS" = "Windows" ]; then
         [ -e "$f" ] || continue
         cp "$f" "$OUTPUT_DIR/$(basename "$f")"
     done
+    # viki.exe itself is built under MSYS2's plain MSYS environment (for
+    # fork()/BSD sockets -- see FINDINGS.md), so it links against
+    # msys-2.0.dll too, same as any other runtime dependency -- without
+    # it, viki.exe won't even start on a machine without MSYS2 installed.
+    MSYS_RUNTIME_DLL="$(command -v msys-2.0.dll 2>/dev/null || true)"
+    [ -n "$MSYS_RUNTIME_DLL" ] || MSYS_RUNTIME_DLL="/usr/bin/msys-2.0.dll"
+    if [ -f "$MSYS_RUNTIME_DLL" ]; then
+        cp "$MSYS_RUNTIME_DLL" "$OUTPUT_DIR/msys-2.0.dll"
+    else
+        echo "WARN: msys-2.0.dll not found at $MSYS_RUNTIME_DLL -- viki.exe will only run where MSYS2 is already installed"
+    fi
 fi
 
 echo "==> Compiling SQLite amalgamation (FTS5 on, no codec -- this is viki's own unencrypted local cache db)"

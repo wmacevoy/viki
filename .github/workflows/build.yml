@@ -41,7 +41,6 @@ jobs:
             os: windows-latest
             container: ""
             kind: windows
-            experimental: true # see FINDINGS.md -- not yet verified working
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || null }}
     defaults:

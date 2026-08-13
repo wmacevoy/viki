@@ -5,6 +5,82 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## Windows CI actually works -- three distinct bugs found and fixed by really running it, not by reasoning about it
+
+**Date:** 2026-08-13, first real Windows CI run.
+
+Before touching anything, the open question was whether `fork()`/
+`pipe()`/`waitpid()` (`viki_cache.c`, `viki_index.c`, subprocess calls
+to `fossil`) and BSD sockets headers (`viki_serve.c`) would even
+*compile* on Windows at all, since plain MinGW provides neither. The
+answer, confirmed empirically: use MSYS2's plain **MSYS** environment
+(`msystem: MSYS` in `msys2/setup-msys2`), not **MINGW64** -- MSYS's
+runtime (same lineage as Cygwin) is POSIX-emulating and provides both,
+with **zero source changes** to `viki_cache.c`/`viki_index.c`/
+`viki_serve.c`. That part worked on the very first CI attempt. The
+trade-off, stated plainly: the resulting `viki.exe` depends on
+`msys-2.0.dll` at runtime (not yet bundled in the release artifact --
+open item, see AGENTS.md) rather than being a fully standalone native
+binary; that's the honest cost of not rewriting three files' worth of
+process/socket handling to raw Win32 APIs.
+
+What remained -- and took three CI round-trips, each one a *real*
+compile+run, not a guess -- was `viki embed-selftest` failing to load
+the ONNX model:
+
+1. **`_WIN32` is not defined under MSYS's gcc.** `src/embed.c`
+   originally guarded a UTF-16 path conversion with `#ifdef _WIN32`,
+   matching `onnxruntime_c_api.h`'s own `ORTCHAR_T` typedef (which is
+   also gated on `_WIN32`). Both evaluated false under MSYS -- MSYS,
+   like Cygwin, doesn't define `_WIN32` because it presents a POSIX-like
+   environment by design. Result: the guard was silently skipped, and
+   `CreateSession` got the same narrow `char*` as on Unix, while
+   `onnxruntime.dll` (a real Microsoft Windows build, genuinely compiled
+   with `_WIN32`) read it as UTF-16 anyway -- every two ASCII bytes
+   became one garbage wide char, producing an unreadable mojibake
+   "file not found" error. **Fix:** stop relying on ambient `_WIN32`/
+   `__MSYS__` state entirely -- `build.sh` now passes an explicit
+   `-DVIKI_WIN_ORT_PATH` when (and only when) linking against the
+   Windows onnxruntime build, and `embed.c` hand-widens the (always-
+   ASCII, in this project) path byte-by-byte rather than calling
+   `MultiByteToWideChar` (`<windows.h>` availability under plain MSYS,
+   as opposed to MINGW64, was never confirmed, so this sidesteps that
+   question too), casting the result to whatever `ORTCHAR_T` resolves
+   to locally -- correct either way, since C passes a pointer through
+   uninterpreted; only the bytes at the far end matter to
+   `onnxruntime.dll`.
+2. **MSYS-style paths aren't Win32 paths.** After (1), the error
+   message became *readable* (`/d/a/viki/viki/build/dist/model/model.onnx`)
+   but still "File doesn't exist" -- `pwd` under MSYS bash returns an
+   MSYS-style absolute path, which only an MSYS-runtime binary can
+   interpret (viki.exe's own `fopen()` calls work because `msys-2.0.dll`
+   translates them transparently; `onnxruntime.dll`, a native Win32
+   library with no MSYS awareness, calls raw `CreateFileW` with
+   whatever bytes it's given and gets a path that doesn't exist on any
+   real filesystem root). **Fix:** `build.sh` now runs `SCRIPT_DIR`/
+   `REPO_ROOT` through `cygpath -m` (mixed: drive-letter + forward
+   slashes) when `cygpath` is available, so every absolute path the
+   script builds downstream -- not just the ones handed to
+   `embed-selftest` -- is something both Win32 APIs and the rest of the
+   (still forward-slash-assuming) bash script can use. No-op on
+   macOS/Linux, where `cygpath` doesn't exist.
+3. Once both were fixed, `embed-selftest` passed outright on the next
+   CI run: real model load, real inference, the same semantic property
+   check (`cosine(horses/trough, horses/watering-hole) > cosine(...,
+   tax-filing-deadline)`) passing on Windows as it does everywhere else.
+   `ndvss instruction set: avx2` in the same run also confirms
+   `sqlite-ndvss`'s runtime CPU dispatch works correctly on Windows,
+   not just the ONNX path.
+
+The throughline: none of these three would have been caught by
+inspection alone -- (1) requires knowing MSYS's specific `_WIN32`
+behavior, (2) only shows up once (1) is fixed and the *next* layer of
+wrongness becomes visible, and (3) is the actual proof, not an
+assumption. Each fix was verified by an actual CI run before moving to
+the next, exactly this project's standing rule (see the top of this
+file, and every other entry in it) applied to a platform with zero
+local dev-machine access to test against directly.
+
 ## CI: linux-arm64 build fails in vendor/sqlite-ndvss, not in viki's own code -- a real bug in that project, marked experimental rather than worked around
 
 **Date:** 2026-08-13, first CI run on `ubuntu-24.04-arm`.
