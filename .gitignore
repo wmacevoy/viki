@@ -12,6 +12,9 @@ _FOSSIL_
 manifest
 manifest.uuid
 
+# Local dev convenience scripts (host-specific: hostnames, logins, port forwards)
+connect
+
 # Build artifacts
 build/dist/
 build/obj/
