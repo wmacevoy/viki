@@ -5,6 +5,64 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## `viki serve`'s internet exposure: Caddy reverse proxy, not TLS/auth in C -- and a real `-d` vs. file bug caught only by dry-running the deploy script
+
+**Date:** 2026-08-13, putting `viki serve` on the internet.
+
+`viki serve` was built loopback-only with no auth (see the entry below).
+Once the actual requirement became "serve this from the internet," the
+options were: implement TLS + auth directly in `viki_serve.c` (link
+libssl, hand-roll a TLS server, a credential store, timing-safe
+comparison), or terminate TLS/auth in front of it. Went with the latter,
+matching a decision this repo already made for the exact same problem:
+`server/SERVER_SETUP.md`'s D-8 puts the real `fossil server` process
+behind Caddy for automatic Let's Encrypt TLS, with the backend never
+facing the internet directly. `viki serve` reuses the *same* Caddy
+instance rather than inventing a second TLS story: `server/setup-
+viki-serve.sh` adds a `handle_path /viki/*` block with Caddy's
+`basic_auth` into the existing `$DOMAIN { ... }` site block, and a
+systemd unit runs `viki serve --host 127.0.0.1` under a dedicated
+no-login user. No code changes to `viki_serve.c` were needed at all --
+its already-loopback-only default (chosen before internet exposure was
+even a stated requirement) turned out to be exactly the shape this
+pattern needs.
+
+Two real bugs were caught by testing the deploy script itself before
+trusting it, rather than just reading it back:
+
+1. **`awk -v var="<value with embedded newlines>"` failed on this
+   machine's `awk`** (`awk: newline in string`) when trying to pass the
+   whole Caddy config block to insert as a single multi-line `-v`
+   value. Not every awk implementation accepts a raw newline inside a
+   `-v` assignment. Fixed by writing the block to a temp file and using
+   `sed`'s `r file` command (read-and-insert-after-match) instead, which
+   needs no multi-line shell value at all -- discovered by literally
+   running the insertion logic against a scratch Caddyfile, not by
+   inspecting the script.
+2. **A real fossil-checkout-detection bug**: the script's guard checked
+   `[ -d "$VIKI_REPO_CHECKOUT/.fslckout" ]` -- but `.fslckout` (and its
+   Windows counterpart `_FOSSIL_`) is a **file** (the checkout's SQLite
+   db), not a directory. `-d` against a file is always false, so the
+   check would have rejected every real, valid open checkout. Fixed to
+   `-e` (existence, regardless of type). Caught by a full dry run of the
+   script (stubbing `useradd`/`chown`/`systemctl`/`caddy` and pointing
+   `/etc/...` paths at a scratch directory) against a fake checkout dir
+   with a real `.fslckout` file in it -- exactly the kind of "run it and
+   see" step that would have been skipped by just reading the sed/awk
+   logic and reasoning it looked right, the way the first bug was found
+   but this one wasn't (until the dry run).
+
+The bcrypt hash Caddy generates (`caddy hash-password`) contains literal
+`$` sequences (e.g. `$2a$14$...`) that look like shell parameter
+expansions. Verified this is *not* a problem here: the hash only ever
+flows through normal `"$VAR"` shell-variable expansion (command
+substitution capturing it, then a double-quoted assignment/heredoc
+re-using that variable) -- bash expands `$VIKI_HASH` once, as the
+variable name, and does not re-scan the substituted *value* for further
+`$` sequences. It would only be a real bug if the literal hash string
+were written into a *second* unquoted shell context expecting further
+expansion (e.g. `eval`), which nothing here does.
+
 ## `viki serve`: no new HTTP library needed; the real risk was XSS from indexed content, not the server plumbing
 
 **Date:** 2026-08-13, building `viki serve`.

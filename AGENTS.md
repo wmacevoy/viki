@@ -22,8 +22,11 @@ There's now also a `viki serve` local HTTP server: an HTML search page
 for humans at `/`, plus a JSON API (`/api/ask`, `/api/chunk`,
 `/api/health`) explicitly meant for agents/scripts to call directly,
 sharing the exact same `viki_ask_query()` retrieval the CLI uses.
-Loopback-only, no auth -- a local dev tool, not something to expose to a
-network.
+`viki_serve.c` itself stays loopback-only with no auth by design; for
+internet exposure, `server/setup-viki-serve.sh` puts it behind the same
+Caddy (TLS + Basic Auth) instance `server/SERVER_SETUP.md` already runs
+for the Fossil hub, rather than hand-rolling TLS/auth in C -- see
+FINDINGS.md.
 
 ## Layout
 
@@ -46,7 +49,9 @@ vendor/
   sqlite-ndvss/   git submodule -- Warren's fork of JarkkoPar/sqlite-ndvss, statically linked
   download-cache/ gitignored -- cached onnxruntime tarball + model/vocab downloads (build/build.sh's fetch_verify)
 experiments/      FFI_RISK.md's proof-of-concept (in-process fossil), inherited from fossil-app
-server/           hub deployment scripts, inherited from fossil-app (pre-encryption; see ENCRYPTION.md TODOs)
+server/           hub deployment scripts: setup-hub.sh (fossil server + Caddy TLS, D-8) and
+                  setup-viki-serve.sh (adds viki serve behind the same Caddy, Basic Auth) -- see
+                  SERVER_SETUP.md; inherited from fossil-app (pre-encryption; see ENCRYPTION.md TODOs)
 ```
 
 ## Build and run
