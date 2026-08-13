@@ -1,0 +1,110 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-latest
+            container: debian:bookworm
+            kind: unix
+            deps: |
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential curl unzip ca-certificates git
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            container: debian:bookworm
+            kind: unix
+            deps: |
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential curl unzip ca-certificates git
+          - label: macos-arm64
+            os: macos-latest
+            container: ""
+            kind: unix
+            deps: "true" # Xcode command line tools already provide cc/curl/unzip
+          - label: windows-x86_64
+            os: windows-latest
+            container: ""
+            kind: windows
+            experimental: true # see FINDINGS.md -- not yet verified working
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container || null }}
+    defaults:
+      run:
+        shell: ${{ matrix.kind == 'windows' && 'msys2 {0}' || 'bash' }}
+    steps:
+      # Container jobs need git present BEFORE actions/checkout, or
+      # checkout falls back to a REST tarball download (no .git dir) and
+      # the later submodule step fails with "not a git repository".
+      - name: Pre-install git (container only)
+        if: ${{ matrix.container != '' }}
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Set up MSYS2
+        if: ${{ matrix.kind == 'windows' }}
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: gcc make curl unzip git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # vendor/sqlite-ndvss is the only submodule the build needs (see
+      # FINDINGS.md: viki no longer depends on vendor/fossil-see at build
+      # time). Its .gitmodules URL is git@github.com:... (SSH) -- CI has
+      # no SSH key for that, so rewrite git@github.com: to https://
+      # first. vendor/fossil-see is deliberately left uninitialized here:
+      # nothing in this workflow needs it.
+      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init vendor/sqlite-ndvss
+
+      - name: Install dependencies
+        if: ${{ matrix.kind == 'unix' }}
+        run: ${{ matrix.deps }}
+
+      - name: Build
+        run: ./build/build.sh
+
+      - name: Stage release artifact
+        shell: bash
+        run: |
+          mkdir -p stage/viki-${{ matrix.label }}
+          if [ "${{ matrix.kind }}" = "windows" ]; then
+            cp build/dist/viki.exe stage/viki-${{ matrix.label }}/
+            cp build/dist/*.dll stage/viki-${{ matrix.label }}/ 2>/dev/null || true
+          else
+            cp build/dist/viki stage/viki-${{ matrix.label }}/
+            cp build/dist/*.dylib stage/viki-${{ matrix.label }}/ 2>/dev/null || true
+            cp build/dist/*.so* stage/viki-${{ matrix.label }}/ 2>/dev/null || true
+          fi
+          cp -r build/dist/model stage/viki-${{ matrix.label }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: viki-${{ matrix.label }}
+          path: stage/viki-${{ matrix.label }}
+          retention-days: 30
