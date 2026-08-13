@@ -10,19 +10,20 @@
 #include "viki_index.h"
 #include "viki_ask.h"
 #include "viki_cache.h"
+#include "embed.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
-#define VIKI_VERSION "0.1.0-m1-skeleton"
+#define VIKI_VERSION "0.1.0-m1"
 
 static void usage(void){
     fprintf(stderr,
         "usage: viki <subcommand> [args...]\n\n"
         "  index [dir]              Walk dir (default: .) and (re)index into the local cache\n"
-        "  ask \"<query>\" [--k N]    BM25 top-N search (default N=5); degraded mode, see FINDINGS.md\n"
+        "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found\n"
         "  cache push [db-path]     Publish the local cache db as a fossil uv blob (default: .viki/cache.db)\n"
         "  cache pull [db-path]     Fetch the cache db from a fossil uv blob\n"
         "  version                  Print version\n"
@@ -30,7 +31,23 @@ static void usage(void){
         "\n"
         "All subcommands except 'version'/'help' open (creating if needed) the local\n"
         "cache db at .viki/cache.db, relative to the current directory. Run from within\n"
-        "a fossil-see checkout.\n");
+        "a fossil-see checkout.\n"
+        "\n"
+        "Embedding model directory (model.onnx + vocab.txt + viki-manifest.json):\n"
+        "$VIKI_MODEL_DIR if set, else the build's own build/dist/model. Missing/absent\n"
+        "is not an error -- degrades to BM25-only per VIKI_DESIGN.md.\n");
+}
+
+/* Resolves the model directory and opens an embedder, or returns NULL if
+** none is configured/loadable -- this is the expected, handled path when
+** no model is present (VIKI_DESIGN.md's required degraded mode), not an
+** error callers should treat as fatal. */
+static viki_embedder *open_embedder_if_available(void){
+    const char *dir = getenv("VIKI_MODEL_DIR");
+    struct stat st;
+    if( !dir || !dir[0] ) dir = "build/dist/model";
+    if( stat(dir, &st) != 0 || !S_ISDIR(st.st_mode) ) return NULL;
+    return viki_embedder_open(dir);
 }
 
 static int ensure_viki_dir(void){
@@ -63,16 +80,21 @@ int main(int argc, char **argv){
 
     if( strcmp(sub, "index") == 0 ){
         sqlite3 *db;
+        viki_embedder *emb;
         const char *dir = argc > 2 ? argv[2] : ".";
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
-        rc = viki_cmd_index(db, dir);
+        emb = open_embedder_if_available();
+        if( !emb ) fprintf(stderr, "viki index: no embedding model found -- indexing BM25-only (rung 0)\n");
+        rc = viki_cmd_index(db, dir, emb);
+        if( emb ) viki_embedder_close(emb);
         sqlite3_close(db);
         return rc;
     }
 
     if( strcmp(sub, "ask") == 0 ){
         sqlite3 *db;
+        viki_embedder *emb;
         int k = 5;
         int i;
         if( argc < 3 ){ fprintf(stderr, "usage: viki ask \"<query>\" [--k N]\n"); return 1; }
@@ -81,7 +103,9 @@ int main(int argc, char **argv){
         }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
-        rc = viki_cmd_ask(db, argv[2], k);
+        emb = open_embedder_if_available();
+        rc = viki_cmd_ask(db, argv[2], k, emb);
+        if( emb ) viki_embedder_close(emb);
         sqlite3_close(db);
         return rc;
     }
@@ -116,6 +140,44 @@ int main(int argc, char **argv){
         sqlite3_finalize(st);
         sqlite3_close(db);
         return 0;
+    }
+
+    if( strcmp(sub, "embed-selftest") == 0 ){
+        /* Debug/regression command, not in usage(): proves the ONNX
+        ** embedding pipeline is real -- loads the model, tokenizes, runs
+        ** inference, and checks a semantic property (similar sentences
+        ** cosine-closer than dissimilar ones) rather than just "did it
+        ** not crash". argv[2] is the model dir (default build/dist/model). */
+        const char *modelDir = argc > 2 ? argv[2] : "build/dist/model";
+        viki_embedder *emb;
+        float vA[1024], vB[1024], vC[1024];
+        int dim, i;
+        double simAB = 0, simAC = 0;
+
+        emb = viki_embedder_open(modelDir);
+        if( !emb ){ fprintf(stderr, "embed-selftest: FAIL (could not open model at '%s')\n", modelDir); return 1; }
+        dim = viki_embedder_dim(emb);
+        printf("embed-selftest: model_id=%s dim=%d\n", viki_embedder_model_id(emb), dim);
+
+        if( viki_embed(emb, "six horses were grazing near the water trough", vA) ||
+            viki_embed(emb, "a group of horses stood by the watering hole", vB) ||
+            viki_embed(emb, "the quarterly tax filing deadline is in April", vC) ){
+            fprintf(stderr, "embed-selftest: FAIL (viki_embed returned an error)\n");
+            viki_embedder_close(emb);
+            return 1;
+        }
+
+        for( i = 0; i < dim; i++ ){ simAB += vA[i]*vB[i]; simAC += vA[i]*vC[i]; }
+        printf("cosine(horses/trough, horses/watering-hole) = %.4f\n", simAB);
+        printf("cosine(horses/trough, tax-filing-deadline)   = %.4f\n", simAC);
+        viki_embedder_close(emb);
+
+        if( simAB > simAC && simAB > 0.5 ){
+            printf("embed-selftest: PASS\n");
+            return 0;
+        }
+        fprintf(stderr, "embed-selftest: FAIL (similar-sentence pair not clearly closer than the unrelated one)\n");
+        return 1;
     }
 
     fprintf(stderr, "viki: unknown subcommand '%s'\n\n", sub);

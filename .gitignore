@@ -18,3 +18,4 @@ build/obj/
 .viki/
 vendor/fossil-see/vendor/libressl-cache/
 vendor/fossil-see/vendor/libressl-build-out/
+vendor/download-cache/

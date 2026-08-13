@@ -5,6 +5,75 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## The ONNX embedding pipeline (rung 2) works, verified by a semantic property test, not just "it ran"
+
+**Date:** 2026-08-13.
+
+`viki embed-selftest` computes real sentence embeddings (tokenize -> ONNX
+Runtime C API `Run` -> mean-pool over `last_hidden_state` using the
+attention mask -> L2-normalize) and checks that cosine similarity between
+two semantically related sentences is clearly higher than between an
+unrelated pair. Observed: `cosine("six horses were grazing near the water
+trough", "a group of horses stood by the watering hole") = 0.64`, vs.
+`cosine(..., "the quarterly tax filing deadline is in April") = -0.05`.
+
+More convincingly: `viki ask "livestock standing by a drinking pool"`
+against an indexed corpus of 3 unrelated documents (horses/water-trough,
+a grocery list, a tax-deadline note) correctly ranked the horses document
+first, even though **the query shares zero literal words** with that
+document -- FTS5 BM25 alone contributes nothing here (no term overlap at
+all); the ranking is coming entirely from the vector leg. This is the
+actual thing rung 2 is for, working, not assumed.
+
+Model used: `sentence-transformers/all-MiniLM-L6-v2`'s `arm64`-quantization-
+recipe ONNX export (~23MB, matches VIKI_DESIGN.md's rung-2 budget). Picked
+the arm64 recipe specifically so it could be verified empirically on this
+dev machine; **not yet verified on x86** -- see the "one universal pinned
+model vs. per-arch quantized exports" tension noted in
+`build/versions.env`.
+
+## macOS's `dyld` looks up a linked dylib by its own embedded install name, not by whatever filename you copied it as
+
+**Date:** 2026-08-13, wiring up ONNX Runtime.
+
+After linking `viki` against ONNX Runtime's prebuilt `.dylib` and copying
+*one* file (the one `-lonnxruntime` resolved against) next to the binary,
+running it failed: `dyld: Library not loaded: @rpath/libonnxruntime.1.dylib`.
+The copied file existed, just under a different name (`libonnxruntime.dylib`
+or `libonnxruntime.1.29.0.dylib`, depending on which of the three
+name/symlink variants `find` happened to return first).
+
+Root cause: `dyld` resolves a runtime dependency by the *install name*
+baked into the dylib itself at build time (macOS's `LC_ID_DYLIB`; SONAME
+on Linux) -- not by whatever filename it currently has on disk. ONNX
+Runtime's release tarball ships three names for the same library
+(`libonnxruntime.dylib`, `libonnxruntime.1.dylib`, `libonnxruntime.1.29.0.dylib`
+-- unversioned dev symlink, SONAME symlink, real versioned file), and the
+binary references the SONAME one specifically regardless of which name
+was used at link time.
+
+**Fix (`build/build.sh`):** copy every `libonnxruntime.*` name/symlink
+variant next to the binary (`cp -P` to preserve symlinks rather than
+tripling the actual file content), not just the one the linker happened
+to use.
+
+## bsdtar's `--strip-components=1` didn't strip, unlike GNU tar
+
+**Date:** 2026-08-13, extracting the ONNX Runtime release tarball.
+
+`tar xzf onnxruntime-*.tgz -C "$dir" --strip-components=1` on this macOS
+machine (bsdtar) left the tarball's top-level directory
+(`onnxruntime-osx-arm64-1.29.0/`) intact as a subdirectory of `$dir`,
+rather than stripping it as GNU tar (the usual assumption on Linux CI)
+does. Not root-caused further (a bsdtar version quirk, a `-C`-plus-
+`--strip-components` interaction, or something else) -- worked around
+instead: extract into a scratch directory, then `mv` the single top-level
+entry's contents up a level. This works identically on both `tar`
+implementations and doesn't depend on `--strip-components` behaving the
+same way everywhere.
+
+---
+
 ## FTS5's default MATCH syntax is implicit-AND, not OR -- wrong default for natural-language queries
 
 **Date:** 2026-08-13, building `viki ask`.
