@@ -78,6 +78,12 @@ jobs:
       # nothing in this workflow needs it.
       - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
         run: |
+          # Container jobs bind-mount the checkout from the host; the
+          # resulting UID mismatch trips git's dubious-ownership check for
+          # every step except actions/checkout's own internal git calls
+          # (which add this for themselves, but only for the duration of
+          # that action, not for later steps like this one).
+          git config --global --add safe.directory '*'
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           git submodule update --init vendor/sqlite-ndvss
 

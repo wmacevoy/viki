@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #define VIKI_MAX_SEQ_LEN 256
 
 struct viki_embedder {
@@ -134,7 +138,23 @@ viki_embedder *viki_embedder_open(const char *zModelDir){
     if( check(e->ort, e->ort->CreateSessionOptions(&opts), "CreateSessionOptions") ){
         viki_vocab_free(e->vocab); free(e); return NULL;
     }
+    /* ONNX Runtime's C API takes ORTCHAR_T* for a model path, which is
+    ** wchar_t (UTF-16) on Windows and plain char (UTF-8) everywhere else
+    ** -- passing a narrow char* straight through on Windows compiles
+    ** (it's just a pointer) but CreateSession reads it as UTF-16, so an
+    ** ASCII path comes out as garbage (every two ASCII bytes read as one
+    ** wide char) and the "file" it looks for doesn't exist. Convert
+    ** explicitly on Windows; everywhere else modelPath is already the
+    ** right type. */
+#ifdef _WIN32
+    {
+        wchar_t modelPathW[4096];
+        MultiByteToWideChar(CP_UTF8, 0, modelPath, -1, modelPathW, (int)(sizeof(modelPathW) / sizeof(wchar_t)));
+        st = e->ort->CreateSession(e->env, modelPathW, opts, &e->session);
+    }
+#else
     st = e->ort->CreateSession(e->env, modelPath, opts, &e->session);
+#endif
     e->ort->ReleaseSessionOptions(opts);
     if( check(e->ort, st, "CreateSession") ){
         viki_vocab_free(e->vocab); free(e); return NULL;
