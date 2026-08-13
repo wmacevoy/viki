@@ -1,5 +1,15 @@
 # iOS FFI feasibility — experiment results
 
+> **STALE as of 2026-08-13 (later that same day) — read `../fossil-sqlcipher-libressl/embed/README.md`
+> instead.** This file is a frozen snapshot from when this experiment lived in `fossil-app`, before it
+> was promoted to a shared `embed/` directory in `fossil-sqlcipher-libressl`. The cross-repo bug this
+> file's "Required shim rules" section lists as an open risk (`db_repository_filename`'s `zRepo`) is
+> now root-caused and fixed there, the exit trap is now portable to Apple's linker (no more GNU-ld
+> `--wrap` dependency), and a second, separate bug (`fossil_fatal()` silently swallowing every message
+> after the first) was found and fixed along the way. `experiments/harness.c` and `db-embed.patch` in
+> this directory are similarly frozen — do not treat either as the current state of the embedding work.
+> See AGENTS.md's "Not yet built" section for the full pointer.
+
 **Date:** 2026-08-13 · **Fossil:** 2.29 [7a40eb9748] · **Verdict: FEASIBLE — green light.**
 
 The iOS-blocking question was: can Fossil's client operations run *in-process* —

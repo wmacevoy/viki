@@ -213,3 +213,38 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   the `fossil-see` binary rather than embedding it in-process, so that
   harness isn't on viki's critical path yet. Revisit when/if the Flutter
   FFI target starts (explicitly out of scope for M1 per KICKOFF.md).
+  **Update (2026-08-13):** the embedding foundation this depends on moved
+  significantly since `experiments/FFI_RISK.md` was written -- that file
+  and `experiments/harness.c`/`db-embed.patch` are now a frozen snapshot,
+  **not current truth**. The live version lives in the sibling
+  `fossil-sqlcipher-libressl` repo's `embed/` directory (promoted there
+  specifically so any consumer, not just this one, builds on it), and has
+  three real bugs found and fixed since this snapshot, verified via a
+  clean-room rebuild each time:
+  1. The delete-on-failure carryover bug (already known here too).
+  2. `fossil_exit()` now traps via a registered handler
+     (`fossil_embed_init()`) instead of GNU ld's `-Wl,--wrap=exit` --
+     portable to Apple's linker, closing the "Exit trap without GNU ld"
+     item this file used to list as remaining work.
+  3. **The cross-repo bug this bullet used to describe as open
+     ("`db_repository_filename`'s `zRepo`... cross-repo switching in-process
+     misbehaves") is now fixed.** Root cause: that `zRepo` was a
+     function-local `static`, memoizing the first repository ever opened
+     in the process for the life of the process -- every later command
+     against a *second* in-process repo silently operated on the first
+     repo's data instead. Fixed by promoting it to file scope and adding
+     `fossil_reset_repository_filename_cache()`, called by the embedding
+     shim after every command (same pattern as the fatal-guard fix below).
+     `harness.c --net URL` (local phase, then a second, networked,
+     in-process repo: clone/open/add/commit/push/pull/sync) is now ALL
+     PASS, 0 failures.
+  A sibling bug of the same class (`create_admin_log_table()`'s `once`
+  guard) was found but deliberately left unfixed -- narrower blast radius,
+  not yet exercised by any test. **Before resuming FFI/embedding work on
+  viki, read `../fossil-sqlcipher-libressl/embed/README.md` in full**
+  rather than `experiments/FFI_RISK.md` -- it has the current bug list,
+  the required shim rules (which grew since this snapshot: two more
+  `fossil_reset_*()` calls are now required per command, not just
+  `db_clear_delete_on_failure()`), and what's still genuinely open
+  (output capture design, iOS cross-compilation, `libfossilsee`
+  packaging) before this is viable to wire into viki for real.
