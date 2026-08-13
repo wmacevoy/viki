@@ -1,0 +1,30 @@
+Fix: `fossil server` never obtains the encryption key (SEE/SQLCipher builds)
+
+Applies on top of pizza-party-vote-fossil's fossil-db-key.patch (Fossil 2.28).
+Also present, shape-identical, in stock Fossil 2.29 — candidate upstream report.
+
+Mechanism: cmd_webserver calls db_setup_for_saved_encryption_key() at startup,
+which pre-allocates a *zeroed* secure page (so forked children can inherit the
+key) and points zSavedKey at it. db_get_saved_encryption_key() returns that
+pointer without validity-checking, so db_maybe_obtain_encryption_key() thinks
+a key is already saved, skips every key source (env / gpg / prompt), applies
+an empty key, and every repo open fails with SQLITE_NOTADB. Fossil ships the
+validator (db_have_saved_encryption_key) — it just isn't consulted here.
+
+Verified: with this fix, `FOSSIL_PPV_KEY=... fossil-ppv server repo.efossil`
+serves correctly; stock clients clone/sync against the encrypted hub; the
+env key is copied into the pre-allocated secure page on first open, so forked
+request children inherit it as designed.
+
+--- a/src/db.c
++++ b/src/db.c
+@@ (in db_maybe_obtain_encryption_key, PPV-patched version)
+   if( sqlite3_strglob("*.efossil", zDbFile)==0 ){
+-    char *zKey = db_get_saved_encryption_key();
++    /* `fossil server` pre-allocates a zeroed secure page for the key
++    ** (db_setup_for_saved_encryption_key), which is non-NULL but not a
++    ** valid key.  Consult the validator, not just the pointer, or every
++    ** key source below is silently skipped in server mode. */
++    char *zKey = db_have_saved_encryption_key()
++                   ? db_get_saved_encryption_key() : 0;
+     if( zKey ){
