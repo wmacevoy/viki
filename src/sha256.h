@@ -1,14 +1,14 @@
 /*
 ** sha256.h -- content_hash keying for viki's local cache (VIKI_DESIGN.md).
 **
-** Thin wrapper around LibreSSL's EVP SHA-256 (already linked in via
-** fossil-see's build -- vendor/fossil-see/vendor/libressl-build-out --
-** so this adds no new dependency and no hand-rolled crypto code, matching
-** how pizza-party-vote-fossil's ppv-crypto module uses LibreSSL EVP rather
-** than vendoring its own hash implementation).
-**
-** Not a security boundary -- purely an internal cache key -- but there is
-** no reason to use anything less vetted than what's already on hand.
+** Standalone vendored SHA-256 (src/sha256.c) -- no crypto library
+** dependency, so viki's build doesn't need vendor/fossil-see (or
+** anything else) built first. Not a security boundary -- content_hash is
+** purely an internal cache key, never compared against or exposed as a
+** Fossil artifact hash -- so a small vendored implementation is
+** appropriate here even though it isn't independently security-audited
+** the way a library like LibreSSL's is. See FINDINGS.md for why this
+** replaced an earlier LibreSSL EVP_Digest-based version.
 */
 #ifndef VIKI_SHA256_H
 #define VIKI_SHA256_H

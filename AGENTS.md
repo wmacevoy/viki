@@ -45,7 +45,8 @@ build/
   build.sh        builds build/dist/viki + downloads/verifies ONNX Runtime + the pinned model; see its header comment
   versions.env    pins: onnxruntime release (3 platforms) + the embedding model/vocab, all SHA256-verified
 vendor/
-  fossil-see/     git submodule -- the shared encrypted-Fossil build (must be built first: vendor/fossil-see/build/build.sh)
+  fossil-see/     git submodule -- NOT a build dependency of viki itself (see FINDINGS.md); kept only so a
+                  fossil-see binary is available at runtime if $VIKI_FOSSIL_BIN/PATH don't already have one
   sqlite-ndvss/   git submodule -- Warren's fork of JarkkoPar/sqlite-ndvss, statically linked
   download-cache/ gitignored -- cached onnxruntime tarball + model/vocab downloads (build/build.sh's fetch_verify)
 experiments/      FFI_RISK.md's proof-of-concept (in-process fossil), inherited from fossil-app
@@ -57,11 +58,9 @@ server/           hub deployment scripts: setup-hub.sh (fossil server + Caddy TL
 ## Build and run
 
 ```sh
-# one-time, several minutes (builds LibreSSL from source):
-vendor/fossil-see/build/build.sh
-
-# then, every time after a source change (also downloads onnxruntime +
-# the model on first run, cached after that):
+# self-contained -- no other project needs to be built first (see
+# FINDINGS.md). Downloads + SHA256-verifies the SQLite amalgamation,
+# onnxruntime, and the model on first run, cached after that:
 build/build.sh
 
 export VIKI_MODEL_DIR=build/dist/model   # or wherever; unset/absent = BM25-only

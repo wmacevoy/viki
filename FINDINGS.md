@@ -5,6 +5,67 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## Decoupled viki's build from vendor/fossil-see -- releasing a standalone binary needed it, and it was cheaper than expected
+
+**Date:** 2026-08-13, preparing a v0.1.0 GitHub release.
+
+`build/build.sh` used to require `vendor/fossil-see/build/build.sh` to
+have already run, purely to reuse two of its build *outputs* as a side
+effect: the SQLCipher/SQLite amalgamation (for viki's own local,
+deliberately-unencrypted FTS5 cache db -- viki never touched the
+SQLCipher codec part) and LibreSSL's `libcrypto.a` (for one `EVP_Digest`
+call in `src/sha256.c`). Building fossil-see first meant building
+LibreSSL from source, several minutes even on a fast machine -- fine for
+local dev where it's a one-time cost, but wrong for "anyone downloads a
+`viki` release binary and runs it" or "CI builds every push," where that
+several-minute prerequisite has to happen on every clean checkout with
+no payoff (nothing about viki's own functionality needs SQLCipher or
+LibreSSL specifically).
+
+**Fix:**
+
+- `src/sha256.c`: replaced the LibreSSL `EVP_Digest(..., EVP_sha256(),
+  ...)` call with a ~150-line standalone FIPS 180-4 SHA-256
+  implementation (single-shot, no streaming API needed -- every caller
+  already has the whole buffer in memory). Verified correct against four
+  known test vectors (empty string, `"abc"`, the NIST 56-byte multi-block
+  vector, and a longer string), each cross-checked byte-for-byte against
+  `shasum -a 256` on the same input before wiring it in. `content_hash`
+  is purely an internal cache key (see the entry below on rejecting
+  Fossil's own `sha3.c` for the same reason) -- never compared against or
+  exposed as a Fossil artifact hash -- so a small vendored implementation
+  is an appropriate trade here even without LibreSSL's audit history
+  behind it. Same algorithm, same output: existing `content_hash` values
+  in an already-populated cache db are unaffected (verified: re-indexed
+  the same test corpus after the swap, got byte-identical hashes and
+  identical `viki ask` rankings).
+- Swapped the reused SQLCipher amalgamation for the official SQLite
+  amalgamation direct from sqlite.org (`build/versions.env`'s
+  `SQLITE_AMAL_*`), fetched and SHA256-pinned the same way ONNX Runtime
+  and the embedding model already were (`fetch_verify()` -- one pattern,
+  three uses now, not two-plus-a-different-story). sqlite.org publishes
+  its own SHA3-256 on the download page; cross-checked it matched at pin
+  time, but still pinned an independently-computed SHA256 here, for
+  consistency with how every other download in this file is verified.
+  Compiled with the identical flags as before (`-DSQLITE_ENABLE_FTS5`,
+  no `-DSQLITE_HAS_CODEC`) -- no behavior change, just a different
+  (simpler, smaller, dependency-free) source for the same amalgamation
+  file shape.
+- `vendor/fossil-see` stays a git submodule -- not for the build, but
+  because *some* fossil-compatible binary is still needed at **runtime**
+  (`fossil wiki`/`ticket` export, `fossil sql`, `fossil uv` push/pull).
+  That resolution was already dynamic (`viki_fossil_binary()` in
+  `viki_cache.c`: `$VIKI_FOSSIL_BIN`, else whatever `fossil` is on
+  `$PATH`) and didn't need to change -- stock `fossil` works fine for
+  indexing an unencrypted repo, which is what every test in this project
+  has used so far anyway.
+
+**Verified:** full clean rebuild (`rm -rf build/obj build/dist`) with
+`vendor/fossil-see` never built at all -- succeeds, binary is smaller
+(1.4M vs. 2.6M, no longer statically linking `libcrypto.a`), and the
+existing index+ask smoke test against `/tmp/viki-content-test` still
+returns the same ranked results as before the swap.
+
 ## `viki serve`'s internet exposure: Caddy reverse proxy, not TLS/auth in C -- and a real `-d` vs. file bug caught only by dry-running the deploy script
 
 **Date:** 2026-08-13, putting `viki serve` on the internet.
