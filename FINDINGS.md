@@ -5,6 +5,70 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## Forum posts: no `fossil forum` export subcommand; extracted via `fossil sql` against `event`/`blob` instead, and NOT verified against a live post
+
+**Date:** 2026-08-13, indexing forum posts.
+
+`fossil help forum` only prints web-UI settings help, not a subcommand;
+`fossil help` lists no top-level `forum` command at all -- unlike `wiki`
+and `ticket`, there's no CLI export path. Worked around with `fossil sql
+--readonly`, which Fossil itself documents as a supported (if power-user)
+feature, including a `content(X)` function that decompresses a stored
+artifact by UUID:
+
+```sql
+SELECT blob.uuid FROM event JOIN blob ON blob.rid = event.objid
+WHERE event.type = 'f';               -- list forum-post artifact UUIDs
+SELECT content('<uuid>');              -- fetch one artifact's raw manifest
+```
+
+`event.type = 'f'` (checkins are `'ci'`, wiki `'w'`, tickets `'t'`) is
+confirmed from `fossil help timeline`'s documented `--type` filter list,
+not from reading Fossil's C source.
+
+A forum-post manifest is a control-card format: `D` (date), `U` (user),
+optionally `H` (thread title -- present on the thread-starting post,
+absent on replies), and a `W <n>\n<n raw bytes>` counted-string card
+holding the body (Fossil's mechanism for embedding arbitrary multi-line
+content without escaping -- same card type wiki pages use). Parsing this
+(`find_w_card`, `find_line_card` in `viki_index.c`) was verified against
+a **real wiki artifact's raw manifest** (fetched the same way, via
+`content()`), since wiki and forum posts share the `W`-card body
+convention.
+
+**Caveat, stated plainly:** `index_forum()` itself has NOT been round-trip
+tested against an actual forum post. Creating one requires Fossil's
+web UI, and scripting it via `curl` did not succeed -- login worked
+(cookie jar; password set with `fossil user password <user> <pw>` run
+from inside the open checkout, not via `-R`, which only works *before*
+the subcommand), and `/forumnew`'s form fields (`title`, `content`,
+`mimetype`, `csrf`) were all discovered and posted to `/forume1`, but the
+response kept re-rendering the empty "New Forum Thread" form rather than
+confirming creation -- consistent with an AJAX/JS-driven submit flow that
+static form scraping doesn't capture. Abandoned rather than sunk further
+time into browser automation for what is, structurally, the same
+card-parsing code already verified against wiki content. Tested instead
+for the graceful-empty-case: `viki index` against a repo with zero forum
+posts reports `0 forum post(s), 0 (re)chunked` and does not crash. If
+forum indexing produces wrong output on a real post, the most likely
+culprit is a manifest-format assumption that doesn't hold for forum
+specifically (e.g. reply posts referencing a parent via a card this
+implementation doesn't parse) -- flagging for whoever verifies this next
+with a live repo.
+
+## `strtok_r` collapsing empty TSV fields corrupts more than tickets: applied `split_preserve_empty` defensively wherever line/field boundaries carry positional meaning
+
+**Date:** 2026-08-13.
+
+No new bug found here -- noting only that the forum/wiki extraction code
+added alongside forum indexing deliberately avoids the `fossil sql`
+*bulk* multi-row pipe-separated output style (the same shape that hid the
+ticket TSV bug, see below) in favor of a two-step list-then-fetch-each
+design: one query returns a newline-separated list of UUIDs, a second
+query fetches one artifact's raw content at a time. Simpler than auditing
+whether `fossil sql`'s bulk output has its own version of the empty-field
+problem.
+
 ## `strtok_r` silently corrupts TSV parsing when fields are empty
 
 **Date:** 2026-08-13, indexing tickets.

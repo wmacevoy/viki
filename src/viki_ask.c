@@ -4,14 +4,6 @@
 #include <string.h>
 
 #define VIKI_RRF_K 60.0      /* standard RRF damping constant */
-#define VIKI_CANDIDATE_POOL 40
-
-typedef struct {
-    char hash[65];
-    int chunk_ix;
-    char snippet[512]; /* best snippet/excerpt we've seen for this hit */
-    double rrf;
-} Candidate;
 
 /* FTS5's default MATCH syntax treats space-separated barewords as an
 ** IMPLICIT AND -- every term must appear, or the row doesn't match at
@@ -70,27 +62,27 @@ static char *build_or_query(const char *zQuery){
     return out;
 }
 
-static Candidate *find_or_add(Candidate *pool, int *n, const char *hash, int chunk_ix){
+static viki_ask_result *find_or_add(viki_ask_result *pool, int *n, const char *hash, int chunk_ix){
     int i;
     for( i = 0; i < *n; i++ ){
         if( pool[i].chunk_ix == chunk_ix && strcmp(pool[i].hash, hash) == 0 ) return &pool[i];
     }
     if( *n >= VIKI_CANDIDATE_POOL ) return NULL;
-    memset(&pool[*n], 0, sizeof(Candidate));
+    memset(&pool[*n], 0, sizeof(viki_ask_result));
     strncpy(pool[*n].hash, hash, 64);
     pool[*n].chunk_ix = chunk_ix;
     (*n)++;
     return &pool[*n - 1];
 }
 
-static int cmp_candidate(const void *a, const void *b){
-    double da = ((const Candidate*)a)->rrf, db = ((const Candidate*)b)->rrf;
+static int cmp_result(const void *a, const void *b){
+    double da = ((const viki_ask_result*)a)->rrf, db = ((const viki_ask_result*)b)->rrf;
     if( da > db ) return -1;
     if( da < db ) return 1;
     return 0;
 }
 
-static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, Candidate *pool, int *n){
+static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, viki_ask_result *pool, int *n){
     sqlite3_stmt *st;
     int rank = 0;
 
@@ -107,7 +99,7 @@ static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, Candidate *
         const char *hash = (const char*)sqlite3_column_text(st, 0);
         int chunk_ix = sqlite3_column_int(st, 1);
         const char *snippet = (const char*)sqlite3_column_text(st, 2);
-        Candidate *c;
+        viki_ask_result *c;
         rank++;
         c = find_or_add(pool, n, hash, chunk_ix);
         if( !c ) continue;
@@ -118,7 +110,7 @@ static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, Candidate *
 }
 
 static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *modelId,
-                        int poolSize, Candidate *pool, int *n){
+                        int poolSize, viki_ask_result *pool, int *n){
     sqlite3_stmt *st;
     int rank = 0;
 
@@ -139,7 +131,7 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
         const char *hash = (const char*)sqlite3_column_text(st, 0);
         int chunk_ix = sqlite3_column_int(st, 1);
         const char *excerpt = (const char*)sqlite3_column_text(st, 2);
-        Candidate *c;
+        viki_ask_result *c;
         rank++;
         c = find_or_add(pool, n, hash, chunk_ix);
         if( !c ) continue;
@@ -149,12 +141,59 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
     sqlite3_finalize(st);
 }
 
-int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
+static void fill_sources(sqlite3 *db, viki_ask_result *pool, int n){
+    int i;
+    for( i = 0; i < n; i++ ){
+        sqlite3_stmt *stPath;
+        strcpy(pool[i].source, "(source path unknown)");
+        if( sqlite3_prepare_v2(db, "SELECT path FROM viki_source WHERE content_hash=?1 LIMIT 1",
+                -1, &stPath, NULL) == SQLITE_OK ){
+            sqlite3_bind_text(stPath, 1, pool[i].hash, -1, SQLITE_STATIC);
+            if( sqlite3_step(stPath) == SQLITE_ROW ){
+                const char *path = (const char*)sqlite3_column_text(stPath, 0);
+                if( path ) strncpy(pool[i].source, path, sizeof(pool[i].source) - 1);
+            }
+            sqlite3_finalize(stPath);
+        }
+    }
+}
+
+int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb,
+                    viki_ask_result *results, int maxResults){
     char *ftsQuery;
-    Candidate pool[VIKI_CANDIDATE_POOL];
+    viki_ask_result pool[VIKI_CANDIDATE_POOL];
     int n = 0;
     int poolSize = topK * 4 < VIKI_CANDIDATE_POOL ? topK * 4 : VIKI_CANDIDATE_POOL;
-    int i;
+    int nOut;
+
+    if( poolSize < 1 ) poolSize = 1;
+
+    ftsQuery = build_or_query(zQuery);
+    if( ftsQuery ){
+        run_fts(db, ftsQuery, poolSize, pool, &n);
+        free(ftsQuery);
+    }
+
+    if( emb ){
+        float *qvec = malloc(sizeof(float) * (size_t)viki_embedder_dim(emb));
+        if( viki_embed(emb, zQuery, qvec) == 0 ){
+            run_vector(db, qvec, viki_embedder_dim(emb), viki_embedder_model_id(emb), poolSize, pool, &n);
+        }
+        free(qvec);
+    }
+
+    fill_sources(db, pool, n);
+    qsort(pool, (size_t)n, sizeof(viki_ask_result), cmp_result);
+
+    nOut = n < maxResults ? n : maxResults;
+    nOut = nOut < topK ? nOut : topK;
+    if( nOut > 0 ) memcpy(results, pool, sizeof(viki_ask_result) * (size_t)nOut);
+    return nOut;
+}
+
+int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
+    viki_ask_result results[VIKI_CANDIDATE_POOL];
+    int n, i;
 
     if( emb ){
         fprintf(stderr, "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=%s)\n\n",
@@ -165,40 +204,12 @@ int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
             "model available; see FINDINGS.md / VIKI_DESIGN.md rung 1/2)\n\n");
     }
 
-    ftsQuery = build_or_query(zQuery);
-    if( !ftsQuery ){
-        fprintf(stderr, "viki ask: empty query\n");
-        return 1;
+    n = viki_ask_query(db, zQuery, topK, emb, results, VIKI_CANDIDATE_POOL);
+
+    for( i = 0; i < n; i++ ){
+        printf("[%d] rrf=%.4f  %s#%d\n    %s\n\n",
+               i + 1, results[i].rrf, results[i].source, results[i].chunk_ix, results[i].snippet);
     }
-    run_fts(db, ftsQuery, poolSize, pool, &n);
-    free(ftsQuery);
-
-    if( emb ){
-        float *qvec = malloc(sizeof(float) * (size_t)viki_embedder_dim(emb));
-        if( viki_embed(emb, zQuery, qvec) == 0 ){
-            run_vector(db, qvec, viki_embedder_dim(emb), viki_embedder_model_id(emb), poolSize, pool, &n);
-        }else{
-            fprintf(stderr, "viki ask: could not embed the query; falling back to BM25-only for this call\n");
-        }
-        free(qvec);
-    }
-
-    qsort(pool, (size_t)n, sizeof(Candidate), cmp_candidate);
-
-    for( i = 0; i < n && i < topK; i++ ){
-        sqlite3_stmt *stPath;
-        const char *path = NULL;
-        if( sqlite3_prepare_v2(db, "SELECT path FROM viki_source WHERE content_hash=?1 LIMIT 1",
-                -1, &stPath, NULL) == SQLITE_OK ){
-            sqlite3_bind_text(stPath, 1, pool[i].hash, -1, SQLITE_STATIC);
-            if( sqlite3_step(stPath) == SQLITE_ROW ) path = (const char*)sqlite3_column_text(stPath, 0);
-            printf("[%d] rrf=%.4f  %s#%d\n    %s\n\n",
-                   i + 1, pool[i].rrf, path ? path : "(source path unknown)",
-                   pool[i].chunk_ix, pool[i].snippet);
-            sqlite3_finalize(stPath);
-        }
-    }
-
     if( n == 0 ) fprintf(stderr, "(no matches)\n");
     return 0;
 }

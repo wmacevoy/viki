@@ -350,6 +350,118 @@ static void index_wiki(sqlite3 *db, viki_embedder *emb, const char *modelId, int
     free(listOut);
 }
 
+/* Finds a "W <n>\n" card in a raw Fossil manifest and returns a pointer
+** to the n bytes that follow (the counted-string payload -- this is how
+** Fossil manifests embed arbitrary multi-line text without needing to
+** escape it, unlike single-line cards). *outLen receives n. Returns NULL
+** if no well-formed W card is found. Verified against a REAL manifest
+** (a wiki artifact's raw content via `fossil sql`) -- see FINDINGS.md;
+** forum posts use the same manifest format/card vocabulary, but this
+** exact path (a forum post specifically) could not be tested end-to-end,
+** since creating one turned out to require Fossil's AJAX-driven web UI
+** rather than a scriptable CLI/HTTP form post. Fails soft (returns NULL,
+** caller skips the post) rather than guessing on a malformed card. */
+static const char *find_w_card(const char *manifest, size_t *outLen){
+    const char *p = manifest;
+    while( *p ){
+        if( (p == manifest || p[-1] == '\n') && p[0] == 'W' && p[1] == ' ' ){
+            char *end;
+            long n = strtol(p + 2, &end, 10);
+            if( end > p + 2 && *end == '\n' && n >= 0 ){
+                *outLen = (size_t)n;
+                return end + 1;
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+/* Single-line card value, e.g. "H <title>\n" -- returns a malloc'd copy
+** of the rest of the line, or NULL if the card isn't present. Forum
+** threads carry an H (title) card only on the first post; replies don't
+** have one, which is fine -- the post is still indexed under its own
+** virtual path, just without a human-friendly title prefix. */
+static char *find_line_card(const char *manifest, char cardLetter){
+    const char *p = manifest;
+    while( *p ){
+        if( (p == manifest || p[-1] == '\n') && p[0] == cardLetter && p[1] == ' ' ){
+            const char *start = p + 2;
+            const char *nl = strchr(start, '\n');
+            size_t len = nl ? (size_t)(nl - start) : strlen(start);
+            char *out = malloc(len + 1);
+            memcpy(out, start, len);
+            out[len] = '\0';
+            return out;
+        }
+        p++;
+    }
+    return NULL;
+}
+
+/* `viki index`'s forum extraction: two-step, like wiki -- first list every
+** forum-post artifact's blob hash (event.type='f'; verified this is the
+** correct type code directly from `fossil help timeline`'s --type list),
+** then fetch each one's raw manifest content individually via a SEPARATE
+** `fossil sql` call. Deliberately not a single query selecting all posts'
+** content at once: `fossil sql`'s default output is pipe-separated with
+** RAW embedded newlines in multi-line fields, which is ambiguous to parse
+** back into distinct rows (same class of trap as the ticket TSV bug --
+** see FINDINGS.md). One artifact per call sidesteps that: the entire
+** captured stdout of a single-column, single-row query IS the content,
+** unambiguously. */
+static void index_forum(sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked){
+    const char *fossil = viki_fossil_binary();
+    char *argvList[] = { (char*)fossil, "sql", "--readonly",
+        "SELECT blob.uuid FROM event JOIN blob ON blob.rid=event.objid WHERE event.type='f';", NULL };
+    char *listOut;
+    char *line, *saveptr;
+
+    listOut = run_capture(argvList);
+    if( !listOut ) return;
+
+    line = strtok_r(listOut, "\n", &saveptr);
+    while( line ){
+        while( *line == ' ' || *line == '\t' ) line++;
+        if( line[0] ){
+            char query[256];
+            char *manifest;
+            char *argvContent[] = { (char*)fossil, "sql", "--readonly", query, NULL };
+
+            snprintf(query, sizeof(query), "SELECT content('%s');", line);
+            manifest = run_capture(argvContent);
+
+            if( manifest ){
+                size_t bodyLen = 0;
+                const char *body = find_w_card(manifest, &bodyLen);
+                if( body && bodyLen > 0 && bodyLen <= strlen(manifest) ){
+                    char *title = find_line_card(manifest, 'H');
+                    char virtualPath[512];
+                    snprintf(virtualPath, sizeof(virtualPath), "forum:%s", line);
+                    (*nItems)++;
+                    if( title ){
+                        /* Index "title\n\nbody" so the title contributes to
+                        ** both BM25 and the embedding, not just the body. */
+                        size_t combinedLen = strlen(title) + 2 + bodyLen;
+                        char *combined = malloc(combinedLen + 1);
+                        int off = snprintf(combined, combinedLen + 1, "%s\n\n", title);
+                        memcpy(combined + off, body, bodyLen);
+                        combined[off + (int)bodyLen] = '\0';
+                        index_text_blob(db, virtualPath, combined, strlen(combined), 0, emb, modelId, nChunked);
+                        free(combined);
+                        free(title);
+                    }else{
+                        index_text_blob(db, virtualPath, body, bodyLen, 0, emb, modelId, nChunked);
+                    }
+                }
+                free(manifest);
+            }
+        }
+        line = strtok_r(NULL, "\n", &saveptr);
+    }
+    free(listOut);
+}
+
 /* `viki index`'s ticket extraction: `fossil ticket show 0 --quote` dumps
 ** every ticket as one TSV row (report 0 = all columns defined in the
 ** TICKET table, so this doesn't depend on any project-specific saved
@@ -474,6 +586,7 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     int nFiles = 0, nChunked = 0;
     int nWiki = 0, nWikiChunked = 0;
     int nTickets = 0, nTicketChunked = 0;
+    int nForum = 0, nForumChunked = 0;
     char *errmsg = NULL;
     const char *modelId = emb ? viki_embedder_model_id(emb) : VIKI_MODEL_NONE;
 
@@ -491,6 +604,7 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     ** make. */
     index_wiki(db, emb, modelId, &nWiki, &nWikiChunked);
     index_tickets(db, emb, modelId, &nTickets, &nTicketChunked);
+    index_forum(db, emb, modelId, &nForum, &nForumChunked);
 
     if( sqlite3_exec(db, "COMMIT", NULL, NULL, &errmsg) != SQLITE_OK ){
         fprintf(stderr, "viki index: COMMIT failed: %s\n", errmsg ? errmsg : "?");
@@ -500,7 +614,8 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
 
     fprintf(stderr,
         "viki index: %d file(s) scanned, %d (re)chunked; %d wiki page(s), %d (re)chunked; "
-        "%d ticket(s), %d (re)chunked (model_id=%s)\n",
-        nFiles, nChunked, nWiki, nWikiChunked, nTickets, nTicketChunked, modelId);
+        "%d ticket(s), %d (re)chunked; %d forum post(s), %d (re)chunked (model_id=%s)\n",
+        nFiles, nChunked, nWiki, nWikiChunked, nTickets, nTicketChunked,
+        nForum, nForumChunked, modelId);
     return 0;
 }

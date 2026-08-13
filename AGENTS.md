@@ -11,9 +11,12 @@ A real, working `viki` CLI with **both** retrieval rungs implemented:
 FTS5 BM25 (rung 0) and ONNX sentence embeddings + `sqlite-ndvss` cosine
 search (rung 2), fused by reciprocal rank fusion when a model is present,
 degrading honestly to BM25-only when it isn't (VIKI_DESIGN.md's required
-standalone path). `viki index` covers all three Fossil-native content
-types: checkout files, wiki pages, and tickets (not just files). See
-`FINDINGS.md` for what was actually verified and how.
+standalone path). `viki index` covers all four Fossil-native content
+types: checkout files, wiki pages, tickets, and forum posts (not just
+files). See `FINDINGS.md` for what was actually verified and how --
+forum extraction in particular is verified only against the manifest
+*format* (via a real wiki artifact), not a live forum post; read that
+entry before trusting forum indexing output.
 
 ## Layout
 
@@ -21,8 +24,8 @@ types: checkout files, wiki pages, and tickets (not just files). See
 src/            viki CLI source (C)
   viki.c          subcommand dispatch (index / ask / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
-  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus `fossil wiki`/`fossil ticket` subprocess extraction for wiki pages and tickets (virtual paths `wiki:Name`/`ticket:UUID`)
-  viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md)
+  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus `fossil wiki`/`fossil ticket` subprocess extraction and `fossil sql` extraction (no CLI export exists for forum posts) for wiki pages, tickets, and forum posts (virtual paths `wiki:Name`/`ticket:UUID`/`forum:UUID`)
+  viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
   viki_cache.c/.h `viki cache push|pull`: fossil uv wrappers (subprocess)
   sha256.c/.h     content_hash keying, via LibreSSL EVP (not hand-rolled)
   tokenizer.c/.h  BERT WordPiece tokenization against vocab.txt (ASCII-scoped, see FINDINGS.md/tokenizer.h)
@@ -98,6 +101,16 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   ranked whichever source best matched a semantically-phrased query.
   Along the way, found and fixed a real ticket-content corruption bug
   (see FINDINGS.md: `strtok_r` collapses empty TSV fields).
+- **Forum post extraction: partially verified.** `viki index` against a
+  repo with zero forum posts correctly reports `0 forum post(s), 0
+  (re)chunked` without crashing. The manifest-card parsing it depends on
+  (`W <n>\n`-counted body, optional `H` title card) was verified against
+  a real wiki artifact's raw manifest, and the `event.type='f'` selector
+  against Fossil's own `--type` docs -- but **no live forum post has been
+  round-tripped through `index_forum()` end to end** (web-UI form
+  submission resisted `curl` scripting; see FINDINGS.md). Treat forum
+  search results with more skepticism than wiki/ticket/file results until
+  someone verifies this against a real post.
 - Full hub/spoke/fresh-clone loop, using real `fossil-see`-built repos
   connected via `file://` sync: index + push from a spoke, then a
   **completely fresh clone that never ran `viki index`** pulls the cache
@@ -120,8 +133,9 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   quantization recipe (picked because it could be verified on this dev
   machine). Not yet verified on x86_64 -- see FINDINGS.md and
   `build/versions.env`'s caveat on this.
-- **Forum posts / tech notes / other artifact types** aren't indexed
-  (only checkout files, wiki pages, and tickets are, so far).
+- **Tech notes / other artifact types** aren't indexed (checkout files,
+  wiki pages, tickets, and forum posts are, so far -- forum indexing is
+  implemented but not verified against a live post, see FINDINGS.md).
 - **No UI beyond the CLI.** `viki ask` is terminal-only. A small local
   `viki serve` (search-box web page, linking results back to Fossil's
   own web UI for the actual content) was discussed as the pragmatic near
