@@ -27,6 +27,7 @@ jobs:
             os: ubuntu-24.04-arm
             container: debian:bookworm
             kind: unix
+            experimental: true # see FINDINGS.md -- sqlite-ndvss SVE2 dispatch bug, not viki's own code
             deps: |
               apt-get update
               apt-get install -y --no-install-recommends \

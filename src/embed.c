@@ -8,10 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 #define VIKI_MAX_SEQ_LEN 256
 
 struct viki_embedder {
@@ -138,19 +134,39 @@ viki_embedder *viki_embedder_open(const char *zModelDir){
     if( check(e->ort, e->ort->CreateSessionOptions(&opts), "CreateSessionOptions") ){
         viki_vocab_free(e->vocab); free(e); return NULL;
     }
-    /* ONNX Runtime's C API takes ORTCHAR_T* for a model path, which is
-    ** wchar_t (UTF-16) on Windows and plain char (UTF-8) everywhere else
-    ** -- passing a narrow char* straight through on Windows compiles
-    ** (it's just a pointer) but CreateSession reads it as UTF-16, so an
-    ** ASCII path comes out as garbage (every two ASCII bytes read as one
-    ** wide char) and the "file" it looks for doesn't exist. Convert
-    ** explicitly on Windows; everywhere else modelPath is already the
-    ** right type. */
-#ifdef _WIN32
+    /* ONNX Runtime's C API takes ORTCHAR_T* for a model path -- wchar_t
+    ** (UTF-16) if onnxruntime_c_api.h saw `#ifdef _WIN32` at parse time,
+    ** plain char otherwise (see the header's own ORTCHAR_T typedef).
+    ** onnxruntime.dll itself is always a real Microsoft Windows build
+    ** (compiled with _WIN32 defined), so its actual ABI always expects
+    ** UTF-16 model paths on Windows -- but under MSYS2's plain MSYS
+    ** environment (as opposed to MINGW64), gcc does NOT define _WIN32
+    ** (MSYS aims to present a POSIX-like environment, the same way
+    ** Cygwin does), so *our* translation unit's ORTCHAR_T resolves to
+    ** plain char even though we're linking against a Windows DLL that
+    ** needs wide chars. Passing a narrow char* straight through in that
+    ** case compiles fine (it's just a pointer) but CreateSession reads
+    ** it as UTF-16, turning every two ASCII bytes into one garbage wide
+    ** char -- the "file" it looks for doesn't exist.
+    **
+    ** VIKI_WIN_ORT_PATH is set by build.sh specifically when linking
+    ** against the Windows onnxruntime build, independent of whatever
+    ** _WIN32/__MSYS__ ambiguity this compiler has. Widen by hand (not
+    ** MultiByteToWideChar -- <windows.h> availability under plain MSYS,
+    ** as opposed to MINGW64, isn't confirmed) since every path this
+    ** program constructs is plain ASCII; the result is cast to whatever
+    ** this translation unit thinks ORTCHAR_T is, which is correct either
+    ** way since C performs no marshalling on a pointer argument, only
+    ** the bytes it points to matter to the callee. */
+#ifdef VIKI_WIN_ORT_PATH
     {
-        wchar_t modelPathW[4096];
-        MultiByteToWideChar(CP_UTF8, 0, modelPath, -1, modelPathW, (int)(sizeof(modelPathW) / sizeof(wchar_t)));
-        st = e->ort->CreateSession(e->env, modelPathW, opts, &e->session);
+        unsigned short modelPathW[4096];
+        size_t wi;
+        for( wi = 0; modelPath[wi] && wi + 1 < sizeof(modelPathW) / sizeof(modelPathW[0]); wi++ ){
+            modelPathW[wi] = (unsigned char)modelPath[wi];
+        }
+        modelPathW[wi] = 0;
+        st = e->ort->CreateSession(e->env, (const ORTCHAR_T*)modelPathW, opts, &e->session);
     }
 #else
     st = e->ort->CreateSession(e->env, modelPath, opts, &e->session);

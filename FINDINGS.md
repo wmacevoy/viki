@@ -5,6 +5,45 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## CI: linux-arm64 build fails in vendor/sqlite-ndvss, not in viki's own code -- a real bug in that project, marked experimental rather than worked around
+
+**Date:** 2026-08-13, first CI run on `ubuntu-24.04-arm`.
+
+`sqlite-ndvss.c`'s `sqlite3_ndvss_init()` picks a SIMD backend by
+`#if defined(__aarch64__) && defined(__linux__)`, then does a *runtime*
+check (`getauxval(AT_HWCAP2) & HWCAP2_SVE2`) to decide whether to call
+`LOAD_SIMILARITY_FUNCTIONS(sve2)` or `LOAD_SIMILARITY_FUNCTIONS(neon)`.
+But the `sve2` function bodies themselves
+(`similarity_functions_sve2.h`) are only compiled in when the
+*compile-time* macro `__ARM_FEATURE_SVE` is defined (i.e. the compiler
+was invoked with an SVE-enabling `-march=`), which viki's build.sh
+never passes (`cc -O3 -ffast-math ...`, no `-march`). Result: the
+`__aarch64__ && __linux__` branch is unconditionally compiled in
+regardless of that separate compile-time gate, and its `sve2` dispatch
+line references `cosine_similarity_f_sve2` and friends, which don't
+exist in this translation unit at all -- `error: 'cosine_similarity_f_sve2'
+undeclared`. Not a bug in anything viki's own code does; it's a gap in
+`vendor/sqlite-ndvss` (a runtime-detection branch not matching its own
+compile-time feature gate) that only surfaces on an aarch64 Linux
+compiler invocation without SVE-enabling `-march=` flags -- exactly
+this CI runner's default, and exactly viki's own default (macOS arm64
+doesn't hit this path at all: it takes the separate `__APPLE__` branch,
+unconditionally NEON, no runtime SVE2 detection).
+
+Not fixed here: `vendor/sqlite-ndvss` is Warren's own fork, but a
+separate repo/submodule -- fixing it properly means either gating the
+`sve2` dispatch call behind the same `__ARM_FEATURE_SVE` compile-time
+check `similarity_functions_sve2.h` already uses, or having viki's
+build.sh pass an SVE-enabling `-march=` on aarch64 Linux (untested
+whether that alone is sufficient -- the file is named "sve2" but its
+own guard checks the baseline `__ARM_FEATURE_SVE`, not
+`__ARM_FEATURE_SVE2`, and it's not verified whether the function bodies
+inside actually need SVE2-only intrinsics that plain `+sve` codegen
+wouldn't provide). Marked `experimental: true` (continue-on-error) in
+`.github/workflows/build.yml` rather than sunk further time into a
+different project's build system; whoever next touches
+`vendor/sqlite-ndvss` should start from the exact line numbers above.
+
 ## Decoupled viki's build from vendor/fossil-see -- releasing a standalone binary needed it, and it was cheaper than expected
 
 **Date:** 2026-08-13, preparing a v0.1.0 GitHub release.

@@ -208,8 +208,16 @@ cc -O3 -ffast-math -Wall -Wno-unused-parameter -Wno-unused-function \
    -o "$OBJ_DIR/sqlite-ndvss.o"
 
 echo "==> Compiling viki sources"
+VIKI_EXTRA_DEFS=""
+if [ "$ORT_OS" = "Windows" ]; then
+    # See src/embed.c's comment: onnxruntime.dll always expects UTF-16
+    # model paths on Windows, regardless of whether _WIN32 is defined in
+    # THIS translation unit (it isn't, under MSYS2's plain MSYS
+    # environment) -- this flag is build.sh's own, independent signal.
+    VIKI_EXTRA_DEFS="-DVIKI_WIN_ORT_PATH"
+fi
 for f in viki sha256 viki_db viki_index viki_ask viki_cache viki_serve tokenizer embed; do
-    cc -O2 -g -Wall -Wno-unused-parameter \
+    cc -O2 -g -Wall -Wno-unused-parameter $VIKI_EXTRA_DEFS \
        -I"$SQLITE_DIR" \
        -I"$ORT_INCLUDE" \
        -I"$SRC_DIR" \
