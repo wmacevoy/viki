@@ -31,6 +31,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if command -v cygpath >/dev/null 2>&1; then
+    # Under MSYS2, `pwd` returns an MSYS-style path (/d/a/viki/...) that
+    # only an MSYS-runtime binary can interpret (viki.exe itself can --
+    # msys-2.0.dll translates it for viki's own fopen() calls -- but the
+    # native onnxruntime.dll it links against can't: it calls raw Win32
+    # file APIs with whatever bytes it's given, no MSYS awareness at all).
+    # `cygpath -m` gives a real drive-letter path with forward slashes
+    # (not `-w`'s backslashes), so it's simultaneously valid for Win32
+    # APIs AND for every other path operation later in this script that
+    # still assumes '/' as a separator. See FINDINGS.md.
+    SCRIPT_DIR="$(cygpath -m "$SCRIPT_DIR")"
+    REPO_ROOT="$(cygpath -m "$REPO_ROOT")"
+fi
 OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/dist}"
 CACHE_DIR="${CACHE_DIR:-$REPO_ROOT/vendor/download-cache}"
 
