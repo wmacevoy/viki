@@ -1,0 +1,154 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish under (e.g. v0.2.0). Must already exist.'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-package:
+    name: ${{ matrix.label }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-latest
+            container: debian:bookworm
+            kind: unix
+            deps: |
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential curl unzip ca-certificates git
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            container: debian:bookworm
+            kind: unix
+            experimental: true # see FINDINGS.md -- sqlite-ndvss SVE2 dispatch bug, not viki's own code
+            deps: |
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential curl unzip ca-certificates git
+          - label: macos-arm64
+            os: macos-latest
+            container: ""
+            kind: unix
+            deps: "true" # Xcode command line tools already provide cc/curl/unzip
+          - label: windows-x86_64
+            os: windows-latest
+            container: ""
+            kind: windows
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container || null }}
+    defaults:
+      run:
+        shell: ${{ matrix.kind == 'windows' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - name: Pre-install git (container only)
+        if: ${{ matrix.container != '' }}
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Set up MSYS2
+        if: ${{ matrix.kind == 'windows' }}
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: gcc make curl unzip git zip
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          submodules: false
+
+      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
+        run: |
+          git config --global --add safe.directory '*'
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init vendor/sqlite-ndvss
+
+      - name: Install dependencies
+        if: ${{ matrix.kind == 'unix' }}
+        run: ${{ matrix.deps }}
+
+      - name: Build
+        run: ./build/build.sh
+
+      - name: Package artifact
+        id: package
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          STAGE="stage/viki-${TAG}-${{ matrix.label }}"
+          mkdir -p "$STAGE"
+          if [ "${{ matrix.kind }}" = "windows" ]; then
+            cp build/dist/viki.exe "$STAGE/"
+            cp build/dist/*.dll "$STAGE/" 2>/dev/null || true
+            ARCHIVE="viki-${TAG}-${{ matrix.label }}.zip"
+            (cd "$STAGE" && zip -qr "../../$ARCHIVE" .)
+          else
+            cp build/dist/viki "$STAGE/"
+            cp build/dist/*.dylib "$STAGE/" 2>/dev/null || true
+            cp build/dist/*.so* "$STAGE/" 2>/dev/null || true
+            ARCHIVE="viki-${TAG}-${{ matrix.label }}.tar.gz"
+            tar -C "$STAGE" -czf "$ARCHIVE" .
+          fi
+          cp -r build/dist/model "$STAGE/"
+          ls -lh "$ARCHIVE"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: viki-${{ matrix.label }}
+          path: ${{ steps.package.outputs.archive }}
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: build-package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release files + checksums
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          git archive --format=tar.gz --prefix="viki-${TAG}/" -o "release/source-${TAG}.tar.gz" HEAD
+          cd release
+          sha256sum *.tar.gz *.zip > SHA256SUMS 2>/dev/null || shasum -a 256 *.tar.gz *.zip > SHA256SUMS
+          ls -la
+          echo
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: release/*
+          generate_release_notes: true
+          draft: true
+          prerelease: ${{ startsWith(github.event.inputs.tag || github.ref_name, 'v0.') }}
