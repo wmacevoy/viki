@@ -1,10 +1,12 @@
 /*
 ** viki.c -- CLI entry point and subcommand dispatch.
 **
-** Milestone 1 skeleton (KICKOFF.md). Real, working end to end for the
-** BM25-only ("rung 0") path; the ONNX embedding pipeline (rung 1/2) is
-** not implemented -- see FINDINGS.md. `viki ask` is honest about this
-** (prints a degraded-mode notice) rather than faking hybrid retrieval.
+** Milestone 1 (KICKOFF.md). Both retrieval rungs are real and working
+** end to end: FTS5 BM25 ("rung 0") and ONNX sentence embeddings +
+** sqlite-ndvss cosine ("rung 2"), rank-fused by `viki ask`. When no
+** model is present the rung-2 leg drops out and `viki ask` is honest
+** about it (prints a degraded-mode notice) rather than faking hybrid
+** retrieval -- VIKI_DESIGN.md's required standalone path, not a stub.
 */
 #include "viki_db.h"
 #include "viki_index.h"
