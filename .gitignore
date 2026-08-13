@@ -14,5 +14,7 @@ manifest.uuid
 
 # Build artifacts
 build/dist/
+build/obj/
+.viki/
 vendor/fossil-see/vendor/libressl-cache/
 vendor/fossil-see/vendor/libressl-build-out/
