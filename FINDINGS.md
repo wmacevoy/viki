@@ -5,6 +5,47 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## `viki serve`: no new HTTP library needed; the real risk was XSS from indexed content, not the server plumbing
+
+**Date:** 2026-08-13, building `viki serve`.
+
+The HTTP server itself (`src/viki_serve.c`) is plain POSIX sockets --
+`socket`/`bind`/`listen`/`accept`/`recv`/`send`, single-threaded, one
+request per connection, `Connection: close`. No new dependency, no
+third-party HTTP library; this is a local, personal-scale tool (one
+user, occasional agent scripts), not a production web server, so the
+concurrency and keep-alive corners plain sockets cut don't matter here.
+Verified all four routes with `curl` against a real indexed repo:
+`/api/health`, `/api/ask?q=&k=` (confirmed identical results to `viki
+ask` on the same query -- both now call the one shared
+`viki_ask_query()`), `/api/chunk?hash=&ix=` (round-tripped a hash from
+an `/api/ask` response), and error paths (missing `q` -> 400, unknown
+hash -> 404, unknown route -> 404, `POST` -> 405).
+
+The actual design decision worth recording: the `/` search page renders
+every server-supplied field (`source`, `snippet`, chunk text) via DOM
+`textContent`, never `innerHTML`/string-concatenated HTML. This matters
+because none of that content is trusted markup -- it's free text pulled
+from indexed checkout files, wiki pages, tickets, and forum posts, any
+of which could legitimately contain literal `<script>` or other HTML-
+looking text (e.g. a ticket describing a bug *in* some HTML). Building
+the page via `innerHTML = ...` with that text spliced in would be a
+reflected-XSS-via-your-own-index bug: visiting `/` and searching for
+content someone else wrote (a colleague's wiki edit, a forum reply)
+would execute whatever HTML/script that person's text happened to
+contain. `textContent` displays it as literal text unconditionally,
+independent of what's inside it.
+
+Also deliberate: no static-file serving. Every response is either the
+one constant HTML string or JSON built from a DB query -- there's no
+"read a file whose name came from the request" code path at all, so
+there's no path-traversal surface to think about, rather than one that
+needs an allowlist/sanitizer. And the server binds to whatever host
+`--host` says (`127.0.0.1` default) with zero authentication -- fine for
+a loopback-only personal tool, explicitly documented in `viki serve
+--help`/usage as "do not expose this port to a network" rather than left
+implicit.
+
 ## Forum posts: no `fossil forum` export subcommand; extracted via `fossil sql` against `event`/`blob` instead, and NOT verified against a live post
 
 **Date:** 2026-08-13, indexing forum posts.

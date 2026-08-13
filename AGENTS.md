@@ -18,14 +18,22 @@ forum extraction in particular is verified only against the manifest
 *format* (via a real wiki artifact), not a live forum post; read that
 entry before trusting forum indexing output.
 
+There's now also a `viki serve` local HTTP server: an HTML search page
+for humans at `/`, plus a JSON API (`/api/ask`, `/api/chunk`,
+`/api/health`) explicitly meant for agents/scripts to call directly,
+sharing the exact same `viki_ask_query()` retrieval the CLI uses.
+Loopback-only, no auth -- a local dev tool, not something to expose to a
+network.
+
 ## Layout
 
 ```
 src/            viki CLI source (C)
-  viki.c          subcommand dispatch (index / ask / cache push|pull / version / ndvss-selftest / embed-selftest)
+  viki.c          subcommand dispatch (index / ask / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
   viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus `fossil wiki`/`fossil ticket` subprocess extraction and `fossil sql` extraction (no CLI export exists for forum posts) for wiki pages, tickets, and forum posts (virtual paths `wiki:Name`/`ticket:UUID`/`forum:UUID`)
   viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
+  viki_serve.c/.h `viki serve`: single-threaded POSIX-sockets HTTP server (no external HTTP library). `/` = static HTML search page (renders results via textContent, never innerHTML -- indexed content isn't trusted markup). `/api/ask`, `/api/chunk`, `/api/health` = JSON, for agents. No static-file serving (every response is generated, not read off disk), so no path-traversal surface.
   viki_cache.c/.h `viki cache push|pull`: fossil uv wrappers (subprocess)
   sha256.c/.h     content_hash keying, via LibreSSL EVP (not hand-rolled)
   tokenizer.c/.h  BERT WordPiece tokenization against vocab.txt (ASCII-scoped, see FINDINGS.md/tokenizer.h)
@@ -58,6 +66,7 @@ build/dist/viki cache push           # fossil uv add + sync (run from an open fo
 build/dist/viki cache pull           # fossil uv sync + export
 build/dist/viki ndvss-selftest       # proves sqlite-ndvss is really statically linked
 build/dist/viki embed-selftest [model-dir]  # proves the ONNX pipeline produces real embeddings (semantic property check)
+build/dist/viki serve [--host H] [--port N]  # http://127.0.0.1:8080 by default; / = search page, /api/* = JSON
 ```
 
 `viki cache push`/`pull`/`index` (for wiki+ticket extraction) need a
@@ -111,6 +120,18 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   submission resisted `curl` scripting; see FINDINGS.md). Treat forum
   search results with more skepticism than wiki/ticket/file results until
   someone verifies this against a real post.
+- **`viki serve`**: started the server against the same scratch repo used
+  for the wiki/ticket tests and hit every route with `curl`: `/api/health`
+  reports mode+model_id correctly; `/api/ask?q=...&k=...` returns the
+  same ranked hits `viki ask` does (now provably the same code path, not
+  just "should be the same" -- both call `viki_ask_query()`), including
+  `source` (`wiki:PumpMaintenance`, `./docs/note.md`); `/api/chunk?hash=&ix=`
+  round-tripped a hash from an `/api/ask` response to its full chunk
+  text; missing `q` on `/api/ask` -> 400 JSON, an unknown hash on
+  `/api/chunk` -> 404 JSON, an unknown route -> 404 JSON, `POST` ->
+  405 JSON; `/` serves the HTML search page. Not tested: the page's own
+  JS search flow in an actual browser (only curl'd the routes it calls)
+  -- worth a manual click-through before calling the UI itself done.
 - Full hub/spoke/fresh-clone loop, using real `fossil-see`-built repos
   connected via `file://` sync: index + push from a spoke, then a
   **completely fresh clone that never ran `viki index`** pulls the cache
@@ -136,10 +157,21 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
 - **Tech notes / other artifact types** aren't indexed (checkout files,
   wiki pages, tickets, and forum posts are, so far -- forum indexing is
   implemented but not verified against a live post, see FINDINGS.md).
-- **No UI beyond the CLI.** `viki ask` is terminal-only. A small local
-  `viki serve` (search-box web page, linking results back to Fossil's
-  own web UI for the actual content) was discussed as the pragmatic near
-  -term option but not started.
+- **`viki serve`'s search page isn't linked back to Fossil's own web UI.**
+  Results show `source` (e.g. `wiki:PumpMaintenance`, `./docs/note.md`)
+  as plain text, not as a clickable link into `fossil-see`'s web UI for
+  that wiki page/ticket/file/forum post -- would need either a configured
+  base URL for the Fossil web server or `viki serve` proxying to it.
+  Not started.
+- **No browser-driven click-test of `viki serve`'s `/` page's JS.** The
+  HTTP routes it calls were verified directly with `curl` (see "Verified
+  working" above), but the page itself hasn't been exercised in an
+  actual browser.
+- **`viki serve` is single-threaded, blocking accept().** Fine for one
+  local user; a second concurrent request queues behind whatever's being
+  handled (each request is fast -- ms-scale DB queries -- so this is
+  unlikely to matter for the personal-tool use case it's built for, but
+  it's a real limit, not a hidden one).
 - **Chunking is naive**: fixed 40-line splits, no overlap, no token
   awareness (and no truncation-awareness of the model's 512-token limit
   for very long lines). Fine for now; revisit before relying on it for

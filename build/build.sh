@@ -173,7 +173,7 @@ cc -O3 -ffast-math -Wall -Wno-unused-parameter -Wno-unused-function \
    -o "$OBJ_DIR/sqlite-ndvss.o"
 
 echo "==> Compiling viki sources"
-for f in viki sha256 viki_db viki_index viki_ask viki_cache tokenizer embed; do
+for f in viki sha256 viki_db viki_index viki_ask viki_cache viki_serve tokenizer embed; do
     cc -O2 -g -Wall -Wno-unused-parameter \
        -I"$SQLCIPHER_DIR" \
        -I"$LIBRESSL_PREFIX/include" \
@@ -192,7 +192,7 @@ else
 fi
 cc -O2 -o "$OUTPUT_DIR/viki" \
     "$OBJ_DIR/viki.o" "$OBJ_DIR/sha256.o" "$OBJ_DIR/viki_db.o" \
-    "$OBJ_DIR/viki_index.o" "$OBJ_DIR/viki_ask.o" "$OBJ_DIR/viki_cache.o" \
+    "$OBJ_DIR/viki_index.o" "$OBJ_DIR/viki_ask.o" "$OBJ_DIR/viki_cache.o" "$OBJ_DIR/viki_serve.o" \
     "$OBJ_DIR/tokenizer.o" "$OBJ_DIR/embed.o" \
     "$OBJ_DIR/sqlite3.o" "$OBJ_DIR/sqlite-ndvss.o" \
     "$LIBRESSL_PREFIX/lib/libcrypto.a" \

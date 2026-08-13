@@ -10,6 +10,7 @@
 #include "viki_index.h"
 #include "viki_ask.h"
 #include "viki_cache.h"
+#include "viki_serve.h"
 #include "embed.h"
 
 #include <stdio.h>
@@ -26,6 +27,11 @@ static void usage(void){
         "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found\n"
         "  cache push [db-path]     Publish the local cache db as a fossil uv blob (default: .viki/cache.db)\n"
         "  cache pull [db-path]     Fetch the cache db from a fossil uv blob\n"
+        "  serve [--host H] [--port N]\n"
+        "                           Local HTTP server: human search page at / plus a JSON API for\n"
+        "                           agents/scripts (GET /api/ask?q=&k=, /api/chunk?hash=&ix=,\n"
+        "                           /api/health). Loopback-only by default (127.0.0.1:8080), no auth\n"
+        "                           -- do not expose this port to a network.\n"
         "  version                  Print version\n"
         "  help                     Show this message\n"
         "\n"
@@ -105,6 +111,26 @@ int main(int argc, char **argv){
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
         emb = open_embedder_if_available();
         rc = viki_cmd_ask(db, argv[2], k, emb);
+        if( emb ) viki_embedder_close(emb);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "serve") == 0 ){
+        sqlite3 *db;
+        viki_embedder *emb;
+        const char *host = "127.0.0.1";
+        int port = 8080;
+        int i;
+        for( i = 2; i < argc; i++ ){
+            if( strcmp(argv[i], "--port") == 0 && i + 1 < argc ) port = atoi(argv[++i]);
+            else if( strcmp(argv[i], "--host") == 0 && i + 1 < argc ) host = argv[++i];
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        emb = open_embedder_if_available();
+        if( !emb ) fprintf(stderr, "viki serve: no embedding model found -- serving BM25-only (rung 0)\n");
+        rc = viki_cmd_serve(db, emb, host, port, VIKI_VERSION);
         if( emb ) viki_embedder_close(emb);
         sqlite3_close(db);
         return rc;
