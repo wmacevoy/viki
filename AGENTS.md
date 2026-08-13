@@ -11,7 +11,9 @@ A real, working `viki` CLI with **both** retrieval rungs implemented:
 FTS5 BM25 (rung 0) and ONNX sentence embeddings + `sqlite-ndvss` cosine
 search (rung 2), fused by reciprocal rank fusion when a model is present,
 degrading honestly to BM25-only when it isn't (VIKI_DESIGN.md's required
-standalone path). See `FINDINGS.md` for what was actually verified and how.
+standalone path). `viki index` covers all three Fossil-native content
+types: checkout files, wiki pages, and tickets (not just files). See
+`FINDINGS.md` for what was actually verified and how.
 
 ## Layout
 
@@ -19,7 +21,7 @@ standalone path). See `FINDINGS.md` for what was actually verified and how.
 src/            viki CLI source (C)
   viki.c          subcommand dispatch (index / ask / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
-  viki_index.c/.h `viki index <dir>`: walk, chunk, hash, incremental insert, embed if a model is available
+  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus `fossil wiki`/`fossil ticket` subprocess extraction for wiki pages and tickets (virtual paths `wiki:Name`/`ticket:UUID`)
   viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md)
   viki_cache.c/.h `viki cache push|pull`: fossil uv wrappers (subprocess)
   sha256.c/.h     content_hash keying, via LibreSSL EVP (not hand-rolled)
@@ -55,8 +57,13 @@ build/dist/viki ndvss-selftest       # proves sqlite-ndvss is really statically 
 build/dist/viki embed-selftest [model-dir]  # proves the ONNX pipeline produces real embeddings (semantic property check)
 ```
 
-`viki cache push`/`pull` need a `fossil`-compatible binary on PATH, or set
-`VIKI_FOSSIL_BIN` explicitly (e.g. to `vendor/fossil-see/build/dist/fossil-see`).
+`viki cache push`/`pull`/`index` (for wiki+ticket extraction) need a
+`fossil`-compatible binary on PATH, or set `VIKI_FOSSIL_BIN` explicitly
+(e.g. to `vendor/fossil-see/build/dist/fossil-see`). Ticket extraction
+additionally needs a resolvable Fossil user -- `$VIKI_FOSSIL_USER` if
+set, else `$USER`, else the literal string `"viki"` (see FINDINGS.md:
+`fossil ticket` commands refuse to run at all, even read-only, without
+one; `fossil wiki` commands don't have this requirement).
 
 `viki index`/`viki ask` look for the model at `$VIKI_MODEL_DIR`, falling
 back to `build/dist/model` (what `build/build.sh` populates). No model
@@ -84,6 +91,13 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   horses document first, despite the query sharing zero literal words
   with it -- the ranking can only have come from the vector leg, proving
   hybrid retrieval is real, not BM25 wearing a costume.
+- **Wiki + ticket extraction, against a real repo**: created a wiki page
+  and a ticket in a scratch `fossil-see` repo, ran `viki index`, and
+  `viki ask` correctly retrieved each with the right virtual-path
+  attribution (`wiki:PumpMaintenance`, `ticket:<uuid>`) and correctly
+  ranked whichever source best matched a semantically-phrased query.
+  Along the way, found and fixed a real ticket-content corruption bug
+  (see FINDINGS.md: `strtok_r` collapses empty TSV fields).
 - Full hub/spoke/fresh-clone loop, using real `fossil-see`-built repos
   connected via `file://` sync: index + push from a spoke, then a
   **completely fresh clone that never ran `viki index`** pulls the cache
@@ -106,11 +120,12 @@ found there is not an error -- indexing/asking silently proceed BM25-only.
   quantization recipe (picked because it could be verified on this dev
   machine). Not yet verified on x86_64 -- see FINDINGS.md and
   `build/versions.env`'s caveat on this.
-- **Wiki artifacts.** `viki index` walks plain checkout files on disk. It
-  does not read Fossil *wiki* artifacts (which aren't files in the
-  checkout -- see `ARCHITECTURE.md`'s note on this). Needs a separate
-  extraction path (shell out to `fossil wiki export` or similar, or read
-  the artifacts directly).
+- **Forum posts / tech notes / other artifact types** aren't indexed
+  (only checkout files, wiki pages, and tickets are, so far).
+- **No UI beyond the CLI.** `viki ask` is terminal-only. A small local
+  `viki serve` (search-box web page, linking results back to Fossil's
+  own web UI for the actual content) was discussed as the pragmatic near
+  -term option but not started.
 - **Chunking is naive**: fixed 40-line splits, no overlap, no token
   awareness (and no truncation-awareness of the model's 512-token limit
   for very long lines). Fine for now; revisit before relying on it for

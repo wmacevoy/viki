@@ -12,4 +12,13 @@
 int viki_cmd_cache_push(const char *zCacheDbPath);
 int viki_cmd_cache_pull(const char *zCacheDbPath);
 
+/* Shared with viki_index.c's wiki/ticket extraction, which also shells
+** out to `fossil`. */
+const char *viki_fossil_binary(void);
+
+/* $VIKI_FOSSIL_USER if set, else $USER, else "viki" -- ticket commands
+** (unlike wiki commands, empirically) refuse to run at all without a
+** resolvable user, even for read-only queries. See FINDINGS.md. */
+const char *viki_fossil_user(void);
+
 #endif

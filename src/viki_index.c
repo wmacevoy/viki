@@ -1,11 +1,15 @@
 #include "viki_index.h"
+#include "viki_cache.h" /* viki_fossil_binary/viki_fossil_user, shared subprocess config */
 #include "sha256.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 /* rung-0-only placeholder model id, until an ONNX embedding pipeline
 ** exists (VIKI_DESIGN.md rung 1/2; see FINDINGS.md). Chunks stored under
@@ -190,29 +194,23 @@ static int previously_seen_unchanged(sqlite3 *db, const char *path, long mtime, 
     return unchanged;
 }
 
-static int index_file(sqlite3 *db, const char *path, int *nFiles, int *nChunked,
-                       viki_embedder *emb, const char *modelId){
-    struct stat st;
-    char *data;
-    size_t len;
+/* Shared by real files and virtual (wiki/ticket) sources: hash, chunk if
+** this exact (hash, model_id) isn't already present, upsert viki_source.
+** mtime is a fast-skip optimization only -- pass 0 for virtual sources
+** (no meaningful filesystem mtime), which just means they're always
+** re-hashed on every `viki index` run; content-hash dedup still avoids
+** redundant re-chunking when the content itself hasn't changed. */
+static void index_text_blob(sqlite3 *db, const char *virtualPath, const char *data, size_t len,
+                             long mtime, viki_embedder *emb, const char *modelId, int *nChunked){
     char hash[65];
     char cached_hash[65];
 
-    if( stat(path, &st) != 0 || !S_ISREG(st.st_mode) ) return 0;
+    if( len == 0 ) return;
 
-    (*nFiles)++;
-
-    if( previously_seen_unchanged(db, path, (long)st.st_mtime, cached_hash)
+    if( mtime != 0 && previously_seen_unchanged(db, virtualPath, mtime, cached_hash)
         && chunk_count_already_present(db, cached_hash, modelId) ){
-        /* mtime unchanged AND we already have chunks for this exact
-        ** (hash, model_id) pair -- nothing new to compute even if the
-        ** model_id being requested differs from a previous run's. */
-        return 0;
+        return;
     }
-
-    data = read_whole_file(path, &len);
-    if( !data ) return 0;
-    if( looks_binary(data, len) ){ free(data); return 0; }
 
     viki_sha256_hex(data, len, hash);
 
@@ -220,10 +218,230 @@ static int index_file(sqlite3 *db, const char *path, int *nFiles, int *nChunked,
         insert_chunks(db, hash, data, len, emb, modelId);
         (*nChunked)++;
     }
-    upsert_source(db, path, hash, (long)st.st_mtime);
+    upsert_source(db, virtualPath, hash, mtime);
+}
+
+static int index_file(sqlite3 *db, const char *path, int *nFiles, int *nChunked,
+                       viki_embedder *emb, const char *modelId){
+    struct stat st;
+    char *data;
+    size_t len;
+
+    if( stat(path, &st) != 0 || !S_ISREG(st.st_mode) ) return 0;
+
+    (*nFiles)++;
+
+    data = read_whole_file(path, &len);
+    if( !data ) return 0;
+    if( looks_binary(data, len) ){ free(data); return 0; }
+
+    index_text_blob(db, path, data, len, (long)st.st_mtime, emb, modelId, nChunked);
 
     free(data);
     return 0;
+}
+
+/* Runs argv (NULL-terminated) as a child process and captures its stdout
+** into a malloc'd, NUL-terminated buffer (caller frees). stderr is
+** discarded (fossil's own warnings/prompts would otherwise pollute
+** content we're about to index). Returns NULL on fork/pipe failure; a
+** nonzero child exit code is not itself treated as failure here --
+** whatever was captured (often nothing) is still returned, since e.g.
+** `fossil ticket show 0` legitimately exits nonzero on an empty ticket
+** table in some fossil versions and the caller can just get an empty
+** result either way. */
+static char *run_capture(char *const argv[]){
+    int pipefd[2];
+    pid_t pid;
+    char *buf;
+    size_t cap = 65536, len = 0;
+
+    if( pipe(pipefd) != 0 ) return NULL;
+    pid = fork();
+    if( pid < 0 ){ close(pipefd[0]); close(pipefd[1]); return NULL; }
+
+    if( pid == 0 ){
+        int devnull;
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        devnull = open("/dev/null", O_WRONLY);
+        if( devnull >= 0 ){ dup2(devnull, STDERR_FILENO); close(devnull); }
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    buf = malloc(cap);
+    for(;;){
+        ssize_t n;
+        if( len + 4096 > cap ){ cap *= 2; buf = realloc(buf, cap); }
+        n = read(pipefd[0], buf + len, 4096);
+        if( n <= 0 ) break;
+        len += (size_t)n;
+    }
+    close(pipefd[0]);
+    {
+        int status;
+        waitpid(pid, &status, 0);
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
+/* Undoes `fossil ticket show ... --quote`'s escaping in place (the
+** unescaped result is never longer than the input, so this is safe to
+** do without a second buffer). See FINDINGS.md: --quote is the only
+** reliable way to TSV-parse ticket content, since an unquoted comment
+** containing a literal tab or newline would otherwise corrupt column/row
+** boundaries. */
+static void unquote_fossil(char *s){
+    char *w = s;
+    while( *s ){
+        if( *s == '\\' && s[1] ){
+            switch( s[1] ){
+                case 's': *w++ = ' '; break;
+                case 't': *w++ = '\t'; break;
+                case 'n': *w++ = '\n'; break;
+                case 'r': *w++ = '\r'; break;
+                case 'f': *w++ = '\f'; break;
+                case 'v': *w++ = '\v'; break;
+                case '0': *w++ = '\0'; break;
+                case '\\': *w++ = '\\'; break;
+                default: *w++ = s[1]; break;
+            }
+            s += 2;
+        }else{
+            *w++ = *s++;
+        }
+    }
+    *w = '\0';
+}
+
+/* `viki index`'s wiki extraction: `fossil wiki list` for page names, then
+** `fossil wiki export NAME -` per page. Always re-extracts (no mtime to
+** fast-skip on); content-hash dedup in index_text_blob still avoids
+** redundant chunking for unchanged pages. */
+static void index_wiki(sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked){
+    const char *fossil = viki_fossil_binary();
+    char *argvList[] = { (char*)fossil, "wiki", "list", NULL };
+    char *listOut;
+    char *line, *saveptr;
+
+    listOut = run_capture(argvList);
+    if( !listOut ) return;
+
+    line = strtok_r(listOut, "\n", &saveptr);
+    while( line ){
+        while( *line == ' ' || *line == '\t' ) line++;
+        if( line[0] ){
+            char *argvExport[] = { (char*)fossil, "wiki", "export", line, "-", NULL };
+            char *content = run_capture(argvExport);
+            if( content ){
+                char virtualPath[512];
+                snprintf(virtualPath, sizeof(virtualPath), "wiki:%s", line);
+                (*nItems)++;
+                index_text_blob(db, virtualPath, content, strlen(content), 0, emb, modelId, nChunked);
+                free(content);
+            }
+        }
+        line = strtok_r(NULL, "\n", &saveptr);
+    }
+    free(listOut);
+}
+
+/* `viki index`'s ticket extraction: `fossil ticket show 0 --quote` dumps
+** every ticket as one TSV row (report 0 = all columns defined in the
+** TICKET table, so this doesn't depend on any project-specific saved
+** report existing). --quote is required for safe parsing -- see
+** unquote_fossil(). Columns are located by header name rather than
+** assumed fixed positions, since custom installations can add ticket
+** fields (per `fossil help ticket`). */
+/* Splits s in place on sep, writing up to maxOut field-start pointers to
+** out[] (empty fields ARE preserved as zero-length strings) and returns
+** the count. strtok_r is the wrong tool for this: it collapses runs of
+** consecutive delimiters instead of yielding empty tokens between them,
+** which silently shifts every later column left whenever a row has
+** adjacent empty fields -- `fossil ticket show`'s TSV output routinely
+** does (type/status/subsystem/priority/severity/foundin/private_contact/
+** resolution are all empty on a freshly-added ticket, eight empty fields
+** in a row) and produced exactly that corruption before this fix: the
+** comment text ended up labeled "Status:" and the title vanished
+** entirely. Found by comparing indexed output against the raw TSV. */
+static int split_preserve_empty(char *s, char sep, char **out, int maxOut){
+    int n = 0;
+    if( maxOut <= 0 ) return 0;
+    out[n++] = s;
+    while( *s && n < maxOut ){
+        if( *s == sep ){
+            *s = '\0';
+            out[n++] = s + 1;
+        }
+        s++;
+    }
+    return n;
+}
+
+static void index_tickets(sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked){
+    const char *fossil = viki_fossil_binary();
+    const char *user = viki_fossil_user();
+    char *argv[] = { (char*)fossil, "ticket", "show", "0", "--quote", "--user", (char*)user, NULL };
+    char *out;
+    char *lineStart = NULL, *p;
+    int uuidCol = -1, titleCol = -1, commentCol = -1, statusCol = -1;
+    int isHeader = 1;
+
+    out = run_capture(argv);
+    if( !out ) return;
+
+    lineStart = out;
+    for( p = out; ; p++ ){
+        int atEnd = (*p == '\0');
+        if( *p == '\n' || atEnd ){
+            char *line = lineStart;
+            int lineLen = (int)(p - lineStart);
+            char *fields[32];
+            int nFields;
+
+            *p = '\0'; /* terminate this line (harmless no-op at atEnd) */
+            lineStart = p + 1;
+            if( lineLen == 0 ){ if( atEnd ) break; else continue; }
+
+            nFields = split_preserve_empty(line, '\t', fields, 32);
+
+            if( isHeader ){
+                int i;
+                for( i = 0; i < nFields; i++ ){
+                    if( strcmp(fields[i], "tkt_uuid") == 0 ) uuidCol = i;
+                    else if( strcmp(fields[i], "title") == 0 ) titleCol = i;
+                    else if( strcmp(fields[i], "comment") == 0 ) commentCol = i;
+                    else if( strcmp(fields[i], "status") == 0 ) statusCol = i;
+                }
+                isHeader = 0;
+            }else if( uuidCol >= 0 && uuidCol < nFields ){
+                char buf[8192];
+                int off = 0;
+                int i;
+                char virtualPath[512];
+                for( i = 0; i < nFields; i++ ) unquote_fossil(fields[i]);
+
+                off += snprintf(buf + off, sizeof(buf) - (size_t)off, "Ticket %s\n", fields[uuidCol]);
+                if( statusCol >= 0 && statusCol < nFields && fields[statusCol][0] )
+                    off += snprintf(buf + off, sizeof(buf) - (size_t)off, "Status: %s\n", fields[statusCol]);
+                if( titleCol >= 0 && titleCol < nFields && fields[titleCol][0] )
+                    off += snprintf(buf + off, sizeof(buf) - (size_t)off, "Title: %s\n", fields[titleCol]);
+                if( commentCol >= 0 && commentCol < nFields && fields[commentCol][0] )
+                    snprintf(buf + off, sizeof(buf) - (size_t)off, "%s\n", fields[commentCol]);
+
+                snprintf(virtualPath, sizeof(virtualPath), "ticket:%s", fields[uuidCol]);
+                (*nItems)++;
+                index_text_blob(db, virtualPath, buf, strlen(buf), 0, emb, modelId, nChunked);
+            }
+
+            if( atEnd ) break;
+        }
+    }
+    free(out);
 }
 
 static void walk(sqlite3 *db, const char *dir, int *nFiles, int *nChunked,
@@ -254,6 +472,8 @@ static void walk(sqlite3 *db, const char *dir, int *nFiles, int *nChunked,
 
 int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     int nFiles = 0, nChunked = 0;
+    int nWiki = 0, nWikiChunked = 0;
+    int nTickets = 0, nTicketChunked = 0;
     char *errmsg = NULL;
     const char *modelId = emb ? viki_embedder_model_id(emb) : VIKI_MODEL_NONE;
 
@@ -264,6 +484,13 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     }
 
     walk(db, zDir, &nFiles, &nChunked, emb, modelId);
+    /* Wiki pages and tickets aren't files in the checkout (ARCHITECTURE.md);
+    ** extracted via `fossil wiki`/`fossil ticket` subprocess calls instead
+    ** of walking the filesystem. Both assume cwd is inside an open
+    ** fossil-see checkout, same assumption `viki cache push/pull` already
+    ** make. */
+    index_wiki(db, emb, modelId, &nWiki, &nWikiChunked);
+    index_tickets(db, emb, modelId, &nTickets, &nTicketChunked);
 
     if( sqlite3_exec(db, "COMMIT", NULL, NULL, &errmsg) != SQLITE_OK ){
         fprintf(stderr, "viki index: COMMIT failed: %s\n", errmsg ? errmsg : "?");
@@ -271,7 +498,9 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
         return 1;
     }
 
-    fprintf(stderr, "viki index: scanned %d file(s), (re)chunked %d (model_id=%s)\n",
-            nFiles, nChunked, modelId);
+    fprintf(stderr,
+        "viki index: %d file(s) scanned, %d (re)chunked; %d wiki page(s), %d (re)chunked; "
+        "%d ticket(s), %d (re)chunked (model_id=%s)\n",
+        nFiles, nChunked, nWiki, nWikiChunked, nTickets, nTicketChunked, modelId);
     return 0;
 }

@@ -5,6 +5,62 @@ Surprising things discovered while building, with repro, in the spirit of
 
 ---
 
+## `strtok_r` silently corrupts TSV parsing when fields are empty
+
+**Date:** 2026-08-13, indexing tickets.
+
+`fossil ticket show 0 --quote` dumps one ticket per line, tab-separated,
+with all columns the TICKET table defines (`tkt_id`, `tkt_uuid`, ...,
+`type`, `status`, `subsystem`, `priority`, `severity`, `foundin`,
+`private_contact`, `resolution`, `title`, `comment`). A freshly-created
+ticket has **eight consecutive empty fields** (type through
+resolution) between `tkt_ctime` and `title` -- confirmed directly:
+`1|uuid|mtime|ctime|||||||||title|comment` when tabs are shown as `|`.
+
+Splitting each line with `strtok_r(line, "\t", &save)` looked reasonable
+but is wrong: `strtok_r` (like `strtok`) treats a run of consecutive
+delimiters as *one* delimiter and never yields an empty token between
+them. So a data row with 8 empty fields in a row produced 6 fewer tokens
+than the header row did, silently shifting every column after the gap
+left by 6. Symptom: the ticket's `comment` text got labeled `"Status:
+..."` in indexed output, and `"Title: ..."` vanished entirely -- both
+because the column-index lookup (done once, against the header row,
+which has no empty fields) no longer lined up with the data row's
+shifted fields.
+
+**Fix (`viki_index.c`, `split_preserve_empty`):** manual split that
+walks the string once, replacing each delimiter with `\0` and recording
+a field-start pointer *every* time, including for zero-length fields
+between two adjacent delimiters. `strtok_r` is fine for whitespace-
+separated tokens where empty fields are meaningless; it is the wrong
+tool for any fixed-column format (TSV/CSV) where a field's *position*
+carries meaning, which need a delimiter-preserving split. Applied the
+same fix to the line-splitting (on `\n`) for consistency, though that
+level wasn't observed to actually hit the bug in practice.
+
+**Verified fixed:** re-indexed and asked; ticket content now correctly
+shows `Title: Fix the trough pump` followed by the real comment text.
+
+## `fossil ticket` commands require a resolvable user even for read-only queries; `fossil wiki` commands don't
+
+**Date:** 2026-08-13, indexing tickets.
+
+`fossil wiki list` / `fossil wiki export NAME -` ran successfully with no
+user configured at all. The equivalent read-only ticket commands
+(`fossil ticket show 0`, `fossil ticket list fields`, `fossil ticket
+history UUID`) all refused outright: `cannot determine user / Cannot
+figure out who you are!`, even though nothing about listing/reading
+tickets is obviously a per-user operation. Not root-caused in Fossil's
+source; just empirically confirmed and worked around the way Fossil's
+own error message suggests: `viki_fossil_user()` (`viki_cache.h`)
+resolves `$VIKI_FOSSIL_USER`, falling back to `$USER`, falling back to
+the literal string `"viki"`, and `index_tickets` always passes `--user`
+explicitly rather than relying on ambient environment/config state that
+may or may not be present when `viki index` runs non-interactively (e.g.
+from a script or another agent's shell).
+
+---
+
 ## The ONNX embedding pipeline (rung 2) works, verified by a semantic property test, not just "it ran"
 
 **Date:** 2026-08-13.
