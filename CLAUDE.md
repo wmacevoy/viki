@@ -45,6 +45,12 @@ build/dist/viki index <dir>              # walk + chunk + hash + embed into .vik
 build/dist/viki ask "<query>" [--k N]    # hybrid top-5; each hit prints
                                          #   [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>
                                          # then the snippet indented 4 spaces
+build/dist/viki muse [--k N] [--seed N] [--from <hash>#<ix>]
+                                         # undirected recall: NO query. Returns chunks from
+                                         # the MIDDLE of a random seed chunk's cosine band.
+                                         # Needs vectors in the cache but NOT model.onnx;
+                                         # refuses a BM25-only cache rather than faking it.
+                                         # --seed replays a run exactly.
 build/dist/viki serve [--host H] [--port N]   # 127.0.0.1:8080; / = HTML page, /api/* = JSON
 build/dist/viki cache push|pull [db-path] [--no-model]
                                          # fossil uv add/sync/export -- moves the embedding
@@ -106,7 +112,25 @@ bash test/m1.sh                             # "0 failed, 0 skipped" == M1 met (s
 sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliberately omits
 build/dist/viki ndvss-selftest              # proves sqlite-ndvss is really statically linked
 build/dist/viki embed-selftest [model-dir]  # semantic property check, not just "didn't crash"
+bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE (not pass/fail)
 ```
+
+**None of the tests above says anything about retrieval quality.** They
+prove an answer *comes back*; `test/retrieval-eval.sh` measures whether it
+comes back **first**. It builds a 114-chunk encrypted corpus from this
+repo's own docs plus check-in comments, wiki, tickets, forum posts, a tech
+note, an attachment, tags and an unversioned file
+(`test/retrieval-corpus.sh`), runs 59 questions (`test/retrieval-queries.tsv`,
+six classes, 31% held out), and prints recall@1/@5/@k, MRR, a per-class and
+per-artifact breakdown, a **BM25-only control**, and a per-query failure
+taxonomy. It prints numbers and gates nothing; exit 0 means it produced
+them. Two baseline facts worth knowing before you change retrieval code:
+hybrid is **worse than BM25-only at rank 1** (0.256 vs 0.302) while better
+at recall@5, and 0 of 16 questions whose answer lives in a check-in comment
+or other un-indexed artifact are answerable at all. Both in FINDINGS.md,
+with repros. Re-measure the old binary before claiming a new one improved
+anything, and quote the harness's `corpus fp` with any number -- the corpus
+is built from these docs, so editing them moves the baseline.
 
 The two selftests are hidden subcommands (not in `usage()`) and both run
 automatically at the end of `build/build.sh`.
@@ -124,9 +148,13 @@ missing three fixes that were sitting in `src/viki_index.c` at the time, and
 its output was *byte-identical* before and after the rebuild that added them.
 Before believing a green run, check the binary is current (`ls -la
 build/dist/viki src/*.c`, or grep the binary for a string unique to the newest
-fix). And treat `test/m1.sh` + `build/forum-e2e-probe.sh` as a **pair** —
-neither alone covers all four indexed content types, and only the first is in
-CI.
+fix). No single suite covers all nine indexed content types: `test/m1.sh`
+(files/wiki/ticket, the DoD gate, the only one in CI),
+`build/forum-e2e-probe.sh` (forum, against live posts),
+`build/model-uv-e2e-probe.sh` (D-12 model distribution),
+`build/muse-probe.sh` (`viki muse`) and `bash test/retrieval-eval.sh`
+(ranking quality + coverage) are five different questions. Run the ones your
+change can break.
 
 **A skipping run still exits 0.** With no model, or no `sqlite3` on PATH,
 m1.sh prints `RESULT: PASS WITH SKIPS` — by its own words "NOT a full
@@ -186,7 +214,7 @@ NULL is expected; never propagate it as fatal.
 
 **Indexing** (`viki_index.c`) is content-addressed and incremental. Files are
 skipped by `(path, mtime)` via the `viki_source` side table, then chunked only
-if `(content_hash, model_id)` is absent. Four content types share one
+if `(content_hash, model_id)` is absent. **Nine** content types share one
 `index_text_blob()` sink, with virtual paths distinguishing the non-file ones:
 
 | Source | How it is extracted | Virtual path |
@@ -195,6 +223,28 @@ if `(content_hash, model_id)` is absent. Four content types share one
 | wiki pages | `fossil wiki` subprocess | `wiki:Name` |
 | tickets | `fossil ticket` subprocess | `ticket:UUID` |
 | forum posts | `fossil sql` against `event`/`blob` (no export subcommand exists) | `forum:UUID` |
+| check-in comments | `fossil sql`, `coalesce(ecomment, comment)` — Fossil's own timeline rule | `ckin:UUID` |
+| tech notes | `fossil sql`, `event.type='e'` (Fossil DELETEs superseded rows) | `note:ID` |
+| ticket changes | `fossil sql` + the artifact's `J` cards (`ticketchng.icomment` is NULL in practice) | `tchg:UUID` |
+| attachments | `fossil sql`, `isLatest AND src <> ''` | `attach:UUID` |
+| unversioned files | `fossil sql`; content is zlib-compressed when `encoding=1` | `uv:NAME` |
+
+Each non-file class costs **one** `fossil sql` subprocess, not one per
+artifact, using a counted framing parsed by `framed_next()`. That is not
+tidiness: on an encrypted repo every `fossil` invocation pays a SQLCipher KDF
+(~0.5 s here), so per-artifact extraction is minutes where this is seconds.
+`viki_source.mtime` stays **0** for every virtual source and must — `fossil
+amend` changes `ecomment` without touching the check-in's own time, so a real
+mtime would make the fast-skip serve pre-amend text forever. Time belongs in
+the composed header, where it is both FTS-indexed and embedded.
+
+**The composition recipe is part of the sharing contract even though
+`viki-manifest` says nothing about it.** `content_hash = sha256(the composed
+extracted text)`, so two peers that compose a check-in header differently
+produce different hashes for the same check-in and both end up in `viki ask`.
+That is cache *fragmentation*, not corruption, and not an epoch bump — but the
+header formats are frozen, and changing one must be called out as
+cache-fragmenting.
 
 **Everything Fossil is a subprocess**, resolved by `viki_fossil_binary()`
 (`$VIKI_FOSSIL_BIN`, else `fossil-see` on PATH, else `fossil`). Nothing is
@@ -259,8 +309,11 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   referenced by any live source are deleted from **both** `viki_chunk` and
   `chunk_fts` (a plain FTS5 table — nothing cascades). A run only invalidates
   namespaces it can prove it observed: filesystem paths under the directory it
-  actually walked, and `wiki:`/`ticket:`/`forum:` only when that extractor
-  exited 0. Never widen that scope casually — "delete everything not seen this
+  actually walked, and each virtual namespace only when that extractor proved
+  it ran (a `#viki-eof` sentinel row, **not** the exit status — `fossil sql`
+  exits 0 when the query fails). A namespace missing from `VIRTUAL_NS[]` is
+  treated as a relative path and swept, which is how an older binary used to
+  delete every `ckin:` row. Never widen that scope casually — "delete everything not seen this
   run" wipes the cache on any subdirectory index or on any machine without a
   `fossil` binary. See `sweep_sources()` in `src/viki_index.c` and FINDINGS.md.
 - **Out of scope for Milestone 1**: Flutter app, VPS deployment, calendar

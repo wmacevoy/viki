@@ -11,6 +11,7 @@
 #include "viki_db.h"
 #include "viki_index.h"
 #include "viki_ask.h"
+#include "viki_muse.h"
 #include "viki_cache.h"
 #include "viki_serve.h"
 #include "embed.h"
@@ -41,6 +42,19 @@ static void usage(void){
         "                           Fetch both back. The model is written to the same directory\n"
         "                           'ask' reads (below) and checked against the manifest's sha256.\n"
         "                           A hub with no model published is not an error.\n"
+        "  muse [--k N] [--seed N] [--from <hash>#<ix>] [--chars N] [--bias none|old]\n"
+        "       [--same-source] [--model-id ID]\n"
+        "                           Undirected recall: NO query. Picks a random seed chunk and\n"
+        "                           returns chunks from the calibrated MIDDLE of that seed's\n"
+        "                           similarity band -- related enough to matter, far enough out\n"
+        "                           that `ask` would not surface them. Vector-only: no model, no\n"
+        "                           muse -- there is no BM25 analogue of \"the middle of the\n"
+        "                           distribution\", so an unembedded cache is refused, not faked.\n"
+        "                           Needs vectors but NOT the model file: a cache pulled from a\n"
+        "                           peer (D-11/D-12) muses fine with no model.onnx on disk.\n"
+        "                           --seed makes a run replayable; the seed used is always\n"
+        "                           printed. Run header on stderr, hits on stdout, in `ask` form:\n"
+        "                             [<n>] cos=<c> rank=<r>  <content_hash>#<chunk_ix>  <source>\n"
         "  serve [--host H] [--port N]\n"
         "                           Local HTTP server: human search page at / plus a JSON API for\n"
         "                           agents/scripts (GET /api/ask?q=&k=, /api/chunk?hash=&ix=,\n"
@@ -131,6 +145,62 @@ int main(int argc, char **argv){
         emb = open_embedder_if_available();
         rc = viki_cmd_ask(db, argv[2], k, emb);
         if( emb ) viki_embedder_close(emb);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "muse") == 0 ){
+        /* Undirected recall: no query, a random seed chunk, and the chunks
+        ** that sit in the calibrated middle of that seed's similarity
+        ** distribution -- see src/viki_muse.h. Note NO embedder is opened:
+        ** musing never calls viki_embed(), because the "query" is a chunk
+        ** whose vector is already in the cache, and measured, loading the
+        ** ONNX model costs ~72 ms against ~41 ms for the whole rest of the
+        ** command. --model-id is the escape hatch for a multi-epoch cache
+        ** that the embedder used to provide. */
+        sqlite3 *db;
+        viki_muse_opts opts;
+        int i;
+        viki_muse_defaults(&opts);
+        for( i = 2; i < argc; i++ ){
+            if( strcmp(argv[i], "--k") == 0 && i + 1 < argc ) opts.nResults = atoi(argv[++i]);
+            else if( strcmp(argv[i], "--seed") == 0 && i + 1 < argc )
+                opts.seed = strtoull(argv[++i], NULL, 10);
+            else if( strcmp(argv[i], "--chars") == 0 && i + 1 < argc ) opts.nChars = atoi(argv[++i]);
+            else if( strcmp(argv[i], "--model-id") == 0 && i + 1 < argc ) opts.zModelId = argv[++i];
+            else if( strcmp(argv[i], "--bias") == 0 && i + 1 < argc ){
+                const char *b = argv[++i];
+                if( strcmp(b, "old") == 0 ) opts.bias = VIKI_MUSE_BIAS_OLD;
+                else if( strcmp(b, "none") != 0 ){
+                    fprintf(stderr, "viki muse: unknown --bias '%s' (want none|old)\n", b);
+                    return 1;
+                }
+            }
+            else if( strcmp(argv[i], "--same-source") == 0 ) opts.allowSameSource = 1;
+            else if( strcmp(argv[i], "--from") == 0 && i + 1 < argc ){
+                /* --from <64hex>#<ix>: muse FROM a named chunk instead of a
+                ** random one, so an agent can follow a chain of association
+                ** out of a previous muse hit or a `viki ask` result. The
+                ** hash is matched in full, never by prefix -- a prefix that
+                ** silently matched the wrong chunk would be worse than a
+                ** clean miss, and viki_muse.c says so when it misses. */
+                static char hbuf[65];
+                const char *a = argv[++i];
+                const char *hash = strchr(a, '#');
+                size_t nh = hash ? (size_t)(hash - a) : strlen(a);
+                if( nh > 64 ) nh = 64;
+                memcpy(hbuf, a, nh); hbuf[nh] = 0;
+                opts.zSeedHash = hbuf;
+                opts.seedIx = hash ? atoi(hash + 1) : 0;
+            }
+            else {
+                fprintf(stderr, "viki muse: unknown option '%s'\n", argv[i]);
+                return 1;
+            }
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        rc = viki_cmd_muse(db, &opts, NULL);
         sqlite3_close(db);
         return rc;
     }

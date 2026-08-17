@@ -240,7 +240,7 @@ if [ "$ORT_OS" = "Windows" ]; then
     # environment) -- this flag is build.sh's own, independent signal.
     VIKI_EXTRA_DEFS="-DVIKI_WIN_ORT_PATH"
 fi
-for f in viki sha256 viki_db viki_index viki_ask viki_cache viki_serve tokenizer embed; do
+for f in viki sha256 viki_db viki_index viki_ask viki_muse viki_cache viki_serve tokenizer embed; do
     cc -O2 -g -Wall -Wno-unused-parameter $VIKI_EXTRA_DEFS \
        -I"$SQLITE_DIR" \
        -I"$ORT_INCLUDE" \
@@ -270,7 +270,8 @@ else
 fi
 cc -O2 -o "$OUTPUT_DIR/$VIKI_BIN_NAME" \
     "$OBJ_DIR/viki.o" "$OBJ_DIR/sha256.o" "$OBJ_DIR/viki_db.o" \
-    "$OBJ_DIR/viki_index.o" "$OBJ_DIR/viki_ask.o" "$OBJ_DIR/viki_cache.o" "$OBJ_DIR/viki_serve.o" \
+    "$OBJ_DIR/viki_index.o" "$OBJ_DIR/viki_ask.o" "$OBJ_DIR/viki_muse.o" \
+    "$OBJ_DIR/viki_cache.o" "$OBJ_DIR/viki_serve.o" \
     "$OBJ_DIR/tokenizer.o" "$OBJ_DIR/embed.o" \
     "$OBJ_DIR/sqlite3.o" "$OBJ_DIR/sqlite-ndvss.o" \
     $ORT_LINK_ARG $LINK_RPATH_FLAGS \

@@ -11,9 +11,15 @@ A real, working `viki` CLI with **both** retrieval rungs implemented:
 FTS5 BM25 (rung 0) and ONNX sentence embeddings + `sqlite-ndvss` cosine
 search (rung 2), fused by reciprocal rank fusion when a model is present,
 degrading honestly to BM25-only when it isn't (VIKI_DESIGN.md's required
-standalone path). `viki index` covers all four Fossil-native content
-types: checkout files, wiki pages, tickets, and forum posts (not just
-files). See `FINDINGS.md` for what was actually verified and how --
+standalone path). `viki index` covers **nine** Fossil-native content
+types: checkout files, wiki pages, tickets, forum posts, **check-in
+comments, tech notes, ticket changes, attachments and unversioned
+files**. The last five landed together as the "cover all of fossil
+state" round; check-in comments are the important one, because the
+timeline is where a project records what was done and why. There is
+also a second query verb, **`viki muse`** -- undirected recall with no
+query at all, for the thing you do not know exists and therefore cannot
+ask for. See `FINDINGS.md` for what was actually verified and how --
 forum extraction has now been round-tripped against real, live forum
 posts, which uncovered three real defects in it (escaped thread titles,
 superseded post versions indexed as current, and card lookup running off
@@ -81,9 +87,10 @@ FINDINGS.md.
 
 ```
 src/            viki CLI source (C)
-  viki.c          subcommand dispatch (index / ask / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
+  viki.c          subcommand dispatch (index / ask / muse / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
-  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus `fossil wiki`/`fossil ticket` subprocess extraction and `fossil sql` extraction (no CLI export exists for forum posts) for wiki pages, tickets, and forum posts (virtual paths `wiki:Name`/`ticket:UUID`/`forum:UUID`). Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache
+  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: on an ENCRYPTED repo each `fossil` invocation pays a SQLCipher KDF, so the per-artifact idiom is minutes where this is seconds. Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
+  viki_muse.c/.h  `viki muse`: undirected recall, NO query. Picks a seed chunk and returns chunks from the calibrated MIDDLE of that seed's cosine band -- close enough to be about something, far enough that `ask` would never surface them. Vector-only (an unembedded cache is refused, not faked with BM25), but needs no model FILE: a cache pulled from a peer muses with no `model.onnx` on disk. Rejected scorers (|cos|, sum|xi*yi|, random subspace, anti-search) are recorded in `viki_muse.h` WITH the numbers that killed them, against a uniform-random control
   viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
                   Each leg scores a given `(content_hash, chunk_ix)` at most once, at its best rank (`leg_hit()`), so a cache holding several `model_id` epochs of
                   the same content -- the normal steady state of D-11 sharing -- ranks identically to a single-epoch one instead of double-counting the BM25 leg (FINDINGS.md).
@@ -141,6 +148,26 @@ test/
                   content_hash, stale-content withdrawal, and mixed-epoch scoring. exit 0 == M1 met.
                   Self-contained (one mktemp tree, own FOSSIL_HOME, no state outside it). Does NOT
                   cover the forum leg on purpose -- build/forum-e2e-probe.sh owns that.
+                  It says nothing about retrieval QUALITY -- see the three files below.
+  retrieval-eval.sh / .py   THE retrieval-quality measurement. m1.sh and the probes prove an
+                  answer comes back; this measures whether it comes back FIRST, and separately
+                  measures how much of a Fossil repo `viki index` cannot see at all. Reports
+                  recall@1/@5/@k + MRR by query class, on dev and a HELD-OUT 31% separately,
+                  a BM25-only control (the vector leg is not assumed to help -- it is scored),
+                  and a per-query failure taxonomy. `VIKI_BIN=... bash test/retrieval-eval.sh`
+                  scores any build against the same corpus. .py, not .sh, because it reads
+                  .viki/cache.db directly to replay `viki ask`'s FTS5 query -- its header says why.
+  retrieval-corpus.sh   builds that corpus once (~40 s) into $VIKI_EVAL_DIR (default
+                  /tmp/viki-retrieval-eval): an ENCRYPTED repo holding this repo's own docs
+                  under 14 real ported check-in comments, plus wiki pages, tickets (one with
+                  a REPLACING change, one with an APPENDING one), forum thread/reply/edit, a
+                  tech note, an attachment, tags, an unversioned file, and a file whose earlier
+                  text survives only in history. The non-file artifacts are there because
+                  `viki index` cannot read them -- that gap is the measurement.
+  retrieval-queries.tsv  59 questions an agent would ask in a LATER session, six classes,
+                  18 held out. Ground truth is an anchor SUBSTRING, not a content_hash#chunk_ix,
+                  so it survives a doc edit or a re-chunk; anchors must not span a line break
+                  (chunk_text keeps the source's wrapping) and the harness flags ones that do.
 experiments/      FFI_RISK.md's proof-of-concept (in-process fossil), inherited from fossil-app.
                   FROZEN/superseded -- do not run it, do not believe it. Its build recipe needs
                   `objcopy` + GNU-ld `-Wl,--wrap=exit`, NEITHER of which exists on macOS
@@ -234,7 +261,14 @@ vendor/fossil-see/build/build.sh
 bash test/m1.sh                             # exit 0 AND "0 failed, 0 skipped"
 VIKI_TEST_KEEP=1 bash test/m1.sh            # keep the scratch tree for post-mortem
 sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh omits
+
+bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE
+bash test/retrieval-eval.sh --failures      # why each wrong query was wrong
+VIKI_BIN=<other-build> bash test/retrieval-eval.sh   # score a change
 ```
+
+`test/retrieval-eval.sh` is not pass/fail and never gates anything -- it
+prints numbers. Exit 0 means it produced them, not that they were good.
 
 `test/m1.sh` needs nothing else from the environment: it sets its own
 `FOSSIL_HOME`, `FOSSIL_SEE_KEY`, `FOSSIL_USER`/`VIKI_FOSSIL_USER` and
@@ -561,11 +595,20 @@ this file -- against a binary missing three fixes that were sitting in
   Still unverified, and nobody here can verify it: that this artifact
   actually *starts* on a Windows machine with no MSYS2 installed. There is
   no Windows dev machine in this project -- CI is the only Windows.
-- **Tech notes / other artifact types** aren't indexed (checkout files,
-  wiki pages, tickets, and forum posts are, so far -- forum indexing is
-  verified end to end against live posts and the three bugs found that
-  way are fixed in both `src/` and `build/dist/viki`, but see the "still
-  NOT fully verified" list above before trusting the forum leg).
+- ~~Tech notes / other artifact types aren't indexed~~ **Superseded
+  2026-08-17.** Nine classes are indexed now (see the Layout block and the
+  head of this file): checkout files, wiki pages, tickets, forum posts,
+  check-in comments, tech notes, ticket changes, attachments and
+  unversioned files. This bullet contradicted the head of the same file for
+  a full round -- the identical failure mode as the `msys-2.0.dll` bullet
+  before it, and the second time a stale "not yet built" entry outlived the
+  work. When you finish something, grep this file for the OLD claim; the
+  new claim going in at the top does not remove the old one.
+  Genuinely still not indexed: **file history** (only the current version
+  of each checkout file is read, so "what did this say before?" is
+  unanswerable -- 0/1 on that eval class) and **tags as artifacts** (a
+  branch name reaches the index only because it happens to sit in the
+  check-in header line; there is no tag extraction).
 - **`viki serve`'s HTML page still shows no `content_hash`, so the one
   HUMAN surface cannot cite a source.** The CLI hit line and `/api/ask`'s
   `"hash"` both carry it (KICKOFF deliverable 2), but `viki_serve.c`'s
@@ -598,13 +641,66 @@ this file -- against a binary missing three fixes that were sitting in
   it's a real limit, not a hidden one).
 - **Chunking is naive**: fixed 40-line splits, no overlap, no token
   awareness (and no truncation-awareness of the model's 512-token limit
-  for very long lines). Fine for now; revisit before relying on it for
-  real retrieval quality.
-- **Tokenizer is ASCII-scoped**: no Unicode NFD accent stripping, no CJK
-  per-character splitting (both part of the reference BERT basic
-  tokenizer). Non-ASCII text degrades to more `[UNK]` tokens rather than
-  being mis-tokenized silently wrong, but this is a real accuracy gap on
-  non-English content. See `tokenizer.h`.
+  for very long lines). ~~Fine for now; revisit before relying on it for
+  real retrieval quality.~~ **It is no longer "fine for now" as an
+  unmeasured claim: it costs recall, and the cost is now a number.** In
+  `test/retrieval-eval.sh`'s baseline, **21 of 43** answerable queries put
+  a *different chunk of the gold document* above the gold chunk, 9 of them
+  at rank 1, several against the immediately adjacent chunk (FINDINGS.md).
+  Note what fixing it costs before proposing one: chunk params are part of
+  the epoch pin, so a new chunker is a fleet-wide **epoch bump** (D-11),
+  not a local tweak.
+- **Retrieval QUALITY is measured, not asserted, and the standing result
+  still disagrees with this file's old story about rung 2.** Run
+  `bash test/retrieval-eval.sh` for the current numbers -- **do not quote
+  numbers from this file.** An earlier revision transcribed a baseline
+  here and it was stale within one round; the harness is the source of
+  truth and prints the corpus fingerprint you must quote alongside any
+  figure. What has held across every measurement so far, and is the thing
+  worth carrying in prose: **adding the vector leg wins recall@5 and
+  recall@10 and LOSES precision@1 against its own BM25-only control.**
+  Fusion pulls answers into the top ten that BM25 never finds, and pushes
+  others off the top spot. The evidence this file used to cite for rung 2
+  was a single zero-keyword-overlap query -- the one case where fusion
+  cannot lose by construction. Before claiming the vector leg helps,
+  measure it against the BM25-only column the harness already prints.
+- ~~**`viki index` reads none of the Fossil state that carries the
+  episodic record**~~ **Mostly closed.** Check-in comments, tech notes,
+  ticket change history, attachments and unversioned files are now
+  indexed; run `bash test/retrieval-eval.sh` and read **report 2**
+  (`INDEX COVERAGE`) for where the gap stands today. Report 2 is
+  deliberately separate from report 1: *answerable at all* and *ranked
+  well* are two different achievements and averaging them hides both.
+  **What is still NOT indexed, with the reason:** historical file
+  versions (`fver:`) -- measured to add one answerable query for ~122
+  extra chunks while dropping regression recall@10, so it lost on its own
+  numbers, not on effort; and `tag:`/branches -- the branch name already
+  rides in the `ckin:` header and is retrievable that way. Both decisions
+  are re-measurable from `test/retrieval-queries.tsv`.
+- **A viki binary that predates a namespace used to DELETE every row in
+  it, and this is a MIXED-FLEET hazard, not just an old bug.**
+  `sweep_sources()` routed any unrecognised path to the filesystem branch,
+  and `path_in_dir("ckin:abc", ".")` is true -- so an older peer's
+  `viki index` retired the new namespaces wholesale, and `viki cache push`
+  then published the wipe to everyone (D-11/D-12 share one
+  `viki-cache.db`). Fixed by `VIRTUAL_NS[]` + `looks_like_namespace()`.
+  **Until every peer runs a build containing that fix, a mixed-version
+  fleet still loses the new classes from a shared cache** -- the fix
+  protects the new binary, it cannot protect the cache from an old one.
+- **Tokenizer is ASCII-scoped -- and the old claim about *how* it fails
+  was measured FALSE.** It used to say non-ASCII "degrades to more `[UNK]`
+  rather than being mis-tokenized silently wrong". The opposite happens:
+  `is_ascii_punct()` misses all Unicode `P*`, so the character stays glued
+  to its word AND the vocab's `##` continuations let greedy WordPiece
+  succeed with the WRONG pieces -- `decision—recorded` becomes
+  `decision ##— ##re ##cor ##ded`, and the contagion turns the whole
+  following word into continuations, so one smart quote corrupts two
+  words. A conformant implementation (NFD accent stripping, CJK splitting,
+  Hangul decomposition) exists behind `VIKI_TOKENIZER_CONFORMANT`,
+  **default OFF and it must stay off**: turning it on changes token ids,
+  hence embeddings, hence what every peer computes for the same
+  `(content_hash, model_id, chunk_params)` -- an EPOCH BUMP, not a build
+  flag. See `tokenizer.h` and `test/tokenizer-conformance.sh`.
 - ~~Garbage collection of orphaned chunks~~ **Done -- and this bullet's
   own claim was wrong.** It used to read: "When a file's content changes,
   the old content_hash's chunk rows are never deleted (harmless --
@@ -622,16 +718,23 @@ this file -- against a binary missing three fixes that were sitting in
   `sweep_sources()` in `src/viki_index.c`: a run invalidates only
   namespaces it can prove it observed -- filesystem paths beneath the
   directory it actually walked (so `viki index docs` cannot touch anything
-  outside `docs/`), and `wiki:`/`ticket:`/`forum:` only when that
-  extractor exited 0. That exit-status check is what stops a machine with
-  no `fossil` binary from deleting every wiki page, ticket and forum post
-  in the cache -- empty output otherwise looks identical to "this repo has
-  none". Verified with over-deletion controls, not just the happy path:
+  outside `docs/`), and each of the eight virtual namespaces only when
+  that extractor proved it ran. **"Exited 0" was not a sufficient check
+  and this was a live bug:** `fossil sql` exits 0 when the *query* fails
+  and nonzero only when the *repository* cannot be opened, so a repo with
+  no `forumpost` table reported success and the sweep deleted every
+  `forum:` row. Authority is now proven by a `SELECT '#viki-eof';`
+  sentinel -- a failing statement aborts the rest of the script, so the
+  sentinel appears iff the real query prepared *and* ran. It matters for
+  `forumpost` and `unversioned`, the only two tables absent from a virgin
+  repo. Empty output otherwise looks identical to "this repo has none".
+  Verified with over-deletion controls, not just the happy path:
   subdirectory indexing leaves outside rows and chunks intact; a shared
   `content_hash` survives while any path still references it; and with
-  `VIKI_FOSSIL_BIN` pointed at nothing, all three virtual namespaces
+  `VIKI_FOSSIL_BIN` pointed at nothing, all eight virtual namespaces
   survive byte-for-byte (`0 stale source(s) retired`) while the run says
-  so out loud on stderr. It also fixes a case the forum `fprev` filter
+  so out loud on stderr, naming each namespace it is not authoritative
+  for. It also fixes a case the forum `fprev` filter
   could not reach: a post indexed while it *was* current, then superseded
   by an edit, used to stay retrievable forever.
   **Honest limits** (all "keeps too much", never "deletes too much"):

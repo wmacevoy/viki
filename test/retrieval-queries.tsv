@@ -1,0 +1,103 @@
+# test/retrieval-queries.tsv -- the retrieval evaluation query set.
+#
+# 59 questions an AGENT would ask in a LATER session about work done in an
+# EARLIER one, over the corpus test/retrieval-corpus.sh builds. Derived from
+# what that corpus actually says: each one was written by finding a fact
+# worth recalling and then phrasing the question the way somebody would ask
+# it BEFORE knowing the answer.
+#
+# FORMAT: tab-separated, 8 columns, '#' comments and blank lines ignored.
+# (Tab-separated and parsed with a delimiter-PRESERVING split, because this
+# repo has already been bitten once by strtok_r collapsing empty fields --
+# see FINDINGS.md. Empty columns are normal here; `trap` usually is.)
+#
+#   id       Q01..Q59, stable. Never renumber: baselines cite these.
+#   split    dev | test. `test` is HELD OUT -- 18 of 59 (31%). Do not look
+#            at held-out failures while tuning; report them separately.
+#   class    decision-rationale | negative-trap | superseded | provenance
+#            | vocab-mismatch | identifier
+#   expect   indexed   -- the answer is in something `viki index` covers
+#            unindexed -- the answer exists ONLY in an artifact viki does
+#                         not index today. These MUST all fail at baseline.
+#                         That failure is the coverage-gap measurement, and
+#                         when somebody indexes check-in comments these
+#                         queries start scoring with no edit to this file.
+#   artifact where the answer physically lives: file | wiki | ticket |
+#            forum | checkin-comment | technote | ticket-change |
+#            file-history | attachment | tag | uv
+#   query    what gets passed to `viki ask`
+#   anchor   a literal substring of the GROUND-TRUTH chunk. Ground truth is
+#            expressed this way, not as a content_hash#chunk_ix, on purpose:
+#            hashes move when a document is edited and chunk_ix moves when
+#            chunking changes (an epoch bump), and either would silently
+#            invalidate the whole file. The harness resolves anchor ->
+#            {content_hash#chunk_ix} against the cache db at run time and
+#            prints what it resolved to. An anchor that resolves to NOTHING
+#            is exactly the unindexed case.
+#   trap     optional. A literal substring of a STALE or WRONG chunk -- the
+#            answer that used to be true. If a trap chunk outranks every
+#            gold chunk the harness reports STALE_OUTRANKS, which is the
+#            failure mode that matters most for an episodic memory.
+#
+# Anchors must sit on ONE line of the source document: chunk_text keeps the
+# original hard wrapping, so a phrase that wraps will never match.
+id	split	class	expect	artifact	query	anchor	trap
+Q01	dev	decision-rationale	indexed	file	why does the keyword half of the search not filter by model id	converting a scoring bug into a silent recall bug	
+Q02	dev	decision-rationale	indexed	file	why are the embedding cache and the model file not committed like everything else	would entomb every superseded vector in immutable history	
+Q03	test	decision-rationale	indexed	file	should publishing the model be an opt in flag on push	an opt-in flag makes the ordinary push	
+Q04	dev	decision-rationale	indexed	file	we need https and a password on the local search server, do I link openssl into the C	rather than inventing a second TLS story	
+Q05	dev	decision-rationale	indexed	file	the vector extension will not compile on this architecture, do I patch it here	not something to work around here	
+Q06	test	decision-rationale	indexed	wiki	nothing re-embeds old content when the pinned model changes, why was that left undone	against an imaginary model_id	
+Q07	dev	decision-rationale	indexed	file	when content goes away should the cleanup only remove rows for my own model	sparing another epoch's row would leave	
+Q08	dev	decision-rationale	indexed	wiki	can I just add a little overlap between chunks, it only affects new documents	has to say the words	
+Q09	dev	negative-trap	indexed	file	my parser is silently dropping empty columns when I split the output of a fossil command	never yields an empty token between	
+Q10	dev	negative-trap	indexed	file	searching for a whole sentence returns nothing but a single word from it works fine	present in a row for it to match at all	
+Q11	test	negative-trap	indexed	file	another machine synced and every one of my result scores moved even though no document changed	silently reweights itself toward BM25 in proportion to how many epochs	
+Q12	dev	negative-trap	indexed	file	I removed a document and the tool still hands me its text as the top answer	so a caller has no signal at all that it is stale	
+Q13	dev	negative-trap	indexed	file	I rewrote a file and re-ran the indexer but the old wording keeps coming back	a document rewritten in the same second it was indexed is	
+Q14	test	negative-trap	indexed	file	my check that the database is scrambled passes even when I point it at an unscrambled one	exactly when the file is unencrypted	
+Q15	dev	negative-trap	indexed	file	the indexer says it found no tickets but there are definitely tickets in this repository	reports zero tickets rather than an error	
+Q16	dev	negative-trap	indexed	file	loading the model fails saying the file is missing but the path on screen looks right	producing an unreadable mojibake	
+Q17	dev	superseded	indexed	file	how many checks does the milestone one acceptance test make	90 assertions	54 passed, 0 failed, 0 skipped
+Q18	dev	superseded	indexed	file	does the binary that ships in this tree have the forum parsing fixes in it	so the shipped binary carries all three fixes	the shipped binary still has all
+Q19	test	superseded	indexed	file	which checks go red on a binary compiled from the sources before those fixes	B4 B5 B6 B7 C1 C2 C3 C4 C6	
+Q20	dev	superseded	indexed	file	has the pinned embedding model ever been exercised on intel hardware	observed green on linux-x86_64	not yet verified on x86
+Q21	dev	superseded	indexed	file	how many checks get skipped if there is no embedding model available	64 passed, 0 failed, 26 skipped	43 passed, 0 failed, 11 skipped
+Q22	test	superseded	indexed	file	is a cache holding two model generations actually a problem or just untidy	That judgement is wrong	(the cache is derived, D-10) but it means
+Q23	dev	superseded	indexed	file	does the acceptance test say anything at all about forum posts	All eight are inside one comment block	contains **zero** occurrences
+Q24	dev	provenance	indexed	file	which parts of forum handling are still not actually proven	Four artifact shapes were exercised, not the type's full grammar	
+Q25	dev	provenance	indexed	file	has the automated build pipeline ever actually executed on the hosted runners	the workflow has never run on GitHub's runners	
+Q26	test	provenance	indexed	file	what claim about the windows package can nobody on this project check	Still unverified, and nobody here can verify it	
+Q27	dev	provenance	indexed	file	was the containerised acceptance run ever repeated against the current test file	the 90-assertion file has ever run in a container	
+Q28	dev	provenance	indexed	file	of the things the indexer covers, which one has the weakest evidence behind it	verified of the four types	
+Q29	test	provenance	indexed	file	has anyone opened the search page in a real browser and clicked around	the page itself hasn't been exercised	
+Q30	dev	vocab-mismatch	indexed	file	how do I avoid every laptop redoing work a colleague's machine already finished	by whoever sees the content first	
+Q31	dev	vocab-mismatch	indexed	file	what happens if I delete the lookup files by accident, is anything lost forever	derived, rebuildable, and disposable	
+Q32	test	vocab-mismatch	indexed	file	how much space does the meaning matching layer add to a phone app	app-bundle bump total	
+Q33	dev	vocab-mismatch	indexed	file	two devices were offline and both worked out the same numbers, do they conflict	converges harmlessly	
+Q34	dev	vocab-mismatch	indexed	file	can I still look things up on a plane with no signal and no big download	over the whole corpus, offline	
+Q35	dev	identifier	indexed	file	what does find_w_card do	find_w_card	
+Q36	dev	identifier	indexed	file	why does the code call split_preserve_empty instead of the library function	split_preserve_empty	
+Q37	test	identifier	indexed	file	what is VIKI_FTS_EPOCH_SLACK and what does its value mean	VIKI_FTS_EPOCH_SLACK	
+Q38	dev	identifier	indexed	file	what is leg_hit for	leg_hit()	
+Q39	dev	identifier	indexed	file	when does a manifest field need un-escaping and when does it not	The W-card body needs no such	
+Q40	test	identifier	indexed	file	what rules does sweep_sources follow before it deletes anything	sweep_sources	
+Q41	dev	decision-rationale	unindexed	checkin-comment	why did we not try the release automation against the tag that already exists	already-published release, risking overwriting its hand-written notes	
+Q42	dev	provenance	unindexed	checkin-comment	how was the first published version actually assembled	v0.1.0 itself was published by hand -- downloading build.yml's CI-verified	
+Q43	test	negative-trap	unindexed	checkin-comment	submodule checkout fails with dubious ownership but only inside the container job	jobs bind-mount the checkout from the host, and actions/checkout's own	
+Q44	dev	decision-rationale	unindexed	checkin-comment	what was rejected when the vendored vector extension would not build	Rejected: forking sqlite-ndvss to fix its build	
+Q45	dev	decision-rationale	unindexed	checkin-comment	why is the derived database kept outside the repository file itself	a projection you cannot delete is not a projection	
+Q46	test	negative-trap	unindexed	checkin-comment	my platform guard compiled cleanly and changed absolutely nothing at runtime	same narrow char* as before -- byte-for-byte the same mojibake in the CI log	
+Q47	dev	provenance	unindexed	checkin-comment	which platform worked on the very first attempt at automated builds	First CI run: macos-arm64 passed outright	
+Q48	test	superseded	unindexed	checkin-comment	why is that little connection helper script not tracked any more	wrapper carrying a specific hostname and root login -- not something other	
+Q49	dev	vocab-mismatch	unindexed	checkin-comment	why build the plain word matching first instead of going straight to meaning	Rung 0 first, on the theory that a memory layer with no vectors at all is	
+Q50	dev	decision-rationale	unindexed	technote	why does one throwaway word matching a document count as much as a good meaning match	weights each leg's best hit identically	
+Q51	test	identifier	unindexed	technote	can I tell from the score alone how many of the two searches contributed to a hit	A score of 0.0164 = 1/61 is ONE leg at rank 1	
+Q52	dev	superseded	unindexed	ticket-change	did anybody ever propose overlapping the chunks, and what happened to it	add a ten-line overlap window between adjacent chunks	
+Q53	test	superseded	unindexed	file-history	what did the forum status note claim before anybody managed a real round trip	Estimated cost to close: half a day of browser-driver work	
+Q54	dev	provenance	unindexed	attachment	are there measured numbers behind the choice of chunk size or was it a guess	was split across a chunk boundary in 4 of the 12 queries	
+Q55	test	decision-rationale	unindexed	uv	what is the procedure for changing the repository passphrase	rotation is a NETWORK-transport operation and nothing in the test tree	
+Q56	dev	identifier	unindexed	tag	which branch carries the windows build work	ci-hardening	
+Q57	dev	decision-rationale	indexed	forum	the keyword double counting is fixed, what did the fix leave unsolved	hands the fusion fewer	
+Q58	test	negative-trap	indexed	ticket	the web page gives me an answer but nothing I can quote as its source	renders only rank, rrf, source and chunk_ix	
+Q59	dev	identifier	indexed	ticket	what does sqlite3_ndvss_init choose between and how	sqlite3_ndvss_init picks a SIMD backend	

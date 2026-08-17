@@ -13,6 +13,323 @@ that entry as a dated block quote rather than by rewriting it.
 
 ---
 
+## Two retrieval improvements that each measured well ALONE lost most of their gain when combined: the ranking work is worth +0.139 recall@1 on a 114-chunk corpus and +0.024 on the same corpus once 24 check-in-comment chunks are added
+
+**Date:** 2026-08-16, integrating the "episodic memory" round.
+
+Four agents worked in parallel on one tree. Two of them changed retrieval:
+one improved ranking (`src/viki_ask.c` -- adjacent-word FTS phrases, df-based
+term dropping, skipping the vector leg on identifier queries), one closed the
+Fossil coverage gap (`src/viki_index.c` -- check-in comments, tech notes,
+ticket changes, attachments, unversioned files). Each measured its own change
+against its own control and both were real. **Neither measured the other's
+corpus, and the round's headline number is not the sum.**
+
+The 2x2, same corpus directory re-indexed in place by each binary, same 59
+queries, k=10, hybrid, ALL indexed-answer queries (n=43):
+
+```
+                        HEAD ask                A's ask            A's gain
+  HEAD index (114ch)    0.256 / MRR 0.368   0.395 / MRR 0.504   +0.139 / +0.136
+  D's index  (138ch)    0.209 / MRR 0.337   0.233 / MRR 0.404   +0.024 / +0.067
+  corpus fp             944601a216257d69    94b0908c4729bc2c
+```
+
+**A's recall@1 gain shrinks by 83% and its MRR gain by 51%** purely because
+the corpus grew by 24 chunks -- and grew with *correct, relevant* content.
+The mechanism is visible per query: 9 of 43 indexed-answer queries now have a
+newly-indexed chunk at rank 1, and 5 queries that held rank 1 on the small
+corpus lost it to one (Q01 Q04 Q05 Q09 Q10). Check-in comments compete
+directly with the documents written from them, because in this repo the
+commit log and `FINDINGS.md` say the same things in different words.
+
+**Repro:** the four cells are
+`bash test/retrieval-eval.sh --no-build --corpus <copy> --viki <bin>` over
+`{scratchpad/agentA/build,scratchpad/D,scratchpad/agentA/b_final,build}/dist/viki`,
+re-indexing the copy between runs. Both control cells reproduced their
+authors' reported numbers exactly, so the dilution is not a measurement
+artefact.
+
+**Wrong assumption replaced:** that a ranking improvement measured on a fixed
+corpus and a coverage improvement measured on a fixed ranker compose. They
+do not, and the interaction is not small. **Process consequence:** when two
+agents change retrieval in one round, the integrator must measure the 2x2,
+not the two diagonals -- and a parallel-agent plan should say which corpus
+each agent's numbers are quoted against.
+
+---
+
+## Closing the coverage gap made the single-anchor ground truth WRONG, not just incomplete: 4 of the 5 queries that lost rank 1 lost it to a chunk that answers the question better than the gold anchor does
+
+**Date:** 2026-08-16, integrating the "episodic memory" round.
+
+`test/retrieval-queries.tsv` scores one anchor substring per query. That was
+sound when the corpus was eight documents. Once check-in comments are
+indexed, several questions have **two** true answers -- the document, and the
+commit message the document was written from -- and the harness can only
+credit one.
+
+Adjudicated by hand, all 5 rank-1 losses caused by a new-class chunk
+(text quoted from the run, so the judgement is checkable):
+
+| query | displacing chunk | verdict |
+|---|---|---|
+| Q05 "the vector extension will not compile on this architecture, do I patch it here" | `ckin:8a71aacb` *"Rejected: forking sqlite-ndvss to fix its build. KICKOFF.md says do not fork it, and a bug in a vendored project is that project's bug."* | **better than gold** -- the decision WITH its rejected alternative |
+| Q09 "my parser is silently dropping empty columns when I split the output of a fossil command" | `ckin:1f10a101` *"strtok_r treats a run of consecutive delimiters as ONE delimiter and never yields an empty token between them"* | **exact answer** |
+| Q10 "searching for a whole sentence returns nothing but a single word from it works fine" | `ckin:d9d5712b` *"Symptom: asking for a sentence returned zero results while asking for a single word from the same sentence worked. SQLite FTS5's default MATCH syntax treats space-separated barewords as an implicit AND"* | **exact answer, verbatim symptom** |
+| Q01 "why does the keyword half of the search not filter by model id" | `note:38cbc031` *"The keyword leg is not filtered by model_id and must never be. A chunk may exist only under model_id='none'"* | **exact answer** |
+| Q04 "we need https and a password on the local search server, do I link openssl into the C" | `ckin:35d3d554` (the `viki serve` design check-in) | topical, not the answer -- a genuine loss |
+
+So **the reported recall@1 of 0.233 understates the binary**: on 4 of the 5
+losses the user gets a correct answer at rank 1 and the harness scores a
+miss. The harness is not broken -- its anchor resolver already grew the gold
+set automatically on 4 other queries (Q17 Q36 Q58 Q59) where the same words
+happen to appear in a new-class chunk. The failure is that ground truth
+written against an 8-document corpus does not survive that corpus tripling.
+
+**Deliberately NOT fixed this round.** Adding alternate anchors *after
+seeing which chunks won* is fitting the ground truth to the result, which is
+how an eval stops being able to detect a regression. The fix has to be a
+pre-registered pass over `retrieval-queries.tsv` that names every acceptable
+answer per query without consulting a ranking.
+
+**Wrong assumption replaced:** that "recall@1 went down" means retrieval got
+worse. On a corpus that just gained a second true source for the same facts,
+a single-anchor metric measures *which* true answer wins, not *whether* one
+does.
+
+---
+
+## `viki ask`'s vector leg costs precision at rank 1 on a real repo too, not just in the eval: a query containing a term that occurs in exactly ONE chunk ranks that chunk 1st with BM25 alone and 3rd with hybrid
+
+**Date:** 2026-08-16, hand-checking the new artifact classes outside the eval
+corpus.
+
+Built a real Fossil repo from viki's own git history
+(`git fast-export --all | fossil-see import --git`), 21 real check-ins, and
+indexed it: `21 check-in comment(s), 21 (re)chunked`, 282 chunks total.
+`sandbox-exec` appears in **no tracked file** -- only in commit `bd04683`'s
+message -- and is therefore indexed in exactly one chunk, under
+`ckin:382632ddf868aa00…`.
+
+```
+query: "sandbox-exec networking denied fresh clone"
+  BM25-only  [1] ckin:382632dd…   <- correct, rank 1
+  hybrid     [1] ./FINDINGS.md#16
+             [2] ./src/viki.c#1
+             [3] ckin:382632dd…   <- displaced to rank 3
+```
+
+Neither chunk that outranks it contains the term. The vector leg cannot see
+a rare token (it is one WordPiece among 254 in a 40-line chunk), so it votes
+on topical similarity and RRF promotes two chunks that are *about* the
+subject over the one chunk that *contains* the fact. Shortening the query to
+just `sandbox-exec` restores rank 1, which localises the cause to the common
+terms, not to the rare one.
+
+This is the same conclusion `test/retrieval-eval.sh` reaches from the
+BM25-only control column, reproduced on a corpus that is not the eval corpus
+and was not used to tune anything. **Worth knowing before someone "fixes"
+the eval by rewriting queries: the effect is in the retrieval, not the
+question set.**
+
+**Repro:** `scratchpad/INTEG/real/` (repo + checkout); index with
+`VIKI_FOSSIL_BIN=vendor/fossil-see/build/dist/fossil-see viki index .`, then
+run the query with and without `VIKI_MODEL_DIR` pointed at a real model.
+
+---
+
+## First measured retrieval baseline: adding the vector leg makes `viki ask` WORSE at rank 1 than BM25 alone (0.256 vs 0.302), the keyword leg matches the entire corpus for the median query, and 21 of 43 answerable questions get the right document with the wrong chunk
+
+**Date:** 2026-08-16, building `test/retrieval-eval.py` -- the first time
+anything in this repo has measured retrieval *quality* rather than
+retrieval *existence*.
+
+Everything before this round proved that retrieval **works**: `test/m1.sh`
+proves a planted answer comes back, `build/forum-e2e-probe.sh` proves forum
+content comes back, `embed-selftest` proves the vectors are semantically
+real. None of them says whether the answer comes back **first**, and the
+corpora were three to fifteen tiny documents. FINDINGS.md already warned
+that "a k=5 default over a 6-chunk corpus makes 'was it retrieved?' almost
+free". This entry is what happens on a 114-chunk corpus with 59 questions
+that were written before their answers were looked up.
+
+### The harness and corpus
+
+`test/retrieval-corpus.sh` builds an **encrypted** scratch repo containing
+this repo's own episodic record (FINDINGS.md, AGENTS.md, CLAUDE.md,
+VIKI_DESIGN.md, KICKOFF.md, USER_STORIES.md, ARCHITECTURE.md,
+ENCRYPTION.md) committed under 14 check-in comments ported verbatim from
+viki's git log, plus 2 wiki pages, 4 tickets, a thread-start forum post, a
+reply, an edit of that reply, a tech note, an attachment, a branch with
+tags, an unversioned file, and one file rewritten so its earlier text
+exists only in history. `test/retrieval-queries.tsv` holds 59 questions in
+six classes, 18 of them (31%) **held out**. `test/retrieval-eval.py`
+scores them.
+
+Ground truth is a literal **anchor substring**, not a
+`content_hash#chunk_ix`. That was not a stylistic choice: a hash moves
+whenever a document is edited and `chunk_ix` moves whenever chunking
+changes -- which is an epoch bump, exactly the change this eval exists to
+justify -- so hard-coded ids would silently invalidate the whole file the
+first time somebody improved anything. Resolving the anchor at run time
+also makes the coverage measurement free: an anchor that resolves to no
+chunk means the artifact holding that answer is not in the index.
+
+**Trap worth knowing before writing any anchor:** `chunk_text` preserves
+the source's hard wrapping, so an anchor that spans a line break never
+matches. Twelve of the first fifty-nine anchors failed for exactly that
+reason and looked, in the report, identical to a genuine coverage gap. The
+harness now flags an `expect=indexed` query whose anchor resolves to
+nothing as a QUERY-SET DEFECT and excludes it, rather than scoring it as a
+retrieval failure.
+
+### The baseline, verbatim
+
+`bash test/retrieval-eval.sh`, `build/dist/viki` (2026-08-13 19:48:15
+build), model `all-MiniLM-L6-v2-qint8-arm64` present, k=10:
+
+```
+                                n     recall@1  recall@5  recall@k   MRR
+HYBRID   dev                    31     0.226     0.452     0.645     0.319
+HYBRID   test (HELD OUT)        12     0.333     0.750     0.750     0.493
+HYBRID   all indexed-answer     43     0.256     0.535     0.674     0.368
+BM25-ONLY all indexed-answer    43     0.302     0.465     0.558     0.375
+```
+
+Index coverage, reported separately because it is a different defect:
+
+```
+0 of 16 queries whose answer lives in an un-indexed artifact are
+answerable AT ALL.  checkin-comment 0/9, technote 0/2, attachment 0/1,
+file-history 0/1, tag 0/1, ticket-change 0/1, uv 0/1.
+```
+
+### 1. Hybrid loses to BM25-only at rank 1. Measured, twice, both directions.
+
+`recall@1` **drops** from 0.302 to 0.256 when the vector leg is switched
+on, and MRR is a wash (0.375 -> 0.368). Hybrid buys recall@5 (0.465 ->
+0.535) and recall@10 (0.558 -> 0.674). So the vector leg is not useless --
+it is *pulling answers into the top ten that BM25 never finds* (7 queries)
+-- but it is **displacing** the ones BM25 already had right (2 lost
+outright, 8 demoted).
+
+The mechanism is RRF doing exactly what RRF does, and it is worth seeing
+once. `viki ask "what does find_w_card do"` -- an exact identifier lookup,
+the easiest possible case:
+
+```
+$ cd <corpus>/co
+$ VIKI_MODEL_DIR=/no/such/dir viki ask "what does find_w_card do" --k 10
+[1] rrf=0.0164  c1d9b4a45712...#54  ./FINDINGS.md     <- the chunk that defines it
+$ VIKI_MODEL_DIR=<model> viki ask "what does find_w_card do" --k 10
+[1] rrf=0.0274  5b717dd64813...#16  ./AGENTS.md
+[2] rrf=0.0274  c1d9b4a45712...#42  ./FINDINGS.md
+...                                                    <- #54 is NOT in the top 10
+```
+
+`0.0164 = 1/61` is one leg at rank 1. `0.0274 = 1/72 + 1/74` is two legs at
+ranks 12 and 14. **A chunk both legs rank in the middle beats a chunk one
+leg ranks first**, and with `poolSize = 40` against a 114-chunk corpus each
+leg nominates 35% of everything, so "both legs saw it" is nearly free. The
+fusion constant `VIKI_RRF_K = 60` is what sets that exchange rate and
+nothing has ever tuned it.
+
+**Wrong assumption this replaces:** that hybrid retrieval is a strict
+improvement over its rung-0 floor, so the only question about rung 2 is
+whether it *works*. AGENTS.md's standing evidence for the vector leg is a
+query with zero keyword overlap, where BM25 contributes nothing by
+construction -- the one case where fusion cannot hurt. On queries that do
+have keyword overlap, which is most of them, it can and does.
+
+### 2. The keyword leg is not a filter. It matches the whole corpus.
+
+`build_or_query()` ORs every whitespace-separated term, and `chunk_fts`
+uses `porter unicode61` with **no stopword list**. So a natural-language
+question matches essentially everything:
+
+```
+keyword-leg selectivity over the 43 indexed-answer queries:
+  MEDIAN 114 of 114 chunks matched   (min 83, max 114)
+  42 of 43 queries match >90% of the corpus
+```
+
+The OR-of-terms fix (FINDINGS.md, below) was right and is not being
+relitigated -- implicit-AND returned nothing at all. But its consequence
+was never measured: BM25 is not selecting candidates, it is *ranking the
+entire corpus*, and one stopword is enough to admit any chunk. FINDINGS.md
+already noticed the symptom in the small ("a single standalone 'a'
+anywhere in the corpus is a full-weight BM25 hit", and m1.sh's grocery.md
+says "one bag" rather than "a bag" to dodge it); the scale of it is new.
+`chunk_fts`'s tokenizer is local, rebuildable and **free to change** --
+unlike `src/tokenizer.c`, which must conform to what all-MiniLM-L6-v2 was
+trained on -- so this is the cheapest thing on this list to try.
+
+### 3. Right document, wrong chunk: 21 of 43.
+
+In 21 of the 43 answerable queries, a **different chunk of the gold
+document** outranks the gold chunk; in 9 of those it sits at rank 1. Fixed
+40-line chunks with no overlap put the vocabulary that would find an answer
+in one chunk and the answer itself in the next. `Q07`, `Q13`, `Q18` and
+`Q25` fail against the *immediately adjacent* chunk.
+
+This is the first evidence that "chunking is naive" costs measurable
+recall rather than being tidiness debt. It is also the most expensive
+thing on this list to fix: chunk parameters are part of the epoch pin
+(D-11), so changing them is a fleet-wide **epoch bump**, not a local
+tweak.
+
+### 4. Superseded facts: only one clean win for the stale answer, but the class is the weakest overall.
+
+The query set marks, for eight questions, a `trap` -- a chunk carrying the
+answer that *used to be* true. Only `Q23` ("does the acceptance test say
+anything at all about forum posts") actually returns the superseded chunk
+above the current one. But the `superseded` class as a whole is the worst
+performer on dev (`recall@1 = 0.200`, `recall@5 = 0.200` over 5 queries),
+because the corpus states the same fact at several dates and the retriever
+has no notion of *when* -- it returns some correct-looking chunk from the
+right neighbourhood and no signal about which is current.
+
+### 5. `fossil ticket change +comment` is indexed; a change that REPLACES a field is not.
+
+Found while trying to build a ticket-change coverage gap and failing.
+`+comment` **appends into the ticket's own `comment` field**, so `fossil
+ticket show 0` reports it and `viki index` picks it up -- an appended
+comment is not a gap at all. A change that *replaces* a field writes the
+new value into `ticket` and the per-change record into `ticketchng`, which
+nothing in viki reads, so only there does the previous value become
+unreachable. The corpus now plants both, so the pair is a control.
+
+### Repro
+
+```sh
+bash test/retrieval-corpus.sh /tmp/viki-retrieval-eval   # ~40 s, once
+bash test/retrieval-eval.sh                              # ~5 s, 118 asks
+bash test/retrieval-eval.sh --failures                   # per-query taxonomy
+VIKI_BIN=/path/to/your/build bash test/retrieval-eval.sh # score a change
+```
+
+**Non-vacuity, measured rather than asserted.** A shim that forwards
+everything to the real binary but forces `ask` into degraded mode scores
+`recall@1=0.302 recall@5=0.465 recall@k=0.558 MRR=0.375` -- byte-identical
+to the harness's own BM25-only control -- and drives fusion
+helped/hurt/demoted to `0 / 0 / 0`. The harness measures the binary.
+
+**Stability, also measured.** Three runs against one corpus are identical.
+A full corpus *rebuild* leaves `recall@1` and `recall@5` unchanged but
+moves `recall@k` and MRR by ~0.02, because ticket and forum artifact UUIDs
+are timestamp-derived and are part of the indexed text. `k` is not a
+confound: `k=5`, `k=10` and `k=20` give identical `recall@1` and
+`recall@5` despite `k=5` halving the candidate pool.
+
+**And the corpus is this repo's own docs, so editing them moves the
+baseline.** The harness prints a `corpus fp` fingerprint over
+`(path, content_hash)` for every non-ticket, non-forum source. A baseline
+quoted against a different fingerprint is a different experiment. Re-measure
+the old binary before claiming a new one improved anything.
+
+---
+
 ## `nm -u` can never show that something is *not* statically linked -- it lists only UNDEFINED symbols, and static linking produces DEFINED ones. viki's own binary proves the trap.
 
 **Date:** 2026-08-13, doc-truth audit after three fixes landed concurrently.
