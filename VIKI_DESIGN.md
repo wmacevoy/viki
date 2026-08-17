@@ -54,6 +54,19 @@ downloads at runtime.
 `viki-manifest` (a small versioned file) pins the current epoch:
 `model_id`, model uv-path + checksum, chunking params, ndvss/schema version.
 
+As built (`src/viki_cache.c`), the uv names are `viki-cache.db` for the
+embedding cache and `viki-model/{model.onnx,vocab.txt,viki-manifest.json}`
+for the model. `viki cache push` publishes both by default — model
+distribution is opt-*out*, because an opt-in flag makes the ordinary push
+leave a hub on which the self-containment claim above is false, and says
+nothing about it. The published `viki-manifest.json` doubles as the
+skip-check: identical manifest ⇒ identical epoch ⇒ the ~23 MB model is not
+re-pushed (fossil's own `uv add` has no such check — see FINDINGS.md).
+`viki cache pull` verifies each blob against the manifest's recorded sha256
+before installing the manifest, so a corrupt or truncated model is caught
+before ONNX Runtime is asked to load it, and a hub with no model published
+degrades to BM25-only rather than failing.
+
 ## Epochs
 
 A better model someday = **epoch bump**: update viki-manifest, one agent

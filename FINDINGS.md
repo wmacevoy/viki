@@ -3,7 +3,1894 @@
 Surprising things discovered while building, with repro, in the spirit of
 `FFI_RISK.md`. Newest first.
 
+**Entries are dated snapshots.** A figure inside an entry describes the
+tree as of that entry's date, not today. In particular `test/m1.sh` grew
+from **54 to 90** assertions on 2026-08-13, so a `54 passed, 0 failed, 0
+skipped` inside an older entry is that entry's history and not a current
+expectation -- re-run the command before quoting the number. Where a later
+measurement contradicts an entry outright, the correction is inserted into
+that entry as a dated block quote rather than by rewriting it.
+
 ---
+
+## `nm -u` can never show that something is *not* statically linked -- it lists only UNDEFINED symbols, and static linking produces DEFINED ones. viki's own binary proves the trap.
+
+**Date:** 2026-08-13, doc-truth audit after three fixes landed concurrently.
+
+AGENTS.md and FINDINGS.md both closed KICKOFF.md's `experiments/harness.c`
+regression gate with what looked like the strongest kind of evidence this
+repo asks for -- a measurement on the shipped binary rather than an appeal
+to the design:
+
+```
+$ nm -u build/dist/viki | grep -ic fossil
+0
+```
+
+followed by "Zero *undefined* Fossil symbols means nothing Fossil is
+linked at all."
+
+**The conclusion is true; the proof does not establish it.** `nm -u`
+prints *undefined* symbols -- precisely the ones a **dynamic** dependency
+leaves behind for the loader. Static linking copies the code in, producing
+*defined* symbols, which `-u` suppresses by construction. A binary with an
+entire in-process Fossil statically linked into it returns the same `0`.
+The command cannot distinguish "no Fossil" from "Fossil, statically
+linked", and that distinction is the entire claim.
+
+This is not hypothetical here -- viki statically links `sqlite-ndvss` **on
+purpose**, and ships a subcommand whose only job is to prove it. Run the
+same shape of check against that:
+
+```
+$ nm -u build/dist/viki | grep -ic ndvss
+0                      # by the old reasoning: "nothing ndvss is linked at all"
+$ nm build/dist/viki | grep -ic ndvss
+15
+$ nm build/dist/viki | grep -i ndvss | head -2
+000000010012567c t _ndvss_convert_str_to_array_d
+00000001001257fc t _ndvss_cosine_similarity_d
+$ build/dist/viki ndvss-selftest
+ndvss instruction set: neon
+```
+
+Same command, same binary, `0` for a library that is demonstrably compiled
+in and running. The correct check is the full symbol table:
+
+```
+$ nm build/dist/viki | grep -i fossil
+00000001000066f8 t _unquote_fossil
+00000001000070a4 T _viki_fossil_binary
+0000000100007214 T _viki_fossil_user
+```
+
+Three symbols, all viki's own: `unquote_fossil()` is the manifest-card
+un-escaper in `viki_index.c`, and the other two resolve the fossil
+*subprocess* and its user. No Fossil implementation in any linkage form.
+Both docs now cite this instead.
+
+**Wrong assumption it replaces:** that "measured on the artifact" is
+automatically stronger than "argued from the design". A measurement can be
+*irrelevant to the claim it is attached to*, and that is more dangerous
+than an argument, because a command with output looks settled and invites
+nobody to re-derive it. Before quoting a tool as proof, check that the
+tool's semantics answer the question actually being asked -- `nm`'s `-u`,
+`-U`, `--dynamic` and friends each silently change what "the symbols"
+means, and only one of them was the right one here.
+
+---
+
+## "Against a pre-fix binary" is not a fixed reference point: the forum probe scored 18/8 and later 17/9 with no forum-code change at all -- the extra red assertion was rewritten by somebody else's fix
+
+**Date:** 2026-08-13, reconciling docs after three fixes landed concurrently.
+
+AGENTS.md asserted in three places that `build/forum-e2e-probe.sh` scores
+`18/26` against "a pre-fix binary", offered as the proof that the forum
+assertions are able to fail. Re-measured from a binary compiled out of git
+`HEAD`'s `src/`: **`PASS=17 FAIL=9`**. Nothing about the forum fix, the
+forum code, or the four planted artifacts changed, and the probe still has
+exactly 26 assertions (`18+8 = 17+9 = 26`).
+
+**What moved was the test, not the code under test.** The failure sets
+differ by exactly one id:
+
+```
+then:  B4 B5 B6 B7 C1 C2 C3 C4          8 red
+now:   B4 B5 B6 B7 C1 C2 C3 C4 C6       9 red
+```
+
+`C6` is the *attribution* assertion. A concurrent fix to `viki_ask.c`
+changed every hit line to lead with `<content_hash>#<chunk_ix>`, and `C6`
+was rewritten to match; a binary without that fix prints the old format, so
+it now fails an assertion that has nothing to do with the three forum
+parsing bugs. The whole 8 -> 9 delta is explained by the probe, with no
+evidence of any behavioural difference between the two builds.
+
+**And the phrase was overloaded**, which is why nobody caught it. Read
+literally, "a pre-fix binary" could name either (1) `src/` with **only**
+`viki_index.c` reverted, as of the forum round, or (2) **all** of git
+`HEAD`'s `src/`, i.e. before all three of this round's fixes. Only (2) is
+reconstructible from the repo (recipe in the forum entry below); (1) is
+a working-tree state that no longer exists anywhere. A number offered as
+proof was pinned to a build nobody can rebuild.
+
+**Wrong assumption it replaces:** that a "provably able to fail" number is
+a property of the fix. It is a property of the **pair** (binary under test,
+test as of that moment), and in a repo where several agents edit the tests
+and the code in the same afternoon, the test half moves at least as often.
+Record the binary's provenance in reconstructible terms -- "compiled from
+git `HEAD`'s `src/`", not "pre-fix" -- and re-measure the number whenever
+the *test* changes, not only when the code does.
+
+---
+
+## Assertion counts are not fungible: one skip figure was doing duty for three different degradations, and "36 added" and "36 failing" are different sets of 36
+
+**Date:** 2026-08-13, doc-truth audit after `test/m1.sh` grew from 54 to 90.
+
+Two counting traps, both of which had already been copied into AGENTS.md
+and CLAUDE.md as fact.
+
+**1. A skip figure belongs to a condition, not to a test.** Both docs said
+that with "no model, OR no `sqlite3` on PATH" m1.sh gives `43 passed, 0
+failed, 11 skipped`. That was the *no-model* case, of the *54-assertion*
+file. Measured on 2026-08-13, same binary, same file, four environments:
+
+```
+model + sqlite3 (full run)        90 passed, 0 failed,  0 skipped   exit 0
+no model, sqlite3 present         64 passed, 0 failed, 26 skipped   exit 0
+model present, no sqlite3         80 passed, 0 failed, 10 skipped   exit 0
+neither                           57 passed, 0 failed, 33 skipped   exit 0
+```
+
+The two degradations do **not** add -- 26 + 10 = 36, but "neither" skips
+33, because `B2`, `C11` and `J1` require both and are skipped once.
+
+Worse, the natural one-line summary both docs used -- AGENTS.md said "both
+halves of the vector proof" are skipped without a model, CLAUDE.md said
+"the whole vector proof" -- is false. `A12` ("VECTOR PROOF (half 1):
+semantic query finds NOTHING without a model") **runs and PASSES** in the
+no-model run; it is the half whose premise is *absence*, so removing the
+model is the very condition it describes. Only `B5` is skipped. **A
+two-sided proof degrades one-sidedly**, and that is what makes a skipping
+run dangerous: the surviving half still prints `PASS` next to the words
+"VECTOR PROOF".
+
+**2. Two equal counts are not the same count.** The file grew 54 -> 90 (36
+added) and a `HEAD`-built binary fails 36 of the 90. Those sentences sat
+next to each other, and the obvious reading -- the 36 that fail are the 36
+that are new -- is wrong. Measured with `comm` over the id lists:
+
+- 26 of the 36 **added** assertions fail against the pre-fix binary;
+- 10 of the 36 **added** assertions **pass** against it -- `G2 G3 G4b G5b
+  H11b J4 M1b M3 M8 M9`, mostly *controls*, which are supposed to come out
+  the same either way;
+- the other 10 failures are **pre-existing** assertions -- `A9 A10 B4 B5 B6
+  C12 C13 C14 C16 C17` -- red only because the fixes changed `viki ask`'s
+  hit-line format.
+
+So the real statement is weaker in one direction (10 of the new assertions
+cannot fail against the un-fixed code, by design) and broader in another (a
+formatting change reddened 10 of the 54 *pre-existing* assertions -- nearly
+a fifth of the old suite). "36 of 90" states neither.
+
+### Repro
+
+```sh
+# "no sqlite3" needs a PATH that still has everything else, so build a
+# symlink farm of every PATH entry EXCEPT sqlite3 (bash, not zsh -- zsh
+# does not word-split $PATH on IFS):
+FARM=/tmp/nosql; rm -rf $FARM; mkdir -p $FARM
+IFS=:; for d in $PATH; do
+  [ -d "$d" ] || continue
+  for f in "$d"/*; do b=$(basename "$f")
+    [ "$b" = sqlite3 ] && continue
+    [ -e "$FARM/$b" ] && continue
+    ln -s "$f" "$FARM/$b" 2>/dev/null
+  done
+done; unset IFS
+
+# the four environments (VIKI_MODEL_DIR must point at a directory that does
+# NOT exist -- an unset/empty value falls back to build/dist/model)
+bash test/m1.sh                                              # 90/0/0
+VIKI_MODEL_DIR=/no/such/dir bash test/m1.sh                  # 64/0/26
+PATH=$FARM bash test/m1.sh                                   # 80/0/10
+PATH=$FARM VIKI_MODEL_DIR=/no/such/dir bash test/m1.sh       # 57/0/33
+
+# the two id sets
+bash test/m1.sh 2>&1 | grep -oE '^  (PASS|FAIL|SKIP)  [A-Za-z0-9]+' \
+  | awk '{print $2}' | sort > ids.new                        # 90
+# $PREFIX is the scratch prefix holding a binary built from pre-fix HEAD
+# sources -- the same D=/tmp/prefix build recipe the forum entry below
+# spells out in full. Without it this line silently runs an empty VIKI_BIN.
+VIKI_BIN=$PREFIX/dist/viki bash test/m1.sh 2>&1 \
+  | grep '^  FAIL' | awk '{print $2}' | sort > ids.failhead  # 36
+# ids.old = the same id list for the 54-assertion file, taken from a
+# preserved copy of it:  grep -oE '"[A-Z][0-9]+[a-z]?b? ' m1.sh.orig
+#                        | tr -d '"' | awk '{print $1}' | sort -u
+comm -23 ids.new ids.old > ids.added                        # 36 added, 0 removed
+comm -12 ids.added ids.failhead    # 26 -- new AND failing
+comm -23 ids.added ids.failhead    # 10 -- new AND passing
+comm -13 ids.added ids.failhead    # 10 -- pre-existing AND failing
+```
+
+**Wrong assumption it replaces:** that a single "N passed / N skipped"
+figure characterises a test. It characterises one run of one version of it
+in one environment. Any figure whose parts sum to a stale total (43 + 11 =
+54, here) is stale by construction -- that arithmetic is the cheapest way
+to spot the whole class.
+
+---
+
+## `viki index` trusts mtime alone, so content edited within the same second is invisible -- and a stale-content test written the obvious way passes while proving nothing
+
+**Date:** 2026-08-13, writing `test/m1.sh` section 7 (edit/delete invalidation).
+
+`index_text_blob()` short-circuits on `previously_seen_unchanged()`, which
+compares only the stored `mtime` against `stat()`'s. mtime has 1-second
+granularity, so a document rewritten in the same second it was indexed is
+never re-hashed -- the new invalidation code never runs, and the *old* text
+keeps answering:
+
+```
+$ viki index .                       # docs/a.md indexed
+$ printf '...different text...' > docs/a.md   # same second
+$ viki index .
+viki index: 2 file(s) scanned, 0 (re)chunked ... (model_id=none)
+viki index: 0 stale source(s) retired, 0 orphan chunk(s) removed
+$ viki ask "zeppelin mooring ochre"          # the REPLACED wording
+[1] rrf=0.0164  40fecd0bb219f17df6807b49681a1e71c2658fe7c2ea022e8827da38f35cd366#0  ./docs/a.md
+$ touch -t 202001010000 docs/a.md && viki index .
+viki index: 2 file(s) scanned, 1 (re)chunked ... ; 0 stale source(s) retired, 1 orphan chunk(s) removed
+$ viki ask "zeppelin mooring ochre"
+(no matches)
+```
+
+(Repro script: the mtime was restored to the exact indexed value with
+`os.utime()` read back out of `viki_source`, so this is the same-second case
+made deterministic rather than raced.)
+
+Two consequences, and the test one is the nastier.
+
+**For the test:** a section that writes a file, re-indexes, and asserts "the
+old text is gone" would have been green on *every* machine fast enough to do
+all three inside one second -- while testing nothing at all, because the
+re-index was a no-op. This is precisely the vacuous-pass failure mode
+`test/m1.sh`'s header warns about, and it arrives by way of the machine's
+clock rather than a bad assertion. Every mutation in section 7 is therefore
+followed by an explicit `touch -t 202001010000`, and H3/H7 assert the
+`N stale source(s) retired, N orphan chunk(s) removed` line is *nonzero*, so
+a no-op re-index is a FAIL rather than a silent pass.
+
+**For viki:** this is a real limitation of `viki index`, not just a test
+artifact -- generated or scripted writes that preserve or coincide with an
+mtime are simply not seen. It is a deliberate trade (the alternative is
+re-hashing every file every run), but it means "I re-indexed" is not the same
+statement as "the cache reflects the tree".
+
+---
+
+## `fossil uv list` ALWAYS prints the detail columns, so `uv list | grep -q '^name$'` never matches -- and in the negative direction that is an assertion which cannot fail
+
+**Date:** 2026-08-13, adding the model leg to `viki cache push`/`pull`.
+
+`fossil uv help` lists `-l  Show additional details` as an *option* of the
+`list` subcommand, and then adds, easy to miss, "**Implied when 'list' is
+used**". There is no bare-name output mode at all: every line is
+`HASH DATE TIME SIZE STOREDSIZE NAME`.
+
+```
+$ fossil uv list -R hub.efossil
+ee7427b961c4 2026-08-14 01:15:48    49152     9620 viki-cache.db
+4f1e896361b8 2026-08-14 01:15:43 23026053 17464352 viki-model/model.onnx
+$ fossil uv list -R hub.efossil | grep -c '^viki-cache.db$'
+0
+```
+
+The first run of `build/model-uv-e2e-probe.sh` had five checks red for exactly
+this reason -- they were testing the grep pattern, not the push. The dangerous
+direction is the negative one: `! fossil uv list | grep -q '^viki-model/'`
+("prove the model was NOT published") passes no matter what the hub holds.
+Every uv assertion in that probe now matches with `awk '$NF=="..."'`, and the
+size check uses `$(NF-2)` -- note `SIZE` is the real byte count and the column
+after it is the *compressed stored* size (23,026,053 -> 17,464,352 for the
+pinned model), so the two are easy to transpose.
+
+---
+
+## `fossil uv add` has no unchanged-content short-circuit: re-publishing the identical 23 MB model costs ~1.1s of CPU and a mtime-only push, every single time
+
+**Date:** 2026-08-13, deciding whether `viki cache push` should re-send the model.
+
+`unversioned_write()` in fossil's `unversioned.c` is an unconditional
+`REPLACE INTO unversioned(...)` with `mtime` bound to `now` -- it never
+compares the new content against the row already there. So a second identical
+`uv add` re-hashes and re-deflates the whole blob locally, and the bumped
+mtime then makes every subsequent sync announce the file as changed:
+
+```
+$ time fossil uv add build/dist/model/model.onnx --as viki-model/model.onnx
+  1.14s user 0.05s system 98% cpu 1.203 total       # identical bytes, already there
+$ fossil uv sync -n -v
+  UV-PUSH-MTIME-ONLY: viki-model/model.onnx
+  done, wire bytes sent: 586  received: 858
+```
+
+The *wire* cost is nil (586 bytes -- fossil compares hashes before shipping
+content, so status 4 in `unversioned_status()` sends metadata only). The cost
+is local CPU and the churn, and it would be paid on every `viki cache push`
+whether or not the model changed. `viki_cache.c` therefore does the
+comparison fossil does not: it exports the published
+`viki-model/viki-manifest.json` and compares it to the local one, skipping all
+three model blobs when the epoch is unchanged. The manifest is the right
+witness because it *is* the epoch pin (VIKI_DESIGN.md) -- it carries
+`model_id` plus the sha256 of both blobs. Consequence, deliberate: editing
+`model.onnx` without bumping the manifest does not re-publish it.
+
+---
+
+## Unversioned-file names may contain `/`, but not whitespace, `..`, or a leading `/` -- and the failure is a `fossil_fatal`, i.e. a dead push
+
+**Date:** 2026-08-13, picking uv names for the model blobs.
+
+Fossil's uv help says nothing about what a legal name is. `unversioned_cmd()`
+requires `file_is_simple_pathname()` and rejects empty, absolute, "complex"
+(`.`/`..` components), whitespace-containing, and >500-byte names with
+`fossil_fatal`. A `/` is fine, which is what makes a `viki-model/` prefix
+usable as a namespace for the three model blobs:
+
+```
+$ fossil uv add model.onnx --as viki-model/model.onnx   # rc=0
+$ fossil uv add model.onnx --as "viki model/x"          # fatal: unversioned filenames
+                                                        # may not contain whitespace
+```
+
+Worth knowing because `viki cache push` runs `uv add` *before* `uv sync`: a
+name fossil rejects fails the push after the cache blob has already been
+written locally, the same half-completed-push shape already documented for a
+missing remote URL.
+
+---
+
+## "Orphaned chunks are harmless, they just accumulate" was wrong: nothing invalidated `viki_source` either, so withdrawn content stayed at rank 1 forever -- and the obvious fix (delete everything not seen this run) would have destroyed the cache on any subdirectory index
+
+**Date:** 2026-08-13, implementing invalidation in `viki index`.
+
+AGENTS.md filed this under "Not yet built" as *"Garbage collection of
+orphaned chunks. When a file's content changes, the old content_hash's
+chunk rows are never deleted (harmless -- content-addressed, rebuildable,
+D-10 -- but will accumulate)."* Two of those words do not survive contact
+with a measurement.
+
+**It is not "harmless", and it is not only about chunks.** `viki_source`
+was never invalidated either, so the defect is not a growing table, it is
+`viki ask` serving text the user withdrew:
+
+```
+$ viki index .                                  # 2 file(s) scanned, 2 (re)chunked
+$ <rewrite docs/barn.md to unrelated text>
+$ viki index .                                  # 2 file(s) scanned, 1 (re)chunked
+$ viki ask "horses water trough"
+[1] rrf=0.0328  (source path unknown)#0
+    Six [horses] were grazing near the [water] [trough] behind the barn ...   <-- REPLACED text, rank 1
+
+$ rm docs/tax.md && viki index .                # 1 file(s) scanned, 0 (re)chunked
+$ viki ask "quarterly estimated tax deadline April"
+[1] rrf=0.0328  ./docs/tax.md#0
+    The [quarterly] [estimated] [tax] [deadline] is [April] 15 ...            <-- DELETED file, rank 1, full path
+```
+
+Note the second one especially: the deleted file is served *under its own
+path*, so a caller has no signal at all that it is stale. The first at
+least degrades to `(source path unknown)`, because `upsert_source()`
+rewrites the path row in place and leaves the old hash's chunk with no
+referrer -- that is the "accumulation" the old bullet described, and even
+it is retrievable, since `viki ask`'s BM25 leg queries `chunk_fts` by
+MATCH alone and never joins `viki_source`.
+
+**The surprise worth recording is the fix's scoping, not the fix.** The
+one-line version -- delete every `viki_source` row not seen this run --
+is catastrophic, in two independent ways, both reproducible:
+
+1. **`viki index` accepts a subdirectory.** `viki index docs` would sweep
+   every row outside `docs/` on the grounds that it "didn't see" them.
+2. **Extraction failure is indistinguishable from emptiness.** `fossil
+   wiki list` prints nothing both when a repo has no wiki pages and when
+   there is no `fossil` binary at all -- `run_capture()` discarded the
+   child's exit status, so *no caller could have told the difference*.
+   Running `viki index` on a machine without fossil would have deleted
+   every `wiki:`, `ticket:` and `forum:` row in the cache.
+
+So invalidation is scoped by **provable observation**: filesystem paths
+only beneath the directory actually walked (and only if every `opendir()`
+in that subtree succeeded), each virtual namespace only if its extractor
+exited 0. `run_capture()` gained an exit-status out-param specifically to
+make (2) decidable. Measured, with `VIKI_FOSSIL_BIN` pointed at a
+nonexistent file:
+
+```
+viki index: 2 file(s) scanned, 0 (re)chunked; 0 wiki page(s), ... 0 forum post(s), 0 (re)chunked
+viki index: 0 stale source(s) retired, 0 orphan chunk(s) removed
+viki index: not authoritative this run for wiki: ticket: forum: -- existing entries there left in place
+```
+
+All 4 sources, 4 chunks and 4 `chunk_fts` rows unchanged, and the wiki,
+ticket and forum text all still retrievable. The same repo *with* fossil
+available retires a wiki page that was really deleted, and leaves the
+ticket and forum rows alone.
+
+**Three more things that only showed up by measuring:**
+
+- **A superseded forum post that was indexed while it was current stayed
+  retrievable forever, and the `fprev` fix from the previous round could
+  not reach it.** That fix stops viki *re-indexing* superseded artifacts;
+  it does nothing about one already in the cache. Post a reply, index,
+  then edit the reply: before, `forum:` rows go 2 -> 3 and the withdrawn
+  wording still answers a query; after, rows stay 2 (`1 stale source(s)
+  retired, 1 orphan chunk(s) removed`) and only the edited text answers.
+- **The GC must not be filtered by `model_id`,** which is the opposite of
+  the instinct that `PRIMARY KEY(content_hash, model_id, chunk_ix)`
+  invites. An unreferenced `content_hash` is unreachable under *every*
+  epoch at once, and since `chunk_fts` is never filtered by `model_id`
+  anywhere in `viki_ask.c`, sparing another epoch's row would leave the
+  withdrawn text fully searchable -- i.e. would not fix the bug at all.
+- **`viki index .` and `viki index docs` record different spellings of the
+  same file** (`./docs/x.md` vs `docs/x.md`). Before invalidation existed
+  these silently accumulated as duplicate rows; now the scope test
+  lexically normalizes both sides, so a stale row written under one
+  spelling is visible to a sweep run under the other. The visible effect
+  is that alternating the two forms re-keys rows (`2 stale source(s)
+  retired`, `0 orphan chunk(s) removed`) -- no content is lost, but the
+  count is not zero and that is expected, not a bug.
+
+**Honest limits, all biased toward keeping too much** (D-10 makes a missed
+deletion recoverable; a wrong deletion is not): a row stored under an
+absolute path is not swept by a relative `viki index .`, since deciding
+that needs `realpath()` on a file that has just been deleted; any path
+containing `..` is refused rather than resolved; and an unreadable
+directory suppresses the sweep for its whole subtree. One consequence is
+not a limit but a real trade-off worth knowing: a cache **pulled** from a
+peer and then re-indexed in a tree that lacks those files *will* retire
+their rows -- right for the local view, but it throws away D-11's
+compute-once work, so do not `viki index` in a fresh clone you only meant
+to query.
+
+**Wrong assumption this replaces:** that un-GC'd chunks were a tidiness
+issue deferrable to post-M1 ("harmless ... but will accumulate"), and that
+invalidation is a simple mark-and-sweep. It is a retrieval-correctness
+bug, and the sweep is only safe once "I did not see it" is distinguished
+from "I could not look".
+
+---
+
+## A cache holding two `model_id` epochs does not merely inflate `viki ask` scores -- it reorders the top-K and drops documents out of it entirely (9 of 12 queries), because the BM25 leg was scored once per epoch
+
+**Date:** 2026-08-13, fixing KICKOFF.md deliverable 2 in `src/viki_ask.c`.
+
+The entry below (```viki ask```'s "hybrid mode" banner..., item 4) already
+found this double-count and judged it **"Harmless for correctness (the cache
+is derived, D-10)"**. That judgement is wrong, and the reason it looked
+harmless is that it was measured on a three-document corpus where every score
+happened to move the same way. On a fifteen-document corpus, **9 of 12 queries
+came back in a different ORDER -- several with a different SET of documents --
+depending only on whether the cache held one model epoch or two**:
+
+```
+# same 15 docs, same query, same pre-fix binary (build/dist/viki).
+# hetM = indexed once, with a model.   hetX = indexed with no model, then with one.
+$ viki ask "the tax receipts and the mileage log" --k 8     # hetM, 1 epoch
+1 rrf=0.0328 a06.md  2 rrf=0.0308 a13.md  3 rrf=0.0306 a10.md  4 rrf=0.0304 a02.md
+5 rrf=0.0303 a14.md  6 rrf=0.0302 a09.md  7 rrf=0.0301 a04.md  8 rrf=0.0290 a01.md
+$ viki ask "the tax receipts and the mileage log" --k 8     # hetX, 2 epochs
+1 rrf=0.0489 a06.md  2 rrf=0.0462 a13.md  3 rrf=0.0450 a02.md  4 rrf=0.0430 a01.md
+5 rrf=0.0425 a10.md  6 rrf=0.0424 a14.md  7 rrf=0.0421 a05.md  8 rrf=0.0419 a03.md
+```
+
+`a01.md` climbs from rank 8 to rank 4; `a09.md` and `a04.md` fall out of the
+top 8 altogether. The scores are not tied at those boundaries (0.0430 vs
+0.0425), so this is a real reordering, not qsort tie-break noise. Nothing
+about the query or the documents changed -- only how many peers had pushed to
+the cache.
+
+**Why.** `chunk_fts` holds one row per `(content_hash, model_id, chunk_ix)`;
+`run_fts()` filtered by neither, and `find_or_add()` keys candidates on
+`(content_hash, chunk_ix)`. Two epochs of the same content therefore put two
+identical FTS rows in front of BM25, which merged into one candidate and
+collected the keyword leg's `1/(k+rank)` contribution **twice** -- while the
+vector leg, correctly `WHERE model_id=?1`, contributed once. The fusion
+silently reweights itself toward BM25 in proportion to how many epochs are in
+the db. Measured on one hit, same query, epochs added synthetically after the
+first two (`INSERT INTO chunk_fts ... SELECT ..., 'peer-model-2', ...`):
+
+```
+1 epoch  rrf=0.0328  = 1/61 + 1/62                  (BM25 rank 1, vector rank 2)
+2 epochs rrf=0.0489  = 1/61 + 1/62 + 1/61           (BM25 counted twice)
+3 epochs rrf=0.0648
+5 epochs rrf=0.0958
+```
+
+**This is the normal steady state of D-11 sharing, not a lab setup.** A peer
+with no model indexes under `model_id='none'`; a peer with a model indexes
+under its own id; both push to the same latest-wins `viki-cache.db` uv blob.
+Anyone who then pulls gets a two-epoch cache. `test/m1.sh` sidesteps it by
+giving each mode a virgin `.viki/cache.db` (its own comment says so) -- which
+is right for the test and is exactly why the bug survived: no assertion ever
+looked at a mixed cache.
+
+**Fix** (`src/viki_ask.c`): a `leg_hit()` helper records a per-leg bit on the
+candidate, so each retrieval leg scores a given `(content_hash, chunk_ix)` at
+most once, at its best (first, since both legs feed rows best-first) rank.
+Ranks now count distinct chunks rather than rows, so the fused scores are
+*identical* to a single-epoch cache's rather than merely deduplicated.
+
+**Not fixed by filtering `chunk_fts` on the asker's `model_id`**, which is the
+obvious-looking alternative and is wrong: a chunk may exist only under
+`model_id='none'`, and `viki ask` **with no model at all** -- which has no
+`model_id` to filter by -- must still search a cache that a model-having peer
+built. That is the entire point of `viki cache pull` (D-11/D-12, and
+`test/m1.sh` C17 asserts it). Filtering would drop exactly the rows the pull
+was for, converting a scoring bug into a silent recall bug. BM25 also does not
+depend on `model_id` at all -- the only indexed column is `chunk_text`, byte
+identical across epochs -- so the duplicate rows carry no information and
+collapsing them loses nothing.
+
+**Verified fixed.** Same corpus, same queries, patched binary: the ranked list
+(rank, score, document) from a 1-, 2-, 3- and 5-epoch cache is byte-identical,
+in both hybrid and degraded mode, and identical to what the pre-fix binary
+produced on a single-epoch cache (so single-epoch behaviour did not move).
+All 12 queries that previously disagreed now agree.
+
+```
+$ diff <(ask hetM) <(ask hetX)      # pre-fix:  9/12 queries differ
+$ diff <(ask hetM) <(ask hetX)      # post-fix: 0/12 differ (also vs 3- and 5-epoch)
+```
+
+**The same change makes `viki ask` print the `content_hash`** -- KICKOFF.md
+deliverable 2's "results with source content_hash", which the CLI never
+printed (only the best-effort `viki_source` path, which prints
+`(source path unknown)` for any chunk whose path row is stale). The hit
+header line is now:
+
+```
+[1] rrf=0.0328  a2cde14f...(64 hex)...d0a7#0  ./docs/a01.md
+ ^rank ^score    ^content_hash        ^chunk_ix  ^source path (may contain spaces / be unknown)
+```
+
+Same value and semantics as `/api/ask`'s `hash` field, and `<hash>#<ix>` are
+exactly `/api/chunk?hash=&ix=`'s two parameters. **Anything that greps that
+line must be updated**: the rank-1 regex becomes
+`^\[1\] rrf=[0-9]+\.[0-9]{4}  [0-9a-f]{64}#0  ` followed by the (now
+unanchored-from-`#0`) source path. `^\[[0-9]+\] rrf=` -- the count/ANYRANK
+prefix -- is unchanged. Running `test/m1.sh` against the patched binary gives
+44 passed / 10 failed, and all 10 failures are that one regex; every one of
+them shows the correct document at rank 1 with an unchanged score.
+
+**Wrong assumption this replaces:** that a mixed-epoch cache only shifts
+scores uniformly ("harmless"), and that the double-count was a testing
+inconvenience rather than a retrieval-quality bug.
+
+---
+
+## A local-path `fossil-see clone` copies the source repo's SQLCipher salt into the destination; only an `http://` clone gets a fresh one -- so "re-clone into a fresh key" only works over the network
+
+**Date:** 2026-08-13, verifying `test/m1.sh`'s encryption assertions
+first-hand rather than trusting E1's own word for them.
+
+E1 asserts the hub is ciphertext by checking its first 15 bytes are not
+`SQLite format 3`. That assertion is sound and non-vacuous (E2's control
+proves it can fail). But looking at the *whole* header of every repo in a
+kept scratch tree turns up something E1 does not test for: all five
+`*.efossil` files share the **same first 16 bytes**, and differ from byte
+17 on.
+
+```
+$ VIKI_TEST_KEEP=1 bash test/m1.sh          # -> /tmp/viki-m1.XXXXXXXX
+$ for f in $W/*.efossil; do printf '%-14s %s\n' "$(basename $f)" \
+      "$(head -c 16 "$f" | xxd -p)"; done
+bm25.efossil   0a701de13cb55f98558103cb2ed0358a
+fresh.efossil  0a701de13cb55f98558103cb2ed0358a
+hub.efossil    0a701de13cb55f98558103cb2ed0358a
+vec.efossil    0a701de13cb55f98558103cb2ed0358a
+work.efossil   0a701de13cb55f98558103cb2ed0358a
+```
+
+Those 16 bytes are SQLCipher's PBKDF2 **salt**, stored in cleartext at the
+head of the file. Confirmed as key-derivation input rather than a
+coincidental constant by flipping one bit of byte 0 of a *copy* and
+re-opening with the correct passphrase:
+
+```
+$ cp a.efossil b.efossil
+$ fossil-see timeline -n 1 -R b.efossil            # rc=0, opens fine
+$ # flip bit 0 of byte 0, nothing else (cmp -l reports exactly 1 byte differs)
+$ fossil-see timeline -n 1 -R b.efossil
+SQLITE_NOTADB(26): file is not a database in "SELECT fts5(?1)"
+not a valid repository: .../b.efossil                # rc=1
+```
+
+`init` does generate a fresh random salt every time -- two `init`s with
+the *same* key give different salts, so this is not "fossil-see hardcodes
+a salt". It is the **local-path clone** that propagates it:
+
+```
+$ export FOSSIL_SEE_KEY=probe-key-123
+$ fossil-see init --admin-user t hub.efossil     ; head -c 16 hub.efossil | xxd -p
+55fe506df3775e7d37965c6123cb08b4
+$ fossil-see clone --no-open hub.efossil c1.efossil ; head -c 16 c1.efossil | xxd -p
+55fe506df3775e7d37965c6123cb08b4       # same
+$ fossil-see clone --no-open hub.efossil c2.efossil ; head -c 16 c2.efossil | xxd -p
+55fe506df3775e7d37965c6123cb08b4       # same
+$ fossil-see init --admin-user t hub2.efossil    ; head -c 16 hub2.efossil | xxd -p
+1eb2b683128172b743353ded1685392a       # a fresh init is fresh
+```
+
+**The consequence that matters is not the salt itself** -- SQLCipher still
+uses a random per-page IV, and inside one clone family everybody is using
+the same passphrase anyway, so nothing is disclosed that was not already
+shared. The consequence is for `ENCRYPTION.md`'s **key management**
+section, which offers "re-clone into a fresh key" as one of the two
+rotation paths and claims (item 4) "Two clones of the same hub, each under
+a different SQLCipher key, both sync". Over a **local path** that does not
+work at all, and it fails *after* creating the destination file:
+
+```
+$ FOSSIL_SEE_KEY=hub-key-AAA    fossil-see init --admin-user t hub.efossil
+$ FOSSIL_SEE_KEY=device-key-BBB fossil-see clone --no-open hub.efossil dev.efossil
+SQLITE_NOTADB(26): file is not a database in "SELECT fts5(?1)"
+not a valid repository: .../dev.efossil                        # rc=1
+$ head -c 16 dev.efossil | xxd -p
+f89dcd795e1d9e46579e31e5d505014c   # == hub's salt; the file is left behind, unusable
+```
+
+Over **`http://`** it works exactly as ENCRYPTION.md describes, and the
+salt is fresh:
+
+```
+$ FOSSIL_SEE_KEY=hub-key-AAA fossil-see server hub.efossil --port 9123 --localauth &
+$ FOSSIL_SEE_KEY=device-key-BBB fossil-see clone --no-open http://127.0.0.1:9123/ dev.efossil
+Clone done, wire bytes sent: 522  received: 1342  remote: 127.0.0.1   # rc=0
+$ head -c 16 hub.efossil | xxd -p ; head -c 16 dev.efossil | xxd -p
+d475e3672465814cbbb4980aa13084d9
+2b10385353c5756a72375912538f0242            # different -- fresh salt
+$ FOSSIL_SEE_KEY=device-key-BBB fossil-see timeline -n 1 -R dev.efossil   # opens
+$ FOSSIL_SEE_KEY=hub-key-AAA    fossil-see timeline -n 1 -R dev.efossil   # does NOT
+```
+
+The pattern fits: `FOSSIL_SEE_KEY` is one key for one process, so a
+local-path clone has both repositories open under one key in one process
+and the destination inherits the source's salt, while a network clone only
+ever touches the destination.
+
+**Wrong assumption this replaces:** that the transport in `fossil clone`
+is a performance/convenience detail with no bearing on encryption, so a
+`file://`-style local clone is a faithful stand-in for the real hub/spoke
+topology when testing encryption properties. For *this* repo's purposes it
+is -- `test/m1.sh` uses one key throughout by design, and E1-E4 are
+unaffected -- but ENCRYPTION.md's per-device-key and key-rotation claims
+are network-transport claims, and nothing in the tree exercises them.
+`test/m1.sh` clones by local path only (`fclone()`), so it cannot catch a
+regression in either.
+
+---
+
+## Running `build/m1-e2e-probe.sh` writes into the developer's real `~/.config/fossil.db`; `test/m1.sh` does not
+
+**Date:** 2026-08-13, chasing an mtime on the global fossil config db that
+turned out not to be `test/m1.sh`'s fault.
+
+While confirming `test/m1.sh` leaves no state outside its scratch tree,
+`~/.config/fossil.db` (the real global fossil config db, not `~/.fossil`
+on this machine) showed a modification time inside the window of the test
+runs. It was not the test:
+
+```
+$ shasum -a 256 ~/.config/fossil.db      # before
+7e78712439926c6fc1a6b23ed1f84a3504351775a19ffd407aef4b496170d7c4
+$ ( cd /tmp && bash test/m1.sh )         # 54 passed, 0 failed, 0 skipped
+$ shasum -a 256 ~/.config/fossil.db      # after -- byte-identical, mtime unchanged
+7e78712439926c6fc1a6b23ed1f84a3504351775a19ffd407aef4b496170d7c4
+```
+
+`test/m1.sh` exports `FOSSIL_HOME="$WORK/fossilhome"` (line 204) and the
+kept tree confirms every global write landed there
+(`$WORK/fossilhome/.fossil`, 12288 bytes). The polluter is the older
+probe, which sets no `FOSSIL_HOME` at all:
+
+```
+$ grep -c FOSSIL_HOME build/m1-e2e-probe.sh
+0
+$ sqlite3 ~/.config/fossil.db \
+    "select name from global_config where name like '%viki-m1%';"
+ckout:/private/tmp/viki-m1-final/fresh/
+ckout:/private/tmp/viki-m1-final/spoke/
+repo:/private/tmp/viki-m1-final/fresh.efossil
+repo:/private/tmp/viki-m1-final/spoke.efossil
+```
+
+`/private/tmp/viki-m1-final` is `build/m1-e2e-probe.sh`'s hard-coded
+scratch path, so those four rows are its residue, and they persist after
+the probe's tree is deleted.
+
+**Wrong assumption this replaces:** that the two scripts differ only in
+portability of their paths. AGENTS.md already prefers `test/m1.sh` over
+the probe and cites the hard-coded absolute paths; this is the concrete
+cost of that difference -- the probe permanently dirties the developer's
+global fossil config, and it also means an agent auditing "did the test
+leave state behind?" can be sent chasing another script's leftovers.
+
+---
+
+## "Docs move in the same commit as the code" does not survive contact with itself: AGENTS.md called a gap "a real gap" for 14 hours after the commit that closed it -- and the commit message said it closed it
+
+**Date:** 2026-08-13, truing up AGENTS.md/CLAUDE.md after the m1-test,
+forum and CI rounds.
+
+The repo's central process rule is that a doc is updated in the same
+commit as the code that makes it stale. That rule was *followed* and the
+doc still went stale, four separate ways in one file, because the rule
+implicitly assumes each claim lives in exactly one place. None of these
+are sloppiness by any single agent; they are a structural property of a
+file that states the same fact in a narrative section, a layout table and
+a to-do list.
+
+**1. A bullet outlived its own fix commit.** `AGENTS.md`'s "Not yet built"
+list said, until this pass:
+
+> CI doesn't currently copy that DLL into the release artifact alongside
+> `viki.exe` the way `onnxruntime.dll` is -- a real gap for anyone who
+> downloads just `viki.exe` without an MSYS2 install on their machine.
+
+Commit `478b8e3` ("Windows CI is green: promote out of experimental,
+bundle msys-2.0.dll", 2026-08-13 03:02) had already closed it, and its
+own message says so ("now copied next to viki.exe the same way
+onnxruntime.dll already is"). That commit did update AGENTS.md -- it added
+the `.github/workflows/build.yml` layout entry and resolved the cross-arch
+model caveat, both listed in its own commit message
+(`git show 478b8e3 -- AGENTS.md`) -- and left the to-do bullet, three
+screens away from anything it edited, contradicting all of it.
+
+Checked against the shipped bytes rather than the scripts, because the
+scripts are what was already believed:
+
+```
+$ gh run download 31723892765 -n viki-windows-x86_64 -D /tmp/winart
+$ ls /tmp/winart
+model
+msys-2.0.dll                        # 3367041 bytes -- the bullet said this was absent
+onnxruntime.dll
+onnxruntime_providers_shared.dll
+viki.exe
+```
+
+(Run 31723892765 is the `build` workflow on the current tip of `main`;
+artifacts have 30-day retention, so use a recent green run id.)
+
+Source side, for completeness: `build/build.sh`'s Windows branch copies
+`msys-2.0.dll` (falling back to `/usr/bin/msys-2.0.dll`, else printing a
+`WARN:`), and both `.github/workflows/build.yml` and `release.yml` stage
+`build/dist/*.dll` wholesale rather than naming `onnxruntime.dll`.
+
+**2. One bullet contradicted itself internally.** The forum bullet's
+headline said the three parsing fixes were "FIXED IN SOURCE (but not yet
+in `build/dist/viki`)", a paragraph *inside the same bullet* said
+"**Caveat RESOLVED** ... the shipped binary carries all three fixes", and
+a third bullet 80 lines down repeated the stale half again ("fixed in
+source but not in the built binary"). Two of three said the false thing.
+A reader who stopped at the headline -- the normal way a to-do list is
+read -- got the wrong answer.
+
+**3. A handoff report's claim went stale before it could be copied into a
+doc.** The forum round's write-up stated, correctly at the time, that
+`test/m1.sh` "contains zero occurrences of `forum`". Copying that
+sentence into AGENTS.md would have shipped a false claim:
+
+```
+$ grep -ci forum test/m1.sh
+8
+```
+
+All eight are inside one comment block added later by m1.sh's author,
+explaining *why* no forum post is planted -- headed "DELIBERATELY NOT
+PLANTED: a forum post", at line 372 of the 54-assertion file this was
+measured against and at lines 415-427 of the 90-assertion one that
+replaced it. (Cite the heading, not the line number: the file grew by
+27k and every number in it moved. Line 372 today is an unrelated
+FTS5-stopword comment -- a citation that silently became wrong while
+still looking precise.) The underlying scope
+fact was still true; the stated evidence for it was not. In a repo where
+agents hand each other prose summaries, **a report is a snapshot of a file
+at a moment, and pasting its sentences into a doc launders an unverified
+claim into documented truth.** Re-run the grep, don't quote the report.
+
+**4. The doc under-claimed in one place while over-claiming in another,
+and the correction nearly went in backwards.** AGENTS.md's "Verified
+working end to end" section described the D-11 compute-once loop as having
+been proven on a plain `.fossil` hub, with the caveat that it "predates the
+embedding pipeline -- worth re-running with a model present to confirm
+embeddings round-trip through `fossil uv`; not yet done". Both halves were
+stale: `build/m1-e2e-probe.sh` -- untracked, unlisted in the layout, and
+therefore invisible to exactly the brand-new agent AGENTS.md exists for --
+had already run the whole loop on an **encrypted** hub *and* asserted the
+embedding round trip (its C7). The first draft of this pass therefore
+credited `test/m1.sh` with being "the first time the M1 loop has been
+proven on a `*.efossil` repo", which is false; reading the probe caught
+it. The honest statement is narrower: `test/m1.sh` is the *tracked,
+portable, CI-wired* version, and some of its assertions are strictly
+stronger -- the probe's C7 is
+
+```
+check "C7 embeddings round-tripped byte-identically" "[ \"\$SPOKE_FP\" = \"\$FRESH_FP\" ]"
+```
+
+with no non-empty guard, so two failed `sqlite3` reads both yielding `""`
+pass it; m1.sh's C11 requires `[ -n "$SPOKE_FP" ]` first. **An untracked
+file in `build/` is not documentation, and a doc that omits it will
+mis-attribute the work it did.**
+
+**Wrong assumption it replaces:** that "update the doc in the same commit"
+is self-enforcing, and that a green handoff report can be transcribed.
+Neither holds. What actually works, and what this pass did: before editing
+a doc claim, (a) `grep` the whole file for the *other* places the same
+fact appears, and (b) verify the claim against an artifact -- a downloaded
+CI artifact, `strings`/`nm` on the binary, a re-run of the probe -- rather
+than against the source that was supposed to produce it. Every number
+restated in AGENTS.md this pass was re-measured first-hand rather than
+carried over: `bash test/m1.sh` -> `54 passed, 0 failed, 0 skipped`,
+exit 0; `sh build/forum-e2e-probe.sh <empty-dir>` -> `PASS=26 FAIL=0`;
+`sh build/m1-e2e-probe.sh <empty-dir>` -> `PASS=37 FAIL=0`.
+
+---
+
+## KICKOFF.md's `experiments/harness.c` regression gate is unrunnable on this machine AND unnecessary -- viki imports zero Fossil symbols, so there is nothing for it to regress
+
+**Date:** 2026-08-13, resolving the last open definition-of-done item.
+
+KICKOFF.md's definition of done for Milestone 1 includes "Re-run
+`experiments/harness.c` against your fossil-see build -- still ALL PASS
+(regression gate)". It has sat in AGENTS.md's "Not yet built" list for the
+whole milestone, reading like an outstanding failure. It is neither
+satisfiable nor needed, and both halves are measurable.
+
+**Unrunnable.** `experiments/harness.c`'s own header build recipe requires
+GNU binutils and GNU ld:
+
+```
+**   objcopy --redefine-sym main=fossil_cli_main bld/main.o bld/main_h.o
+**      -Wl,--wrap=exit -lresolv -lssl -lcrypto -lz -ldl -lpthread -lm
+```
+
+On the only dev machine this project has:
+
+```
+$ which objcopy;        # not found
+$ which llvm-objcopy;   # not found
+$ xcrun -f objcopy
+xcrun: error: unable to find utility "objcopy", not a developer tool or in PATH
+```
+
+The `-Wl,--wrap=exit` half is obsolete on top of that: the live harness in
+`../fossil-sqlcipher-libressl/embed/` replaced it with a registered
+`fossil_exit()` handler (`fossil_embed_init()`) specifically to be
+portable to Apple's linker.
+
+**Unnecessary.** The gate protects in-process Fossil. viki has none --
+every Fossil operation is a subprocess via `viki_fossil_binary()`. That is
+usually asserted from the design; here it is measured from the shipped
+binary:
+
+```
+$ nm build/dist/viki | grep -i fossil
+00000001000066f8 t _unquote_fossil
+00000001000070a4 T _viki_fossil_binary
+0000000100007214 T _viki_fossil_user
+$ strings build/dist/viki | grep -c "fossil_cli_main\|fossil_embed_init"
+0
+```
+
+The **full** symbol table is the proof, and it has to be. This entry
+originally cited `nm -u build/dist/viki | grep -ic fossil` -> `0` and
+reasoned "zero *undefined* Fossil symbols means nothing Fossil is linked
+at all". That inference is **unsound**: `nm -u` lists only *undefined*
+symbols -- exactly the ones a **dynamically** linked dependency leaves
+behind. Statically linked code contributes *defined* symbols, which
+`nm -u` never prints, so a statically linked in-process Fossil would have
+produced the identical `0`. (The whole point of the neighbouring
+`ndvss-selftest` is that viki *does* statically link something --
+sqlite-ndvss -- so this is not a hypothetical.) The conclusion survives;
+the cited evidence did not establish it. What the full table shows is
+that the only Fossil-named symbols in the binary are viki's own three,
+in any linkage form: nothing Fossil is present, so no harness result can
+change any viki behaviour. Meanwhile the live
+harness, in the repo that now owns it, is ALL PASS with 0 failures per
+`../fossil-sqlcipher-libressl/embed/README.md` (verified there from a
+clean-room rebuild). So the gate is closed **by reference**: the thing it
+guards is all-pass where it lives, and it guards nothing here.
+
+**Wrong assumption it replaces:** that an unsatisfied definition-of-done
+bullet is always work owed. This one was made vacuous by a *decision*
+taken during the milestone -- subprocess-only Fossil -- and a snapshot
+directory (`experiments/`) that was frozen and superseded underneath it.
+The residual obligation is not "run the harness"; it is "do not resume FFI
+work from the frozen snapshot" -- read
+`../fossil-sqlcipher-libressl/embed/README.md`, whose shim rules have
+already grown two more required `fossil_reset_*()` calls per command since
+`experiments/db-embed.patch` was written.
+
+---
+
+## Putting `test/m1.sh` in CI is not "add a `run:` line": it exits 0 while skipping the entire vector proof, and the fossil binary it needs does not build on the CI image
+
+**Date:** 2026-08-13, wiring `test/m1.sh` into `.github/workflows/build.yml`.
+
+Everything below was measured by running the whole CI job locally in
+`docker run --platform linux/amd64 debian:bookworm` -- the same image the
+`build` job's linux-x86_64 leg uses -- not reasoned about. Three of the
+four findings would have produced a red or a fake-green job on the first
+real CI run.
+
+**1. m1.sh returns 0 for a run that skipped the single most important
+assertion in it.** Its contract is exit 0 unless an *attempted* assertion
+fails; skips are printed loudly and counted, and the summary says
+outright "NOT a full Milestone 1 pass on its own" -- but CI reads exit
+status, not prose.
+
+```
+$ VIKI_MODEL_DIR=/tmp/no-such-model bash test/m1.sh; echo "exit=$?"
+test/m1.sh: 43 passed, 0 failed, 11 skipped
+RESULT: PASS WITH SKIPS ...
+exit=0
+```
+
+Those 11 include B5 (the semantic-only retrieval that is the *only*
+evidence the vector leg is real) and C16 (the pulled vectors working).
+A green check mark, with rung 2 never exercised. The CI step therefore
+greps for `N passed, 0 failed, 0 skipped` and fails the job otherwise --
+every skip m1.sh can emit is a missing dependency on the runner, never a
+property of the code under test, so tolerating one is tolerating a
+misconfigured job.
+
+**2. `debian:bookworm` ships no `sqlite3` binary**, so the naive job
+would have hit exactly that trap by default: E3/E3b (a stock SQLite
+cannot open the encrypted repo) and B2/C11 (every chunk carries a real
+384-float embedding; the vectors survived the uv round trip) would all
+have been skipped, silently, forever.
+
+```
+$ docker run --rm --platform linux/amd64 debian:bookworm sh -c 'command -v sqlite3'; echo "exit=$?"
+exit=127
+```
+
+**3. `vendor/fossil-see` does not build on `build-essential` + `cmake`.**
+Fossil's configure wants zlib's *header*, and although Fossil vendors
+`compat/zlib`, `--with-zlib`'s default does not fall back to it:
+
+```
+==> Configuring Fossil
+Checking for zlib.h...not found
+Error: zlib.h not found; either install it or specify its location via --with-zlib
+```
+
+That arrives ~90 seconds in, after LibreSSL and the SQLCipher
+amalgamation have already been built -- a slow way to learn it. Fix:
+`zlib1g-dev`. Two related probes, both negative: neither build needs a
+system `tclsh` (Fossil and SQLCipher each bootstrap their own `jimsh0`,
+printing "No installed jimsh or tclsh, building local bootstrap
+jimsh0"), and `patch`/`perl`(`shasum`)/`make`/`cc`/`tar` all arrive with
+`build-essential`.
+
+**4. A stock `fossil` cannot substitute for the build.** m1.sh is not
+merely *better* with fossil-see; it aborts without it -- `fclone()`
+`die()`s when a clone destination comes back plaintext.
+
+```
+$ docker run --rm --platform linux/amd64 debian:bookworm sh -c '
+    apt-get update -qq >/dev/null 2>&1 && apt-get install -y fossil >/dev/null 2>&1
+    fossil version
+    FOSSIL_SEE_KEY=some-key FOSSIL_HOME=/tmp fossil init --admin-user t /tmp/x.efossil >/dev/null
+    printf "first 15 bytes: [%s]\n" "$(head -c 15 /tmp/x.efossil)"'
+This is fossil version 2.21 [3c53b6364e] 2023-02-26 19:24:24 UTC
+first 15 bytes: [SQLite format 3]
+```
+
+There is also nothing to download instead: `gh release list -R
+wmacevoy/fossil-sqlcipher-libressl` is empty. So CI builds it, and
+caches the resulting 7.9 MB binary keyed on the pinned submodule commit
+(the whole `vendor/fossil-see` tree is 302 MB; the cache is 2.6% of it).
+**Verified that a cache hit is sufficient**, rather than assumed: with
+the entire submodule tree deleted and only
+`vendor/fossil-see/build/dist/fossil-see` restored, m1.sh is still
+`54 passed, 0 failed, 0 skipped`.
+
+**5. The linux-arm64 exclusion is current, not inherited.** Rather than
+cite the older entry below and move on, the same container treatment on
+`--platform linux/arm64` re-confirms it today: `build/build.sh` exits 1
+with `sqlite-ndvss.c:75: error: 'cosine_similarity_f_sve2' undeclared`
+and five siblings. There is no viki binary to test there, so the m1
+matrix announces the gap instead of pretending to cover it.
+
+Measured cold costs on this machine (Rosetta-emulated amd64, so CPU
+numbers are pessimistic and network numbers are this house's, not
+GitHub's):
+
+| step | time |
+|---|---|
+| `apt-get install` the deps | 45 s |
+| `git submodule update --init vendor/sqlite-ndvss` | 2 s |
+| `./build/build.sh` (viki + model) | 41 s |
+| `git submodule update --init --recursive vendor/fossil-see` | 2 m 36 s / 5 m 14 s (two runs) |
+| `./vendor/fossil-see/build/build.sh` | 2 m 33 s |
+| `bash test/m1.sh` | 34 s |
+
+The full linux-x86_64 job, end to end in that container, is
+`54 passed, 0 failed, 0 skipped`.
+
+**Wrong assumption it replaces:** that wiring the definition-of-done test
+into CI means adding `bash test/m1.sh` to the existing build job. Every
+clause of that is wrong: the test needs a binary CI does not have and
+cannot download; the image it would run on is missing a tool the test
+treats as optional and quietly drops four assertions for; and the test's
+own exit status cannot distinguish "proved Milestone 1" from "proved
+about 80% of it". The job also must NOT live inside `build`, because
+`build` is the standing proof that viki compiles with `vendor/fossil-see`
+untouched.
+
+**Not verified:** the workflow has never run on GitHub's runners -- only
+YAML validity (`yaml.safe_load`), GitHub Actions semantics
+(`actionlint` 1.7.12 with shellcheck 0.11.0, plus a vacuity check that it
+really does catch a typo'd `matrix.*`/`steps.*` reference), and every
+`run:` body executed by hand on macOS and in the container. The macOS leg
+is the weaker of the two: `fossil-see` and m1.sh were run on *this*
+arm64 Mac, not on a `macos-latest` runner, and whether that image ships
+`cmake` (the workflow installs it if not) is unconfirmed.
+
+---
+
+## A green `test/m1.sh` says nothing about the source tree: it passed 54/54 against a binary 13 hours older than the fixes sitting in `src/`, and would pass identically against a binary with three known bugs in it
+
+**Date:** 2026-08-13, running `test/m1.sh` for the first time as an
+independent check.
+
+`test/m1.sh` came in reported as green and *was* green -- `54 passed, 0
+failed, 0 skipped`, exit 0, first try, no fixing required. That is the
+result, and it is real. The trap is what a reader naturally concludes from
+it, which is wrong.
+
+`build/dist/viki` was dated 03:02. `src/viki_index.c` was dated 15:55 and
+contained three forum-indexing fixes that had never been compiled. So the
+54/54 was earned by a binary that provably did **not** contain the tree's
+own source. Proof the binary was the old one, not a guess from mtimes:
+
+```
+$ strings build/dist/viki | /usr/bin/grep -c fprev
+0                      # the fprev-exclusion fix is a string in the SQL; absent
+```
+
+The run is green either way because `test/m1.sh` plants no forum post and
+asserts nothing about the forum leg (a deliberate, documented scope call --
+`build/forum-e2e-probe.sh` owns that path). So the one part of the tree
+that had uncommitted, unbuilt, unrun changes was exactly the part the
+definition-of-done test does not look at. Rebuilding and re-running both:
+
+```
+$ bash build/build.sh                        # only sqlite-ndvss's own NEON warnings
+$ strings build/dist/viki | /usr/bin/grep -c fprev
+1
+$ bash test/m1.sh                            # 54 passed, 0 failed, 0 skipped  (unchanged)
+$ sh build/forum-e2e-probe.sh /tmp/fw        # PASS=26 FAIL=0  (first time ever green in build/dist)
+```
+
+Note the middle line: m1.sh's output is **byte-identical** before and
+after a rebuild that changed three code paths. It is not a regression gate
+for anything it does not exercise, and no amount of assertion-count growth
+inside it changes that.
+
+**Wrong assumption it replaces:** that "the test suite passes" is a
+statement about the working tree. In this repo it is a statement about
+whatever `build/dist/viki` happens to be, and that artifact is *not*
+rebuilt by the test, is gitignored, and can lag `src/` arbitrarily -- the
+convention that agents avoid rebuilding because `build/obj` is shared
+state actively encourages exactly this drift. **Before believing a green
+run, check the binary is current** (`ls -la build/dist/viki src/*.c`, or
+grep the binary for a string unique to the newest fix), and treat
+`test/m1.sh` + `build/forum-e2e-probe.sh` as a pair -- neither alone covers
+all four indexed content types.
+
+Two other things measured in the same pass, both reassuring rather than
+surprising, recorded so nobody re-derives them:
+
+- **m1.sh is not vacuous, and not merely because its greps are right.**
+  Two injections that simulate real *viki* bugs rather than bad greps:
+  a wrapper making `cache pull` a silent no-op exit-0 turns the D-11 block
+  red (`44 passed, 10 failed` -- C0, C9-C14, C16-C18) *and still prints the
+  summary*; a wrapper that forces `ask` into degraded mode while indexing
+  normally reddens exactly the rung-2 claims (`49 passed, 5 failed` -- B3,
+  B5, B6, B7, C16). The vector proof and the compute-once proof both
+  measure what they say they measure.
+- **m1.sh is genuinely hermetic.** Three consecutive clean runs are
+  byte-identical; it passes unchanged from a different cwd (`cd /tmp`); and
+  it passes with a deliberately hostile inherited environment
+  (`FOSSIL_SEE_KEY=some-other-stale-key FOSSIL_USER=nobodyatall
+  VIKI_FOSSIL_USER=nobodyatall FOSSIL_SEE_STOCK_PROMPT=1
+  FOSSIL_HOME=/tmp/should-not-be-used`), overriding all of them -- that
+  hostile `FOSSIL_HOME` is never created. No `~/.fossil`, no `.viki` in the
+  repo, no leftover `mktemp` tree afterward.
+
+---
+
+## `FOSSIL_USER` is NOT "the single lever" -- `viki index` passes an explicit `--user` that overrides it, so ticket indexing still reports 0; and a k=5 default over a 6-chunk corpus makes "was it retrieved?" almost free
+
+**Date:** 2026-08-13, writing `test/m1.sh` (the M1 definition-of-done test).
+
+Two things bit while turning the recon recipes into an actual test, both of
+which would have produced a green test that proved less than it claimed.
+
+**1. The user lever is two levers, not one.** The entry further down this
+file ends with "The single lever that fixes all of it is `FOSSIL_USER`,
+exported once. Every fossil subprocess inherits it, including the ones viki
+spawns without `--user`". The second sentence is true and the conclusion
+still does not follow, because `index_tickets()` is *not* one of the ones
+spawned without `--user` -- `viki_index.c` passes
+`"--user", viki_fossil_user()` explicitly, and an explicit argument beats
+the environment. Measured on one repo (`--admin-user vikitest`, ambient
+`USER=wmacevoy`), one ticket present, only the env varied:
+
+```
+FOSSIL_USER only            0 ticket(s), 0 (re)chunked
+VIKI_FOSSIL_USER only       1 ticket(s), 1 (re)chunked
+both                        1 ticket(s), 1 (re)chunked
+neither                     0 ticket(s), 0 (re)chunked
+```
+
+Confirmed end to end by deleting `export VIKI_FOSSIL_USER=...` from
+`test/m1.sh` while leaving `FOSSIL_USER` in place: `50 passed, 4 failed`,
+the failures being every ticket assertion plus the embedding-count check
+that depends on the ticket's chunk existing. **Wrong assumption it
+replaces:** that `FOSSIL_USER` subsumes `VIKI_FOSSIL_USER`. Set both. They
+cover disjoint code paths -- `FOSSIL_USER` for the subprocesses viki spawns
+bare (`fossil uv add`, i.e. `viki cache push`), `VIKI_FOSSIL_USER` for the
+ones it spawns with an explicit `--user` (`fossil ticket show`).
+
+A related trap for anyone measuring this: `env -u A B=c cmd` is fine, but
+`env -u A -u B cmd` and `env -u A B=c` must not be blended carelessly --
+macOS `env` rejected `-u "FOSSIL_USER VIKI_FOSSIL_USER=vikitest"` with
+`unsetenv ...: Invalid argument` and exited 1, which read exactly like the
+command under test failing. Two of the four rows above were wrong the first
+time for that reason, not for any reason involving fossil.
+
+**2. `viki ask` defaults to `--k 5`, and a natural M1 corpus has about six
+chunks -- so "the answer appears in the results" is nearly a tautology.**
+The first draft of `test/m1.sh` asserted that the D-11 witness document
+appeared *somewhere* in the output of a semantic-only query. It passed. It
+was also meaningless: the witness was ranked **3rd**, below the wiki page
+and an unrelated document, and with 6 chunks and k=5 almost any document
+"appears".
+
+```
+$ viki ask "dirigible tether pylon" --k 5     # witness = a zeppelin mooring mast
+[1] rrf=0.0164  wiki:PumpMaintenance#0
+[2] rrf=0.0161  ./docs/barn.md#0
+[3] rrf=0.0159  ./docs/uncommitted-witness.md#0     <- "found it!"
+```
+
+Every retrieval assertion in `test/m1.sh` now anchors on `head -1` and rank
+1. That also gives a free correctness signal for the query itself: the
+rank-1 RRF score tells you how many legs contributed, because the fusion
+constant is 60. `0.0164 = 1/61` is ONE leg at rank 1 (so a
+"semantic-only" query really did get nothing from BM25); `0.0328 = 2/61` is
+both. That number is how `"airship docking tower"` was confirmed to be a
+genuinely zero-overlap query while `"aviation landmark repaint"` was not --
+the latter scored 0.0328 because porter stemming bridges `repaint` to the
+witness's `repainted`. **Wrong assumption it replaces:** that a
+zero-literal-overlap query can be eyeballed. Stemming and a small corpus
+both conspire against that; check the score.
+
+---
+
+## Live forum posts now round-trip through `viki index`/`viki ask` -- and the manifest-card parsing was wrong in THREE ways, not two; all three are fixed in `src/viki_index.c`
+
+**Date:** 2026-08-13, closing the last "claims coverage it hasn't earned"
+hole in `viki index`.
+
+A real thread-start post, a real reply, a reply whose body is shaped like
+a manifest card, and a real edit were created in an **encrypted**
+`.efossil` repo by Fossil's own `forum_post()`, then indexed and
+retrieved. No synthetic artifact, no `test-content-put`, no hand-built
+manifest: every artifact was assembled by Fossil, round-tripped through
+`manifest_parse()`, and asserted `CFTYPE_FORUM` before storage, and
+`fossil timeline --type f` reports them as `Post:` / `Reply:`. That is the
+strongest evidence class available for this path, and it is what the
+entry below ("A real forum post CAN be created headlessly") set up.
+
+**The headline: forum retrieval works.** `viki ask` returns forum content
+under `forum:<64-hex-uuid>#<ix>` for both a thread-start post and a reply,
+and the vector leg is real on forum content, proved two-sidedly -- the
+query `synthetic elastomer survived subzero temperatures` returns
+**0 bytes of stdout and `(no matches)`** with the model disabled, and
+three `forum:` hits with it enabled, same cache db, same query.
+
+**But the parsing was wrong in three ways.** The previous entry found two
+of them and left both unfixed (rebuilding was off-limits); doing the
+round-trip again with a reply that has a card-shaped body line found a
+third that nobody had looked for. All three are now fixed and each fix is
+proven by an assertion that is *demonstrably able to fail*:
+
+1. **The `H` (thread title) card was indexed still escaped.** Fossil
+   stores `H Gearbox\sseal\sweeping\sat\sthe\saeromotor\ssightglass`, and
+   that string was written into `viki_chunk.chunk_text` verbatim. FTS5
+   then tokenizes `\sseal` as one word, so **every title word after the
+   first became unsearchable**: `viki ask "aeromotor"` (a word that
+   appears only in that title) returned `(no matches)`, while
+   `viki ask "saeromotor"` hit. Fix: one call to `unquote_fossil()`,
+   already in the same file and byte-identical to Fossil's own
+   `defossilize()`, which Fossil applies to this exact field
+   (`defossilize(p->zThreadTitle)`). The W-card body needs no such
+   decoding -- it is a counted string, not escaped.
+
+2. **Edited posts were indexed twice, superseded text served as
+   current.** An edit appends a *new* artifact and leaves the old one in
+   `event` with `type='f'` forever, so `WHERE event.type='f'` picked up
+   both. Measured: 4 artifacts, 3 current posts, `viki index` reporting
+   `4 forum post(s), 4 (re)chunked`, and `viki ask "graphite rope"`
+   returning at **rank 1** text that Fossil's own `/forumthread` page
+   renders **zero** times (`grep -o 'graphite rope' | wc -l` -> 0 against
+   the served HTML). Fix: `AND blob.rid NOT IN (SELECT fprev FROM
+   forumpost WHERE fprev IS NOT NULL)`. Post-fix the same repo indexes
+   `3 forum post(s), 3 (re)chunked` and that query returns `(no matches)`.
+
+3. **NEW, and nobody was looking for it: `find_line_card()` scanned off
+   the end of the card region into the post body.** A reply has *no* `H`
+   card, so the unbounded scan ran into the W-card payload and adopted
+   the first body line starting `"H "` as the post's title, duplicating
+   it at the head of the chunk. This is not a contrived input -- the
+   reply that triggered it just listed water chemistry:
+
+   ```
+   W 233
+   Ran the well panel while I was out there. Numbers from the tap:
+
+   H 7.9 pH at the wellhead and 8.2 at the stock tank
+   Fe 0.31 mg/L
+   ```
+
+   and viki stored, as that post's chunk:
+
+   ```
+   7.9 pH at the wellhead and 8.2 at the stock tank
+
+   Ran the well panel while I was out there. Numbers from the tap:
+
+   H 7.9 pH at the wellhead and 8.2 at the stock tank
+   ...
+   ```
+
+   Fix: `find_line_card()` now takes a `zLimit` bound and the caller
+   passes the first byte of the W body. Manifest cards are sorted
+   alphabetically (`D G H I N P U W Z`), so every card of interest
+   precedes the body -- the bound loses nothing and closes the whole
+   class, not just the `H` case.
+
+### Repro
+
+`build/forum-e2e-probe.sh` is the whole thing, self-contained (creates the
+encrypted repo, posts thread/reply/card-shaped-reply/edit over `fossil
+http`, indexes, asks, asserts):
+
+```sh
+sh build/forum-e2e-probe.sh /tmp/probe-new  /path/to/patched/viki   # PASS=26 FAIL=0, rc=0
+sh build/forum-e2e-probe.sh /tmp/probe-old  build/dist/viki         # PASS=18 FAIL=8, rc=1
+```
+
+The 8 that flip are exactly the fix-specific ones (B4-B7, C1-C4), which is
+the point: they are proven able to fail, not merely observed to pass.
+
+> **Correction, 2026-08-13 (later the same day):** the second line above no
+> longer reproduces, for two independent reasons, and both were verified.
+> (a) `build/dist/viki` has since been rebuilt and is now the **fixed**
+> binary, so that command scores `PASS=26 FAIL=0`. (b) The probe's second
+> argument must be an **absolute** path -- it `cd`s into the work dir, so a
+> relative `build/dist/viki` does not fail with "not found", it goes red on
+> `B4` and dies with `unable to open database .../co/.viki/cache.db`. The
+> probe now rejects a relative path outright.
+> The honest repro for the failing side is to compile a pre-fix binary
+> yourself, which also means saying *which* pre-fix: a binary built from
+> **all** of git `HEAD`'s `src/` scores `PASS=17 FAIL=9`, not 18/8 --
+> `B4 B5 B6 B7 C1 C2 C3 C4 C6`. The ninth, `C6`, is the attribution
+> assertion, rewritten later for `viki ask`'s new `<content_hash>#<ix>`
+> hit line; it fails on a HEAD binary for a reason unrelated to forum
+> parsing. Measured recipe (never touches `build/obj` or `build/dist`):
+>
+> ```sh
+> D=/tmp/prefix; mkdir -p $D/src $D/obj $D/dist
+> for f in $(git ls-tree --name-only HEAD src/); do git show HEAD:$f > $D/$f; done
+> cp build/obj/sqlite3.o build/obj/sqlite-ndvss.o $D/obj/
+> for f in build/dist/libonnxruntime*.dylib; do ln -sf "$PWD/$f" $D/dist/$(basename $f); done
+> for f in viki sha256 viki_db viki_index viki_ask viki_cache viki_serve tokenizer embed; do
+>   cc -O2 -g -Wall -Wno-unused-parameter \
+>      -Ivendor/download-cache/sqlite-amalgamation-3530400 \
+>      -Ivendor/download-cache/onnxruntime-Darwin-arm64-1.29.0/include \
+>      -I$D/src -c $D/src/$f.c -o $D/obj/$f.o
+> done
+> cc -O2 -o $D/dist/viki \
+>    $D/obj/viki.o $D/obj/sha256.o $D/obj/viki_db.o $D/obj/viki_index.o \
+>    $D/obj/viki_ask.o $D/obj/viki_cache.o $D/obj/viki_serve.o \
+>    $D/obj/tokenizer.o $D/obj/embed.o $D/obj/sqlite3.o $D/obj/sqlite-ndvss.o \
+>    -L$D/dist -lonnxruntime -Wl,-rpath,@executable_path -lm -lpthread
+> sh build/forum-e2e-probe.sh /tmp/probe-old $D/dist/viki   # PASS=17 FAIL=9, rc=1
+> ```
+
+By hand, the two lines that matter most:
+
+```sh
+# BEFORE                                            # AFTER
+viki index: ... 4 forum post(s), 4 (re)chunked      ... 3 forum post(s), 3 (re)chunked
+viki ask "aeromotor"   -> (no matches)              -> [1] rrf=0.0164  forum:d1fdd87c...#0
+viki ask "graphite rope" -> [1] forum:9689800e...   -> (no matches)
+```
+
+Regression gate: the existing 37-assertion `build/m1-e2e-probe.sh` (files,
+wiki, tickets, D-11 cache push/pull) still reports **PASS=37 FAIL=0** with
+the patched binary, so nothing outside the forum path moved.
+
+### State of the fix -- read this before trusting `build/dist/viki`
+
+> **Correction, 2026-08-13 19:48 -- this section is now HISTORY, not
+> current state.** `build/build.sh` has since been run: `build/dist/viki`
+> is the 19:48:15 build, it carries all three forum fixes (plus the three
+> later fixes), and `sh build/forum-e2e-probe.sh <empty-dir>` is
+> `PASS=26 FAIL=0` against it. The bolded sentence at the end of this
+> section -- "Until someone runs `build/build.sh`, the shipped binary
+> still has all three bugs" -- was true when written and is **false now**.
+> The paragraph below is kept as the record of how the fix was proven
+> before the rebuild, and because the private-link recipe is still the
+> right way to test a change without touching shared `build/obj`.
+
+`src/viki_index.c` is fixed **in the working tree only**. `build/dist/viki`
+and `build/obj/` are untouched (timestamps still 03:02) because `build/obj`
+is shared state and another agent may be rebuilding; the proof binary was
+made by compiling *only* `viki_index.c` into a private object dir and
+linking it against the existing `build/obj/*.o`:
+
+```sh
+cc -O2 -g -Wall -Wno-unused-parameter \
+   -Ivendor/download-cache/sqlite-amalgamation-3530400 \
+   -Ivendor/download-cache/onnxruntime-Darwin-arm64-1.29.0/include -Isrc \
+   -c src/viki_index.c -o /tmp/priv/viki_index.o
+cc -O2 -o /tmp/priv/viki build/obj/viki.o build/obj/sha256.o build/obj/viki_db.o \
+   /tmp/priv/viki_index.o build/obj/viki_ask.o build/obj/viki_cache.o \
+   build/obj/viki_serve.o build/obj/tokenizer.o build/obj/embed.o \
+   build/obj/sqlite3.o build/obj/sqlite-ndvss.o \
+   -Lbuild/dist -lonnxruntime -Wl,-rpath,"$PWD/build/dist" -lm -lpthread
+```
+
+Zero warnings; `ndvss-selftest` and `embed-selftest` both PASS on it.
+~~**Until someone runs `build/build.sh`, the shipped binary still has all
+three bugs.**~~ -- superseded by the rebuild noted at the top of this
+section; `build/dist/viki` carries the fixes.
+
+### Two smaller things found on the way, both worth knowing
+
+- **`chunk_fts` uses `tokenize = 'porter unicode61'`** (`viki_db.c`), so
+  FTS5 matches *stems*, not literals: the query word `sealing` matched the
+  stored word `seal`. This silently invalidated the first "zero keyword
+  overlap" query I wrote for the two-sided vector proof -- it looked
+  semantic-only and was not. Any such query has to be checked by actually
+  running the degraded leg and confirming `(no matches)`, never by reading
+  the corpus and eyeballing it.
+- **A repository that has never held a forum post has no `forumpost`
+  table** (it is created on first crosslink), so the new selector fails
+  with `Error: in prepare, no such table: forumpost`. Harmless today --
+  `run_capture()` discards stderr and `0 forum post(s)` is the right
+  answer for such a repo -- but that is luck, not design, and it is noted
+  in the code. Verified on a fresh repo: `viki index` prints the normal
+  summary with `0 forum post(s)`, rc=0, no stderr noise.
+
+### The wrong assumptions this replaces
+
+The previous entry's, sharpened. It concluded the forum path was risky
+"precisely in the difference" between raw manifests and rendered text, and
+it was right -- but it then enumerated that difference as two items
+(escaping, versioning) and treated the list as complete. It wasn't: the
+third bug is a third consequence of the same difference (a manifest has a
+*card region* and a *payload region*, and code that ignores the boundary
+will wander across it), and it was found only because this round-trip used
+a reply whose body happened to look like a card. **Two live posts were not
+enough to exercise the path; four were.** Anything else asserting "forum
+indexing is verified" should say which shapes it actually indexed.
+
+Also worth flagging for whoever owns the test harness: `test/m1.sh` (new,
+being written concurrently) contains **zero** occurrences of `forum`.
+`build/forum-e2e-probe.sh` is deliberately standalone rather than merged
+into it, to avoid colliding with an in-flight file -- reconcile the two
+rather than assuming either is the deliverable.
+
+> **Correction, 2026-08-13 (later the same day):** that count is stale.
+> `grep -ci forum test/m1.sh` is now **8**. The *scope* fact it was
+> evidence for is unchanged -- m1.sh still plants no forum post and
+> asserts nothing about one -- but all 8 occurrences are now inside one
+> comment block (headed "DELIBERATELY NOT PLANTED: a forum post") added
+> later by m1.sh's author to explain that scope call. This is exactly the
+> failure mode the "docs move in the same commit" entry above describes:
+> a report's sentence, true at the moment of writing, laundered into a
+> claim. Re-run the grep.
+
+## A cross-mode `file://` clone fails *and leaves a plaintext repository named `.efossil` behind*; same-mode `file://` clones inherit the source's SQLCipher salt
+
+**Date:** 2026-08-13, working out how a test script drives an encrypted repo.
+
+Cloning between an encrypted (`.efossil`) and an unencrypted (`.fossil`)
+repo over a local `file://` URL does not work in either direction, and the
+failure is not clean -- it exits 1 *after* writing a full 217KB repository
+file whose encryption state contradicts its own name:
+
+```sh
+export FOSSIL_SEE_KEY=test-key FOSSIL_USER=viki
+FS=vendor/fossil-see/build/dist/fossil-see
+$FS init --admin-user viki /tmp/pub.fossil          # plaintext source
+$FS clone --no-open "file:///tmp/pub.fossil" /tmp/mine.efossil
+# SQLITE_NOTADB(26): file is not a database in "SELECT fts5(?1)"
+# not a valid repository: /tmp/mine.efossil          <- rc=1
+head -c 15 /tmp/mine.efossil                        # -> "SQLite format 3"
+sqlite3 /tmp/mine.efossil ".tables"                 # -> full fossil schema, readable
+sqlite3 /tmp/mine.efossil "select count(*) from user;"   # -> 5
+```
+
+**A file named `.efossil`, containing a readable plaintext Fossil
+repository.** The `.efossil` glob is only an *instruction* to apply a key
+on open; it is not a property of the file, and nothing reconciles the two
+afterwards. A script that ignores the exit code here has silently defeated
+at-rest encryption while every filename still says otherwise. The reverse
+direction (encrypted source -> `.fossil` destination) fails symmetrically
+and leaves ciphertext under a plaintext-implying name.
+
+The mechanism also shows up in the *successful* same-mode case: a
+`file://` clone of an encrypted repo produces a clone whose first 16 bytes
+-- the SQLCipher salt -- are **byte-identical to the source's**, while
+216272 of 217088 bytes differ:
+
+```sh
+$FS clone --no-open "file:///tmp/hub.efossil" /tmp/spoke.efossil
+od -A n -t x1 -N 16 /tmp/hub.efossil    # c7b1315fb4003fcf499d006b8ff0c96a
+od -A n -t x1 -N 16 /tmp/spoke.efossil  # c7b1315fb4003fcf499d006b8ff0c96a  (same)
+cmp -l /tmp/hub.efossil /tmp/spoke.efossil | wc -l   # 216272
+```
+
+Two *independently* `init`-ed repos get different random salts (checked
+with the same key and with different keys), so this is inheritance, not a
+fixed salt. A `file://` clone opens source and destination on one
+connection, and the destination inherits the source's codec state -- key
+included. **Wrong assumption it replaces:** ENCRYPTION.md's per-device-key
+claim reads as if any clone can carry its own key. On the `file://` path it
+cannot: one process has exactly one `FOSSIL_SEE_KEY`, and the destination
+would inherit it regardless.
+
+Over HTTP it works exactly as ENCRYPTION.md describes, because only one
+local database exists -- verified with a server holding one key and a
+client holding another:
+
+```sh
+FOSSIL_SEE_KEY=hubkey $FS server --localhost --port 18913 /tmp/hub.efossil &
+FOSSIL_SEE_KEY=devkey $FS clone --no-open --admin-user viki -u \
+    http://127.0.0.1:18913 /tmp/dev.efossil
+FOSSIL_SEE_KEY=devkey $FS timeline -n 1 -R /tmp/dev.efossil   # rc=0
+FOSSIL_SEE_KEY=hubkey $FS timeline -n 1 -R /tmp/dev.efossil   # not a valid repository
+od -A n -t x1 -N 16 /tmp/dev.efossil    # its OWN random salt, != the hub's
+```
+
+So: local `file://` hub/spoke testing is fine (FINDINGS.md's earlier
+no-server-needed result still holds) but it is single-key by construction.
+Anything asserting *per-peer* keys must stand up `fossil-see server` and
+clone over `http://`. That server path also re-confirms ENCRYPTION.md's
+`fossil-server-key-validator.patch`: `GET /timeline` on an encrypted repo
+returned HTTP 200 with the expected commit comment in the body, with
+`FOSSIL_SEE_KEY` as the only key source.
+
+---
+
+## `grep -q "SQLite format 3"` is not a safe encryption check in an agent's shell -- it reports "encrypted" for a plaintext repo
+
+**Date:** 2026-08-13, writing the load-bearing check for encrypted-repo tests.
+
+The obvious way to assert a repo is really encrypted is to grep for the
+absence of SQLite's plaintext magic. In a Claude Code agent shell that
+assertion passes on a **plaintext** repo:
+
+```sh
+FOSSIL_SEE_KEY=k vendor/fossil-see/build/dist/fossil-see init \
+    --admin-user viki /tmp/plain.fossil     # deliberately NOT .efossil
+head -c 15 /tmp/plain.fossil                # -> SQLite format 3
+grep -q "SQLite format 3" /tmp/plain.fossil; echo $?        # -> 1  (FALSE)
+/usr/bin/grep -q "SQLite format 3" /tmp/plain.fossil; echo $?  # -> 0  (correct)
+```
+
+`grep` in that shell is a function wrapping `ugrep` with `-I` (skip binary
+files), so a binary file "matches nothing" and rc=1 -- which the check
+reads as "no plaintext magic, therefore encrypted." The system
+`/usr/bin/grep` (BSD grep 2.6.0-FreeBSD) is correct here; the shim is not.
+**Wrong assumption it replaces:** that an interactively-verified shell
+one-liner transfers unchanged into a test script -- and, worse, that a
+*passing* encryption check is self-validating. This one passes hardest
+exactly when the file is unencrypted.
+
+Use a check that depends on no external tool's binary-file policy:
+
+```sh
+is_encrypted(){ [ "$(head -c 15 "$1")" != "SQLite format 3" ]; }
+```
+
+Pair it with a positive control -- stock `sqlite3 <repo> "select count(*)
+from sqlite_master;"` must fail with `file is not a database (26)` -- and,
+critically, run the same assertion against a known-plaintext `.fossil` repo
+to prove the assertion can still fail.
+
+---
+
+## Fossil's `$USER` fallback only resolves if that name exists in the repo's user table -- so `viki index` reports "0 ticket(s)" instead of an error
+
+**Date:** 2026-08-13, running `viki index` against an encrypted scratch repo.
+
+A repo created with `init --admin-user viki` has exactly one real user,
+`viki`. Fossil's own error message suggests `$USER` as a remedy, but the
+env fallback is validated against that table, so an ambient `USER=wmacevoy`
+resolves to nothing:
+
+```sh
+$FS commit -m x            # USER=wmacevoy is set and non-empty
+# cannot determine user
+# Cannot figure out who you are!  Consider using the --user ...
+```
+
+This bites `viki index`, whose `viki_fossil_user()` falls back to `$USER`
+and passes it as `--user`. The `fossil ticket` subprocess fails, and
+indexing **reports zero tickets rather than an error** -- against a repo
+that had three:
+
+```sh
+env -u VIKI_FOSSIL_USER viki index .
+# viki index: 3 file(s) scanned, 2 (re)chunked; 2 wiki page(s), 1 (re)chunked;
+#             0 ticket(s), 0 (re)chunked; 0 forum post(s), 0 (re)chunked
+VIKI_FOSSIL_USER=viki viki index .
+# ...  3 ticket(s), 3 (re)chunked
+```
+
+The existing FINDINGS entry below covers *read-only* `fossil ticket`
+needing a user; the additions are (a) `commit`, `wiki create` and `ticket
+add` need one too -- artifact-writing wiki commands are not exempt the way
+`wiki list`/`wiki export` are -- and (b) the failure surfaces as a
+plausible-looking zero count, indistinguishable from a repo with no
+tickets. **Any test asserting ticket indexing must assert a nonzero count,
+not just rc=0.**
+
+The single lever that fixes all of it is `FOSSIL_USER`, exported once.
+Every fossil subprocess inherits it, including the ones viki spawns without
+`--user` -- so it also fixes the `viki cache push` failure written up
+below, which that entry works around by overriding `$USER` itself:
+
+```sh
+# same encrypted repo, USER=wmacevoy (not a repo user), no $USER override:
+env -u FOSSIL_USER VIKI_FOSSIL_USER=viki viki cache push   # rc=1
+env -u VIKI_FOSSIL_USER FOSSIL_USER=viki viki cache push   # rc=0
+```
+
+Prefer `FOSSIL_USER=<repo user>` to reassigning `$USER`, which other
+tooling in the same shell also reads. `init --admin-user "$USER"` is the
+other way out, at the cost of a repo whose user table varies by machine.
+
+---
+
+## `viki ask`'s "hybrid mode" banner proves a model LOADED, not that the vector leg contributed -- and three more traps found while specifying the M1 end-to-end test
+
+**Date:** 2026-08-13, enumerating what `make test` must actually assert.
+
+Every claim below was produced by running `build/dist/viki` against a
+three-document scratch corpus (`docs/barn.md` = horses/water trough,
+`docs/grocery.md` = a grocery list, `docs/tax.md` = a tax note) and reading
+the real bytes, not by reading the code and predicting.
+
+**1. The mode banner is not evidence of hybrid retrieval.** `viki_cmd_ask`
+prints `hybrid mode (... model_id=X)` whenever `emb != NULL`. It never
+checks whether a single row in `viki_chunk` carries that `model_id`. Index
+without a model, then ask with one, and you get a confident hybrid banner
+over a pure BM25 result set:
+
+```sh
+cd /tmp/corpus
+viki index .                                   # model_id=none, embedding=NULL
+VIKI_MODEL_DIR=.../build/dist/model viki ask "livestock standing by a drinking pool"
+# stderr: viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=all-MiniLM-L6-v2-qint8-arm64)
+# stdout: [1] rrf=0.0164  ./docs/grocery.md#0     <-- BM25 matched the word "a"
+```
+
+`run_vector()`'s `WHERE model_id=?1` matched zero rows and the query still
+"succeeded" silently. **A test may never treat the stderr banner as proof
+the vector leg ran.** The only sound proof is behavioral: a query whose
+every token is absent from the corpus, so the BM25 leg returns nothing.
+`"equine hydration paddock"` against this corpus gives an *empty stdout* +
+`(no matches)` on stderr with no model, and `[1] rrf=0.0164
+./docs/barn.md#0` with one. That two-sided difference can only come from
+rung 2.
+
+**2. AGENTS.md's horses/water-trough example is corpus-fragile: one
+stopword flips it.** AGENTS.md claims `viki ask "livestock standing by a
+drinking pool"` "correctly ranked the horses document first ... despite the
+query sharing zero literal words with it." The query does share one word --
+**"a"** -- so whether the claim holds depends entirely on whether any
+*other* document happens to contain a standalone "a". Both branches were
+run against clean, single-epoch caches:
+
+```
+grocery.md says "a bag of frozen peas":     grocery.md says "one bag of frozen peas":
+[1] rrf=0.0325  ./docs/grocery.md#0         [1] rrf=0.0164  ./docs/barn.md#0
+[2] rrf=0.0164  ./docs/barn.md#0            [2] rrf=0.0161  ./docs/grocery.md#0
+```
+
+`0.0325 = 1/61 (FTS rank 1) + 1/62 (vector rank 2)`; `0.0164 = 1/61`
+(vector rank 1). So the vector leg ranked the barn first in *both* cases --
+RRF just weights "BM25's best hit" and "the vector's best hit" identically,
+which makes a single stopword match worth exactly as much as a correct
+semantic match. Not a bug in the fusion (that is what RRF is), but the
+original claim was verified against a corpus that happened not to contain
+the word, and a test written from it would be one word away from asserting
+nothing. Pick a query whose every token is absent from every document
+(`"equine hydration paddock"` here) so the BM25 leg is provably empty.
+
+**3. `unset VIKI_MODEL_DIR` does NOT force degraded mode.**
+`open_embedder_if_available()` falls back to the *relative* path
+`build/dist/model` when the variable is unset **or empty**. Verified by
+planting `./build/dist/model` (a symlink) in a scratch cwd:
+
+```sh
+mkdir -p /tmp/trap/build/dist && ln -s .../build/dist/model /tmp/trap/build/dist/model
+cd /tmp/trap
+env -u VIKI_MODEL_DIR viki ask "equine hydration paddock"   # -> hybrid mode
+VIKI_MODEL_DIR=""     viki ask "equine hydration paddock"   # -> hybrid mode
+```
+
+Both silently re-enable rung 2. The only deterministic way to force the
+degraded path is `VIKI_MODEL_DIR=<path that does not exist>` (the `stat()`
++ `S_ISDIR` gate). A directory that exists but has no `viki-manifest.json`
+also works, but emits an *extra* stderr line (`viki embed: no usable model
+at '...'`) before the degraded notice -- so a test grepping for an exact
+stderr transcript needs to expect two lines, not one.
+
+**4. Re-indexing under a second `model_id` double-counts the BM25 leg.**
+`chunk_fts` is not filtered by `model_id` anywhere, and `find_or_add()`
+keys candidates on `(content_hash, chunk_ix)` only. So after indexing the
+same corpus twice under two model ids, one document produces two FTS rows
+that merge into one candidate and add RRF *twice*: grocery scored `0.0487`
+in the mixed-epoch db versus `0.0325` in the clean one. Harmless for
+correctness (the cache is derived, D-10) but it means **a test must start
+from a fresh `.viki/cache.db` per mode**, or ranking assertions drift for
+reasons that have nothing to do with the code under test.
+
+> **Superseded 2026-08-13 (see the entry at the top of this file):** the
+> "harmless for correctness" half of this is wrong -- on a corpus larger
+> than three documents the double-count reorders the top-K and changes
+> which documents are in it. The bug is fixed in `src/viki_ask.c`; the
+> per-mode fresh cache is still good testing hygiene, but it is no longer
+> what stands between the fusion and a wrong answer.
+
+**5. A test that captures output inside the tree it indexes indexes its own
+output.** The first run of the probe script redirected `viki index .`'s
+streams to `a.idx.err` *in the corpus directory*, and reported `5 file(s)
+scanned, 4 (re)chunked` against a three-document corpus. `walk()` has no
+exclusion for these; and `a.idx.err` was already non-empty when the walk
+reached it, because `viki.c` prints the "no embedding model found" notice
+*before* calling `viki_cmd_index()`. Later `viki ask` captures are worse:
+they contain result lines naming the very documents being searched for, so
+a subsequent index run plants near-duplicate decoys. Keep all capture files
+outside the indexed tree.
+
+**6. `viki index <nonexistent-dir>` exits 0.** `walk()`'s `opendir()`
+failure is a silent return, so a typo'd path is reported as `0 file(s)
+scanned, 0 (re)chunked` with status 0. Any assertion about indexing must
+grep the counts; exit status alone will pass on a corpus that was never
+read. (Same shape for `viki ask` with no hits: `(no matches)` on stderr,
+empty stdout, **exit 0**.)
+
+**Wrong assumption this replaces:** that the degraded-vs-hybrid distinction
+is observable from `viki ask`'s own mode banner, that "no keyword overlap"
+is easy to eyeball, and that a nonzero exit is available to signal "found
+nothing".
+
+## `viki cache push` cannot use `VIKI_FOSSIL_USER`, and fails outright when `$USER` is not a repo user
+
+**Date:** 2026-08-13, building the D-11 hub/spoke/fresh-clone test.
+
+`viki_cmd_cache_push()` shells out to `fossil uv add ... --as viki-cache.db`
+with **no `--user`** argument, and `viki_cache.c` never calls
+`viki_fossil_user()` -- despite defining it, and despite `index_tickets()`
+in `viki_index.c` passing `--user` for exactly this reason. On a repo whose
+user table doesn't contain the caller's `$USER`, push dies before doing
+anything:
+
+```sh
+fossil-see init --admin-user tester hub.efossil     # only user: tester
+# ... open, plant docs, viki index ...
+VIKI_FOSSIL_USER=tester viki cache push
+# stdout: Cannot figure out who you are!  Consider using the --user ...
+# stderr: cannot determine user
+#         viki cache push: 'fossil uv add' failed (exit 1)     [exit 1]
+USER=tester viki cache push                          # works
+```
+
+Note the split: fossil's own complaint lands on **stdout** (`run()` inherits
+both streams), so `viki cache push`'s stdout is not clean even on the
+failure path. Two consequences for the M1 test: it must export
+`USER=<repo user>` (or `fossil user default`) rather than the
+`VIKI_FOSSIL_USER` that works for ticket indexing, and it must assert on
+exit status, not on stream contents.
+
+Second wrinkle found in the same run: `fossil uv sync` requires a remote
+URL, so a spoke made with `fossil-see open hub.efossil` (opening the hub
+directly) fails with `Usage: fossil-see sync URL` **after** `uv add` has
+already succeeded locally -- a half-completed push. The spoke has to be a
+real `clone` (which records the `file://` remote automatically, per the
+entry below).
+
+## A real forum post CAN be created headlessly -- the blocker was a missing `Referer:` header, not an AJAX UI -- and doing it exposed two live bugs in `index_forum()`
+
+**Date:** 2026-08-13, closing out the forum-indexing honesty hole.
+
+The entry below ("Forum posts: no `fossil forum` export subcommand ... NOT
+verified against a live post") gave up on scripting `/forume1` because the
+POST "kept re-rendering the empty New Forum Thread form," and guessed the
+cause was "an AJAX/JS-driven submit flow that static form scraping doesn't
+capture." **That guess was wrong.** There is no AJAX involved. The form is
+an ordinary `<form method="POST">`, and the reason the POST silently
+degraded into a re-render is one missing HTTP header.
+
+`forumnew_page()` (`vendor/fossil-see/vendor/fossil/src/forum.c`) gates
+creation on `if( P("submit") && cgi_csrf_safe(2) )`. `cgi_csrf_safe()`
+(`src/cgi.c`) requires *three* things, and the first one is the trap:
+
+```c
+int cgi_same_origin(int bErrorLog){
+  ...
+  zRef = P("HTTP_REFERER");
+  if( zRef==0 ) return 0;          /* <-- no Referer header == not same origin */
+  ...  /* then: strncmp(g.zBaseURL, zRef, strlen(g.zBaseURL)) */
+}
+```
+
+So: (1) a `Referer:` that prefix-matches `g.zBaseURL`, (2) `REQUEST_METHOD`
+`POST`, (3) a `csrf` parameter matching `g.zCsrfToken`. Miss any one and
+Fossil does **not** error -- it falls through and re-paints the empty form,
+which looks exactly like a UI refusing to be scripted. The previous attempt
+found the `csrf` token and the field names; it just never sent `Referer`.
+(The disabled-until-you-press-Preview Submit button is client-side only;
+the server only checks that `submit` is *present*.)
+
+The clean recipe needs **no listening socket, no port, no background
+process, and no browser** -- `fossil http` handles exactly one request read
+from a file:
+
+```sh
+export FOSSIL_SEE_KEY=...           # inherited by the child like any env var
+F=vendor/fossil-see/build/dist/fossil-see
+R=/path/to/repo.efossil
+
+# 1. GET the form to learn this session's anti-CSRF token.
+printf 'GET /forume1 HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' > req
+$F http --localauth --nossl --ipaddr 127.0.0.1 --host 127.0.0.1 \
+        --in req --out resp "$R"
+CSRF=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' resp | head -1)
+
+# 2. POST it back. Note the Referer line -- that is the load-bearing part.
+BODY="csrf=$(urlencode "$CSRF")&title=$(urlencode "$TITLE")\
+&mimetype=text%2Fx-markdown&content=$(urlencode "$CONTENT")&submit=Submit"
+{ printf 'POST /forume1 HTTP/1.0\r\n'
+  printf 'Host: 127.0.0.1\r\n'
+  printf 'Referer: http://127.0.0.1/forume1\r\n'
+  printf 'Content-Type: application/x-www-form-urlencoded\r\n'
+  printf 'Content-Length: %s\r\n\r\n' "$(printf %s "$BODY" | wc -c)"
+  printf '%s' "$BODY"; } > req
+$F http --localauth --nossl --ipaddr 127.0.0.1 --host 127.0.0.1 \
+        --in req --out resp "$R"
+grep '^Location:' resp        # => Location: http://127.0.0.1/forumpost/<hash>
+```
+
+`--localauth` grants loopback requests `sxy` capability with no password
+(so no login/cookie dance), and only applies while the repo's own
+`localauth` setting is off, which is the default. A **reply** is the same
+POST to `/forume2` with `fpid=<hash>&reply=1` instead of `title=`; an
+**edit** uses `edit=1`. `curl` against `fossil server --localauth --port N`
+works identically -- just add `-H 'Referer: http://127.0.0.1:N/forume1'`;
+`fossil http` is preferred only because there is no port to allocate and no
+process to reap. A ready-to-run version of the above (with the `perl`
+urlencode helper) was left at
+`<scratchpad>/fossil-forum-post.sh` rather than committed, since where
+test tooling belongs in this repo is not yet settled.
+
+This is the **strongest available evidence**: the artifact is built by
+Fossil's own `forum_post()`, which assembles the manifest, runs it back
+through `manifest_parse()` and asserts `pPost->type==CFTYPE_FORUM` before
+storing it. No hand-constructed artifact, no `test-content-put`. Fossil's
+own tooling agrees: `fossil timeline --type f` shows
+`Post: <title>` / `Reply: <title>`, and `fossil test-forumthread` reports
+one thread with 2 posts. (Avenue 1 of the search is genuinely dead, and now
+double-checked: `fossil help -a` lists no `forum` command, and `forum.c`'s
+only `COMMAND:` is `test-forumthread`, which merely *displays* a thread.)
+
+**Bug 1 (real, reproduced, still unfixed): the `H` title card is indexed
+with Fossil's escaping still in it, making the thread title unsearchable.**
+Single-line manifest cards escape their values; a real one looks like:
+
+```
+D 2026-08-13T21:26:23.454
+H Pump\simpeller\scavitation\son\sthe\snorth\swell
+N text/x-markdown
+U warren
+W 231
+The north well pump started cavitating after we raised the setpoint. ...
+Z 88682e21ec07aa52a0b3c29f6c338251
+```
+
+`find_line_card()` in `viki_index.c` returns that value raw, and
+`index_forum()` prepends it to the body verbatim. Consequence, measured:
+
+```
+$ viki ask "impeller"      # a word that appears ONLY in the thread title
+(no matches)
+$ viki ask "simpeller"     # the \s-mangled token FTS5 actually stored
+[1] forum:88028bf8...  Pump\[simpeller]\scavitation\son\sthe\snorth\swell
+```
+
+The fix is one call: `unquote_fossil()` already lives ~30 lines above
+`find_line_card()` in the same file and is **byte-for-byte the same
+mapping** as Fossil's own `defossilize()` (`src/encode.c:430`) -- same
+eight cases `\n \s \t \r \v \f \0 \\`, same `default: c = z[i]` fallback
+-- which is exactly the function Fossil itself applies to this field, at
+`manifest.c:751`: `defossilize(p->zThreadTitle)`. `unquote_fossil()` was
+written for `fossil ticket show --quote` and is simply never applied to
+the `H` card. Probing the escaping with a hostile title confirms the
+mapping is the one that matters: posting `A\B C<TAB>D "quoted" 50% n`
+stores `H A\\B\sC\tD\s"quoted"\s50%\sn`. Not applied here because
+verifying it requires rebuilding `build/dist/viki`, and `build/obj` is
+shared state other agents may be using. `index_wiki()` is **not**
+affected -- it goes through `fossil wiki export`, which emits the
+rendered body, never a raw manifest.
+
+**Bug 2 (real, reproduced, still unfixed): edited posts are indexed twice,
+and the superseded version is returned as if it were current.** Editing a
+post writes a *new* artifact carrying a `P <old-uuid>` card; the old one
+stays in `event` with `type='f'`. `index_forum()`'s
+`WHERE event.type='f'` therefore yields both. Observed after one edit:
+
+```
+$ fossil sql --readonly "SELECT blob.uuid FROM event JOIN blob \
+    ON blob.rid=event.objid WHERE event.type='f';"     # 3 rows, not 2
+$ viki index .   # "3 forum post(s)"
+$ viki ask "duckweed in the strainer basket" --k 5
+[1] forum:f159052d...  ... plugged with duckweed AND zebra mussel shell ...   <- current
+[3] forum:7748d5c9...  ... half plugged with duckweed. ...                    <- SUPERSEDED
+```
+
+Fossil's own thread page (`/forumthread/<root>`) shows only the current
+text. The repository already knows which is which: the `forumpost` table
+has `fpid`/`froot`/`fprev`/`firt`, and a superseded post is exactly one
+that appears as some other row's `fprev` (here `forumpost` held
+`fpid|froot|fprev|firt` = `2|2||`, `3|2||2`, `4|2|3|2` -- rid 3 is
+superseded by rid 4). This selector was **verified at the SQL level** on
+that repo, returning exactly the two current posts and dropping the
+superseded one:
+
+```sql
+SELECT blob.uuid FROM event JOIN blob ON blob.rid=event.objid
+ WHERE event.type='f'
+   AND blob.rid NOT IN (SELECT fprev FROM forumpost WHERE fprev IS NOT NULL);
+```
+
+It has **not** been wired into `viki_index.c` or run through `viki index`
+(same rebuild constraint as bug 1), so treat it as a verified query, not
+a verified fix.
+
+The wrong assumption this replaces: not just "forum posts can't be created
+headlessly," but the broader one that the forum path was *structurally the
+same code* as the already-verified wiki path and therefore low-risk. It
+isn't. Wiki content arrives pre-rendered from `fossil wiki export`; forum
+content arrives as a raw manifest, which brings card escaping and artifact
+versioning along with it. Both bugs live precisely in that difference, and
+neither was findable without a live post.
 
 ## Windows CI actually works -- three distinct bugs found and fixed by really running it, not by reasoning about it
 

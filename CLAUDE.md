@@ -42,9 +42,16 @@ build/build.sh                                    # -> build/dist/viki
 
 export VIKI_MODEL_DIR=build/dist/model   # unset/absent => BM25-only, not an error
 build/dist/viki index <dir>              # walk + chunk + hash + embed into .viki/cache.db
-build/dist/viki ask "<query>" [--k N]    # hybrid top-5
+build/dist/viki ask "<query>" [--k N]    # hybrid top-5; each hit prints
+                                         #   [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>
+                                         # then the snippet indented 4 spaces
 build/dist/viki serve [--host H] [--port N]   # 127.0.0.1:8080; / = HTML page, /api/* = JSON
-build/dist/viki cache push|pull          # fossil uv add/sync/export
+build/dist/viki cache push|pull [db-path] [--no-model]
+                                         # fossil uv add/sync/export -- moves the embedding
+                                         # cache AND the pinned model ($VIKI_MODEL_DIR), so a
+                                         # fresh clone gets hybrid retrieval from the hub alone.
+                                         # The model leg is ON by default; --no-model opts out
+                                         # (viki_cache.h explains why that polarity)
 ```
 
 `vendor/fossil-see` is **not** a build dependency — it is a submodule only so a
@@ -56,25 +63,103 @@ you need it (CI does).
 
 ### Testing
 
-There is no automated test suite yet — KICKOFF.md's `make test` definition of
-done is still owed. What exists:
+`test/m1.sh` is KICKOFF.md's `make test` — the Milestone 1 definition of done,
+90 assertions over a scratch **encrypted** repo, most positive claims paired
+with a control that must come out the other way. Eighteen assertions are
+explicitly labelled `CONTROL`; the rest rely on the surrounding section's
+controls or on being independent properties, so read the pairing as a strong
+habit rather than an invariant. It is the portable, hermetic, CI-invoked proof that the
+M1 loop works on a `*.efossil` repo — no hard-coded absolute paths, its own
+`FOSSIL_HOME`/`FOSSIL_SEE_KEY`/scratch tree, nothing outside them; whereas
+`build/m1-e2e-probe.sh`, which got there first, hard-codes absolute paths,
+writes into the developer's real `~/.config/fossil.db`, and has a few weaker
+assertions. m1.sh sets its own `FOSSIL_SEE_KEY` and asserts the hub is really
+ciphertext (E1), that a plaintext repo built by the same binary and key fails
+that same check (E2), that a stock `sqlite3` **cannot** open the encrypted hub
+(E3) but **can** open the plaintext control (E3b), and that a wrong key is
+rejected non-interactively (E4). Then
+degraded and hybrid retrieval of the same planted answer, the two-sided vector
+proof, and the full D-11 push → fresh clone → pull compute-once loop with the
+pulled cache byte-compared to the pushed one (C10) and the vectors
+fingerprint-compared through it (C11). Since 2026-08-13 it also covers the
+D-12 model round trip (M1–M9: the model travels as uv blobs, is checksummed
+against the epoch pin on the way in, and a fresh clone runs *hybrid*
+retrieval on it while its only sync peer is a local `file://` hub), the
+citable `content_hash` on every hit line (G1–G6, cross-checked against an
+independent `shasum` and against `.viki/cache.db`), stale-content withdrawal
+after an edit and a deletion (H1–H11), and mixed-epoch scoring (J1–J4).
+Those last two groups are what closes **KICKOFF.md deliverables 2 and 3** —
+"results with source content_hash" (G1–G6, with controls G4b/G5b) and
+"embedding cache **+ model file** as fossil unversioned files" (M1–M9, with
+controls M1b/M8) — neither of which was true before 2026-08-13. Deliverable 2
+is met on the CLI and `/api/ask` only; `viki serve`'s HTML page still shows no
+hash.
+Non-vacuity is measured, not asserted: a binary compiled from git `HEAD`'s
+`src/` scores `54 passed, 36 failed, 0 skipped` on this same file. The two
+36s are a coincidence, not an identity — of the 36 assertions added this
+round, 26 fail against that binary and 10 pass (mostly controls), and the
+other 10 failures are pre-existing assertions that go red only on the changed
+`viki ask` output format. AGENTS.md lists both id sets.
 
 ```sh
+bash test/m1.sh                             # "0 failed, 0 skipped" == M1 met (see below)
+sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliberately omits
 build/dist/viki ndvss-selftest              # proves sqlite-ndvss is really statically linked
 build/dist/viki embed-selftest [model-dir]  # semantic property check, not just "didn't crash"
 ```
 
-Both are hidden subcommands (not in `usage()`) and both run automatically at the
-end of `build/build.sh`. CI (`.github/workflows/build.yml`) runs the same build
-+ smoke test on linux-x86_64, linux-arm64 (experimental), macos-arm64, and
-windows-x86_64.
+The two selftests are hidden subcommands (not in `usage()`) and both run
+automatically at the end of `build/build.sh`.
+
+`test/m1.sh` will not run against a stock `fossil` — it creates `*.efossil`
+repos and asserts they are really ciphertext, so it needs
+`vendor/fossil-see/build/build.sh` to have been run (or `VIKI_FOSSIL_BIN`
+pointed at some other SQLCipher build).
+
+**A green run says nothing about `src/`.** `test/m1.sh` rebuilds nothing; it
+tests whatever `build/dist/viki` happens to be, and that file is gitignored and
+can lag `src/` arbitrarily — it has already scored a full green (54/54, in the
+54-assertion era of this file) against a binary
+missing three fixes that were sitting in `src/viki_index.c` at the time, and
+its output was *byte-identical* before and after the rebuild that added them.
+Before believing a green run, check the binary is current (`ls -la
+build/dist/viki src/*.c`, or grep the binary for a string unique to the newest
+fix). And treat `test/m1.sh` + `build/forum-e2e-probe.sh` as a **pair** —
+neither alone covers all four indexed content types, and only the first is in
+CI.
+
+**A skipping run still exits 0.** With no model, or no `sqlite3` on PATH,
+m1.sh prints `RESULT: PASS WITH SKIPS` — by its own words "NOT a full
+Milestone 1 pass" — and exits 0 anyway. There is no single skip figure;
+each missing dependency has its own, all measured 2026-08-13 against the
+same binary: no model → `64 passed, 0 failed, 26 skipped`; no `sqlite3` →
+`80 passed, 0 failed, 10 skipped`; neither → `57 passed, 0 failed, 33
+skipped`; all present → `90 passed, 0 failed, 0 skipped`. The skip sets
+overlap, so they do not add. A missing model does **not** skip the whole
+vector proof either: `A12`, the half that asserts a semantic query finds
+nothing *without* a model, runs and passes there — only `B5` is skipped.
+Never read exit status alone; read the `N passed, N failed, N skipped`
+line. CI does exactly that and fails the job on any skip.
+
+CI (`.github/workflows/build.yml`) builds on linux-x86_64, linux-arm64
+(experimental), macos-arm64 and windows-x86_64, and runs `test/m1.sh` on the
+first and third of those — the other two carry an announce-only job leg named
+`-- NOT RUN` explaining why. Adding a platform to the m1 matrix is what
+removes its announcement; there is no second list to keep in sync.
 
 Everything beyond that is manually verified against a scratch fossil-see repo
 and written up in AGENTS.md's "Verified working end to end" section. **Match
 that standard**: prove a semantic property or a real round-trip, not that a
-command exited 0 — and record honestly in AGENTS.md what you did *not* verify
-(forum-post extraction is the current example: implemented, never round-tripped
-against a live post).
+command exited 0 — and record honestly in AGENTS.md what you did *not* verify.
+Forum-post extraction is the cautionary example: it sat "implemented, never
+round-tripped against a live post" for a while, and the first real round-trip
+immediately found two bugs (escaped `H` thread titles; superseded post versions
+indexed as current) -- then a *second*, wider round-trip found a third that the
+first had missed (card lookup running past the card region into the post body,
+so a reply adopts a body line as its title). Structural similarity to a verified
+path is not evidence, and neither is one successful round-trip: it took four
+artifact shapes (thread-start, reply, card-shaped reply, edit) to exercise the
+path. `build/forum-e2e-probe.sh` is the standing proof.
 
 ## Architecture
 
@@ -154,7 +239,29 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   (`-DVIKI_WIN_ORT_PATH`) and `cygpath -m` paths, since it has no MSYS awareness.
 - **Known-naive by choice, not by oversight** (see AGENTS.md before "fixing"):
   fixed 40-line chunks with no overlap or token awareness, ASCII-scoped
-  tokenizer, no GC of orphaned chunk rows, no epoch-migration path for a model
-  change.
+  tokenizer, no epoch-migration path for a model change, and
+  `VIKI_FTS_EPOCH_SLACK = 4` (`viki_ask.c`) — the BM25 leg over-fetches 4×
+  and stops at `poolSize` distinct chunks, so a cache holding more than 4
+  epochs of one chunk returns fewer candidates than asked for. Scores stay
+  correct; deep-tail recall shrinks. Untested (nothing builds >2 epochs).
+- **Staleness detection is `mtime`-only.** `viki index` skips a file whose
+  `(path, mtime)` matches `viki_source` and never hashes it, so a document
+  rewritten *within the same second* as its last index is invisible —
+  `0 (re)chunked`, and the replaced text still answers at rank 1. Real
+  limitation, not just a test artifact; it is why `test/m1.sh` section 7
+  follows every mutation with `touch -t 202001010000`. See FINDINGS.md.
+- **`viki serve`'s HTML page renders no `content_hash`.** The CLI hit line
+  and `/api/ask`'s `"hash"` both carry it, but the page shows only
+  rank/rrf/source/chunk_ix — so the one *human* surface cannot cite a
+  source, and nothing in `test/m1.sh` covers `serve` at all.
+- **`viki index` invalidates, and its scoping rule is load-bearing.** Superseded
+  and deleted sources are retired from `viki_source`, then chunks no longer
+  referenced by any live source are deleted from **both** `viki_chunk` and
+  `chunk_fts` (a plain FTS5 table — nothing cascades). A run only invalidates
+  namespaces it can prove it observed: filesystem paths under the directory it
+  actually walked, and `wiki:`/`ticket:`/`forum:` only when that extractor
+  exited 0. Never widen that scope casually — "delete everything not seen this
+  run" wipes the cache on any subdirectory index or on any machine without a
+  `fossil` binary. See `sweep_sources()` in `src/viki_index.c` and FINDINGS.md.
 - **Out of scope for Milestone 1**: Flutter app, VPS deployment, calendar
   projection, voice, MCP server. Do not start them.

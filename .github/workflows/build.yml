@@ -114,3 +114,352 @@ jobs:
           name: viki-${{ matrix.label }}
           path: stage/viki-${{ matrix.label }}
           retention-days: 30
+
+  # =====================================================================
+  # test/m1.sh -- the Milestone 1 definition-of-done test (KICKOFF.md).
+  #
+  # WHY THIS IS A SEPARATE JOB, not extra steps in `build`:
+  #
+  #  1. `build` exists to prove viki builds and releases STANDALONE. That
+  #     property was won on purpose (FINDINGS.md, "Decoupled viki's build
+  #     from vendor/fossil-see"): build/build.sh must not need any other
+  #     project built first. If this job's `vendor/fossil-see` build ran
+  #     in the same job before ./build/build.sh, a regression that
+  #     re-introduced that dependency would build green and nobody would
+  #     notice. Keeping them apart keeps `build` an honest proof.
+  #  2. A red `m1` and a red `build` mean different things ("M1 regressed"
+  #     vs. "viki does not compile"); one job cannot say which.
+  #  3. `build` publishes release artifacts on four platforms in ~2
+  #     minutes. This job builds LibreSSL from source. Those should not
+  #     be entangled.
+  #
+  # WHY IT BUILDS vendor/fossil-see AT ALL (the expensive choice):
+  #
+  #   test/m1.sh HARD-REQUIRES a SQLCipher-capable fossil. It creates a
+  #   *.efossil repo and its first assertion (E1) is that the file really
+  #   is ciphertext; its fclone() helper calls die() if any clone
+  #   destination comes back plaintext. A stock `fossil` (apt/brew) does
+  #   NOT have SEE/SQLCipher: measured, not assumed -- debian:bookworm's
+  #   `fossil` package (2.21, also not the pinned 2.28) given
+  #   FOSSIL_SEE_KEY and asked to `init` a *.efossil writes a file whose
+  #   first 15 bytes are the literal "SQLite format 3". So m1.sh would
+  #   abort during setup, not merely lose an assertion. Nor is there a
+  #   prebuilt fossil-see to download instead of building one: `gh release
+  #   list -R wmacevoy/fossil-sqlcipher-libressl` is empty. So the choices
+  #   were (a) build it, (b) don't run the M1 definition-of-done test in
+  #   CI at all. (a).
+  #
+  #   Measured cost of (a) on a clean checkout, once, per platform, in a
+  #   local debian:bookworm container: ~5 min for `git submodule update
+  #   --init --recursive vendor/fossil-see` (it pulls the whole
+  #   fossil-mirror history, and cannot be shallow -- the pinned ref is a
+  #   tagged commit, not a branch tip) plus ~3 min for
+  #   LibreSSL+SQLCipher+Fossil. GitHub's own network will beat the clone
+  #   number; treat it as an upper bound, not a promise.
+  #   That is why the resulting binary is cached, keyed on the exact
+  #   submodule commit this repo pins -- fossil-see's build is fully
+  #   pinned internally (its build/versions.env plus its own submodule
+  #   gitlinks), so that commit determines the binary. A cache hit skips
+  #   both the clone and the build. Consequence, stated rather than
+  #   hidden: while the pin does not move, this job stops re-proving that
+  #   fossil-see BUILDS -- it only re-proves that viki still satisfies
+  #   M1 against it. Bumping the submodule changes the key and rebuilds.
+  #
+  # WHY IT DOES NOT RUN EVERYWHERE -- and why that is visible:
+  #
+  #   linux-arm64 and windows-x86_64 get a matrix leg too, whose only job
+  #   is to ANNOUNCE that they are uncovered: the leg's name ends in
+  #   "-- NOT RUN", it emits a ::warning:: annotation onto the run summary
+  #   page, it writes a row into the job summary, and it prints the reason
+  #   in its log. A skip you cannot see is worse than no test at all,
+  #   because it reads as green. Those legs run on ubuntu-latest no matter
+  #   which platform they are announcing -- they build nothing, and
+  #   spending Windows/arm64 runner minutes to print a paragraph would be
+  #   silly. Keeping them IN this matrix (rather than in a hand-maintained
+  #   list elsewhere) is what stops the announcement from drifting out of
+  #   sync with reality: the matrix is the only place the platform list
+  #   exists.
+  # =====================================================================
+  m1:
+    name: m1 (${{ matrix.label }})${{ matrix.skip_reason && ' -- NOT RUN' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- platforms where the M1 test really runs ----
+          - label: linux-x86_64
+            os: ubuntu-latest
+            container: debian:bookworm
+            # Three packages beyond the `build` job's list, each one
+            # MEASURED in a bare debian:bookworm container, not guessed:
+            #
+            #  cmake       LibreSSL's build (fossil-see/build/build.sh
+            #              step 0) refuses to start without it.
+            #  zlib1g-dev  Fossil's configure dies "Error: zlib.h not
+            #              found" ~90s into the fossil-see build. Fossil
+            #              does vendor compat/zlib, but --with-zlib
+            #              defaults to the system copy and does NOT fall
+            #              back to the tree, so the header is required.
+            #              (Found by really running this; the guess was
+            #              that the bundled copy would cover it.)
+            #  sqlite3     NOT optional, even though m1.sh treats it as
+            #              optional. debian:bookworm ships no sqlite3
+            #              binary, and without one m1.sh SKIPS E3/E3b/
+            #              B2/C11 and still exits 0 ("PASS WITH SKIPS"):
+            #              green, having never checked that the repo is
+            #              unreadable to a non-SQLCipher tool, nor that a
+            #              single chunk carries a real 384-float embedding.
+            #
+            # Everything else both builds need (patch, perl/shasum, make,
+            # cc, tar) already arrives with build-essential; neither build
+            # needs a system tclsh -- Fossil and SQLCipher each bootstrap
+            # their own jimsh0 ("No installed jimsh or tclsh, building
+            # local bootstrap jimsh0"). Both statements probed in a bare
+            # image rather than assumed.
+            deps: |
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential curl unzip ca-certificates git \
+                cmake zlib1g-dev sqlite3
+          - label: macos-arm64
+            os: macos-latest
+            container: ""
+            # cmake is expected to be in the runner image, but "expected
+            # to" is not a build dependency: install it only if missing, so
+            # a trimmed future image degrades into a 30-second brew install
+            # instead of a confusing failure five minutes into a LibreSSL
+            # build. sqlite3 is not conditional-installed on purpose --
+            # macOS ships /usr/bin/sqlite3, and Homebrew's sqlite formula
+            # is keg-only (it would install without landing on PATH, i.e.
+            # a "fix" that fixes nothing). If it is ever genuinely absent,
+            # m1.sh skips E3/E3b/B2/C11 and the run step below fails loudly
+            # rather than passing with skips.
+            deps: |
+              command -v cmake >/dev/null 2>&1 || brew install cmake
+
+          # ---- platforms deliberately NOT covered (announce only) ----
+          - label: linux-arm64
+            skip_reason: >-
+              viki itself does not build here: vendor/sqlite-ndvss's
+              aarch64-Linux SVE2 dispatch references functions its own
+              compile-time gate leaves out, so build/build.sh dies with
+              "error: 'cosine_similarity_f_sve2' undeclared" and five
+              siblings (FINDINGS.md; re-confirmed 2026-08-13 in an arm64
+              debian:bookworm container, so this is current, not inherited).
+              That is also why the linux-arm64 leg of the `build` job is
+              experimental / continue-on-error. m1.sh cannot run against a
+              binary that does not exist. Fix sqlite-ndvss upstream first,
+              then delete this leg and add linux-arm64 to the real matrix
+              above.
+          - label: windows-x86_64
+            skip_reason: >-
+              Not attempted, and NOT claimed to be impossible -- nobody has
+              ever built fossil-see (LibreSSL via cmake, SQLCipher's
+              autosetup configure, Fossil's autosetup configure) under
+              MSYS2's plain MSYS environment, which is the environment the
+              `build` job must use for viki itself (FINDINGS.md: MSYS, not
+              MINGW64, for fork()/BSD sockets). Wiring that up blind, with
+              no way to reproduce a failure locally, would most likely
+              produce either a permanently red job or a job that skips its
+              way to green. m1.sh would also need VIKI_BIN pointed at
+              build/dist/viki.exe, since its default has no .exe suffix.
+              Until someone does that work for real, Windows coverage is
+              the `build` job's compile + ndvss-selftest + embed-selftest,
+              and nothing more.
+
+    # Announce-only legs build nothing, so they run on the cheapest runner
+    # available rather than on the platform they are talking about.
+    runs-on: ${{ matrix.skip_reason && 'ubuntu-latest' || matrix.os }}
+    container: ${{ matrix.container || null }}
+    # The default is six hours. m1.sh is engineered not to hang (every
+    # fossil call gets </dev/null, FOSSIL_SEE_STOCK_PROMPT is unset, and a
+    # `timeout 30` wraps the wrong-key case where `timeout` exists), but a
+    # blocked password prompt is exactly the failure that would burn a
+    # runner all afternoon. A full cold run measured ~10 minutes.
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # ------------------------------------------------ announce-only --
+      - name: NOT RUN on this platform -- say so loudly
+        if: ${{ matrix.skip_reason }}
+        env:
+          LABEL: ${{ matrix.label }}
+          REASON: ${{ matrix.skip_reason }}
+        run: |
+          # Three separate surfaces, because each is the only one somebody
+          # looks at: the job log, the run summary page (annotation +
+          # summary block), and the job name in the checks list.
+          echo "############################################################"
+          echo "## test/m1.sh -- the Milestone 1 definition-of-done test --"
+          echo "## DID NOT RUN on $LABEL."
+          echo "##"
+          echo "## $REASON"
+          echo "############################################################"
+          echo "::warning title=m1 NOT RUN on $LABEL::$REASON"
+          {
+            echo "### :warning: \`test/m1.sh\` did **not** run on \`$LABEL\`"
+            echo
+            echo "$REASON"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------- real run --
+      # Container jobs need git present BEFORE actions/checkout, or
+      # checkout falls back to a REST tarball download (no .git dir) and
+      # the later submodule steps fail with "not a git repository".
+      - name: Pre-install git (container only)
+        if: ${{ !matrix.skip_reason && matrix.container != '' }}
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Checkout
+        if: ${{ !matrix.skip_reason }}
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # Same handling as the `build` job: container jobs bind-mount the
+      # checkout from the host, so git's dubious-ownership check trips for
+      # every step after actions/checkout's own internal git calls; and
+      # .gitmodules gives vendor/sqlite-ndvss an SSH URL that CI has no key
+      # for. (vendor/fossil-see and its own two nested submodules are all
+      # HTTPS already -- the rewrite is a no-op for them.)
+      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
+        if: ${{ !matrix.skip_reason }}
+        run: |
+          git config --global --add safe.directory '*'
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init vendor/sqlite-ndvss
+
+      # `|| 'true'` because the announce-only legs carry no deps: an empty
+      # `run:` body is not worth finding out about the hard way, even
+      # though the step's `if` already skips them.
+      - name: Install dependencies
+        if: ${{ !matrix.skip_reason }}
+        run: ${{ matrix.deps || 'true' }}
+
+      # DELIBERATELY BEFORE the fossil-see steps: if viki does not compile
+      # there is nothing to test, and finding that out costs ~1 minute
+      # instead of ~8. This also builds+verifies the pinned model, which
+      # m1.sh needs for every rung-2 assertion (VIKI_MODEL_DIR defaults to
+      # build/dist/model, which is exactly what this writes).
+      - name: Build viki
+        if: ${{ !matrix.skip_reason }}
+        run: ./build/build.sh
+
+      # Reading the gitlink out of the commit works WITHOUT initializing
+      # the submodule, so the cache can be consulted before paying for the
+      # multi-minute recursive clone.
+      - name: Resolve the pinned vendor/fossil-see commit
+        if: ${{ !matrix.skip_reason }}
+        id: fsee
+        run: echo "sha=$(git rev-parse HEAD:vendor/fossil-see)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached fossil-see binary
+        if: ${{ !matrix.skip_reason }}
+        id: fsee-cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/fossil-see/build/dist/fossil-see
+          # Every input to that binary is in the key: the platform, and the
+          # fossil-see commit (which pins LibreSSL's tarball+SHA256, the
+          # SQLCipher fork, and Fossil 2.28 inside its own tree). Bump the
+          # trailing version by hand if the build recipe here changes.
+          key: fossil-see-${{ matrix.label }}-${{ steps.fsee.outputs.sha }}-v1
+
+      - name: Fetch vendor/fossil-see submodule (recursive)
+        if: ${{ !matrix.skip_reason && steps.fsee-cache.outputs.cache-hit != 'true' }}
+        run: git submodule update --init --recursive vendor/fossil-see
+
+      - name: Build fossil-see (Fossil 2.28 + SQLCipher + LibreSSL)
+        if: ${{ !matrix.skip_reason && steps.fsee-cache.outputs.cache-hit != 'true' }}
+        run: ./vendor/fossil-see/build/build.sh
+
+      # PREFLIGHT, and not a formality. m1.sh's E1 ("the hub repo is really
+      # ciphertext") fails, and fclone() die()s, if this binary turns out to
+      # be a plain non-SEE fossil -- and the failure would read as "viki
+      # broke M1" rather than "the fossil binary is wrong". Prove which one
+      # we have BEFORE running the test, including on a cache hit, where
+      # nothing else would ever exercise the restored file.
+      - name: Verify the fossil binary is really a SQLCipher build
+        if: ${{ !matrix.skip_reason }}
+        run: |
+          FSEE="$PWD/vendor/fossil-see/build/dist/fossil-see"
+          [ -x "$FSEE" ] || { echo "::error::no fossil-see binary at $FSEE"; exit 1; }
+          "$FSEE" version
+          probe="$(mktemp -d)"
+          FOSSIL_HOME="$probe" FOSSIL_SEE_KEY=ci-preflight-key \
+            "$FSEE" init --admin-user ci "$probe/probe.efossil" >/dev/null </dev/null
+          # 15 bytes, not `grep "SQLite format 3"`: FINDINGS.md records a
+          # shell where grep skips binary files and reports the OPPOSITE
+          # answer for exactly this check. m1.sh's is_encrypted() uses this
+          # identical idiom, deliberately. Expect bash 5.2 to print
+          # "warning: command substitution: ignored null byte in input"
+          # here on Linux -- that warning IS the ciphertext talking, and
+          # the comparison is still correct in both directions (a
+          # plaintext header contains no NULs to lose).
+          if [ "$(head -c 15 "$probe/probe.efossil")" = "SQLite format 3" ]; then
+            echo "::error title=fossil-see is not encrypting::init wrote a PLAINTEXT repo to a .efossil name -- this is not a SQLCipher build, so test/m1.sh cannot mean anything"
+            exit 1
+          fi
+          echo "ok: *.efossil comes back as ciphertext"
+          rm -rf "$probe"
+
+      # VIKI_BIN / VIKI_FOSSIL_BIN / VIKI_MODEL_DIR are all left at their
+      # defaults on purpose -- m1.sh derives them from its own location
+      # (build/dist/viki, vendor/fossil-see/build/dist/fossil-see,
+      # build/dist/model), which is exactly what the steps above produced.
+      # Setting them here would only create a second place to be wrong.
+      - name: Run test/m1.sh (Milestone 1 definition of done)
+        if: ${{ !matrix.skip_reason }}
+        env:
+          LABEL: ${{ matrix.label }}
+        run: |
+          # Scratch tree inside the workspace, and kept, so the logs can be
+          # uploaded when this fails -- an m1 failure that only reproduces
+          # on a platform the developer does not own is precisely when the
+          # captures matter. mktemp -d needs the parent to exist.
+          export TMPDIR="$PWD/m1-scratch"
+          export VIKI_TEST_KEEP=1
+          mkdir -p "$TMPDIR"
+          # Explicit, though `shell: bash` already implies -eo pipefail:
+          # without pipefail a FAILING m1.sh would be masked by tee's
+          # exit 0, which is the exact class of silent-green this job
+          # exists to prevent.
+          set -o pipefail
+          bash test/m1.sh 2>&1 | tee "$TMPDIR/m1.out"
+
+          # m1.sh exits 0 for "PASS WITH SKIPS" -- by its own summary text,
+          # NOT a full definition-of-done pass. Every skip it can emit is a
+          # missing dependency on THIS runner (no model, no sqlite3), never
+          # a property of the code under test, so a skip here means the job
+          # is misconfigured and is reporting green for assertions it never
+          # ran. Fail instead. That is the whole point of wiring this test
+          # into CI: FINDINGS.md, "A green test/m1.sh says nothing about
+          # the source tree".
+          if ! grep -qE '^test/m1\.sh: [0-9]+ passed, 0 failed, 0 skipped$' "$TMPDIR/m1.out"; then
+            echo "::error title=m1 incomplete::test/m1.sh skipped assertions on $LABEL; a run with skips does not prove Milestone 1. Install the missing dependency on this runner (see the SKIP lines above) rather than accepting it."
+            exit 1
+          fi
+          {
+            echo "### :white_check_mark: \`test/m1.sh\` passed on \`$LABEL\`"
+            echo
+            echo '```'
+            grep -E '^test/m1\.sh: |^RESULT: ' "$TMPDIR/m1.out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload m1 scratch logs (failure only)
+        if: ${{ failure() && !matrix.skip_reason }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1-logs-${{ matrix.label }}
+          # Only the logs -- the sibling *.efossil repos and cache dbs in
+          # the same scratch tree are large and rebuildable.
+          path: |
+            m1-scratch/m1.out
+            m1-scratch/*/logs
+          if-no-files-found: warn
+          retention-days: 14

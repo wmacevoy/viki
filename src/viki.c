@@ -26,9 +26,21 @@ static void usage(void){
     fprintf(stderr,
         "usage: viki <subcommand> [args...]\n\n"
         "  index [dir]              Walk dir (default: .) and (re)index into the local cache\n"
-        "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found\n"
-        "  cache push [db-path]     Publish the local cache db as a fossil uv blob (default: .viki/cache.db)\n"
-        "  cache pull [db-path]     Fetch the cache db from a fossil uv blob\n"
+        "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found.\n"
+        "                           Each hit prints one header line, then the snippet indented 4 spaces:\n"
+        "                             [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>\n"
+        "                           content_hash is the citable identity (same value /api/ask returns as\n"
+        "                           \"hash\"); <source> is a best-effort path hint and may be unknown.\n"
+        "  cache push [db-path] [--no-model]\n"
+        "                           Publish the local cache db (default: .viki/cache.db) AND the\n"
+        "                           pinned model directory as fossil uv blobs -- viki-cache.db plus\n"
+        "                           viki-model/{model.onnx,vocab.txt,viki-manifest.json}, per D-12.\n"
+        "                           An unchanged model epoch is not re-pushed; no model present is\n"
+        "                           not an error (peers stay BM25-only). --no-model: cache only.\n"
+        "  cache pull [db-path] [--no-model]\n"
+        "                           Fetch both back. The model is written to the same directory\n"
+        "                           'ask' reads (below) and checked against the manifest's sha256.\n"
+        "                           A hub with no model published is not an error.\n"
         "  serve [--host H] [--port N]\n"
         "                           Local HTTP server: human search page at / plus a JSON API for\n"
         "                           agents/scripts (GET /api/ask?q=&k=, /api/chunk?hash=&ix=,\n"
@@ -51,9 +63,14 @@ static void usage(void){
 ** no model is present (VIKI_DESIGN.md's required degraded mode), not an
 ** error callers should treat as fatal. */
 static viki_embedder *open_embedder_if_available(void){
-    const char *dir = getenv("VIKI_MODEL_DIR");
+    /* viki_model_dir() rather than a local copy of the
+    ** $VIKI_MODEL_DIR-else-build/dist/model rule: `viki cache pull` writes the
+    ** model it fetched to that same function's answer, so if the two ever
+    ** disagreed a fresh clone would pull a model and then silently ignore it,
+    ** degrading to BM25-only with no diagnostic. One definition, in the module
+    ** that publishes the directory. */
+    const char *dir = viki_model_dir();
     struct stat st;
-    if( !dir || !dir[0] ) dir = "build/dist/model";
     if( stat(dir, &st) != 0 || !S_ISDIR(st.st_mode) ) return NULL;
     return viki_embedder_open(dir);
 }
@@ -139,12 +156,22 @@ int main(int argc, char **argv){
     }
 
     if( strcmp(sub, "cache") == 0 ){
+        /* Flag-vs-path is decided by exact match on "--no-model" rather than
+        ** by position: before the model leg existed argv[3] was unconditionally
+        ** a db path, so `viki cache push --no-model` would have silently pushed
+        ** a cache db named "--no-model" (i.e. failed to open it) instead of
+        ** honouring the opt-out. Last non-flag argument wins as the path. */
         const char *dbPath = VIKI_DEFAULT_CACHE_DB;
-        if( argc < 3 ){ fprintf(stderr, "usage: viki cache push|pull [db-path]\n"); return 1; }
-        if( argc > 3 ) dbPath = argv[3];
+        unsigned mFlags = 0;
+        int i;
+        if( argc < 3 ){ fprintf(stderr, "usage: viki cache push|pull [db-path] [--no-model]\n"); return 1; }
+        for( i = 3; i < argc; i++ ){
+            if( strcmp(argv[i], "--no-model") == 0 ) mFlags |= VIKI_CACHE_NO_MODEL;
+            else dbPath = argv[i];
+        }
         if( ensure_viki_dir() ) return 1;
-        if( strcmp(argv[2], "push") == 0 ) return viki_cmd_cache_push(dbPath);
-        if( strcmp(argv[2], "pull") == 0 ) return viki_cmd_cache_pull(dbPath);
+        if( strcmp(argv[2], "push") == 0 ) return viki_cmd_cache_push_opts(dbPath, mFlags);
+        if( strcmp(argv[2], "pull") == 0 ) return viki_cmd_cache_pull_opts(dbPath, mFlags);
         fprintf(stderr, "viki cache: unknown action '%s' (want push|pull)\n", argv[2]);
         return 1;
     }
@@ -175,8 +202,10 @@ int main(int argc, char **argv){
         ** embedding pipeline is real -- loads the model, tokenizes, runs
         ** inference, and checks a semantic property (similar sentences
         ** cosine-closer than dissimilar ones) rather than just "did it
-        ** not crash". argv[2] is the model dir (default build/dist/model). */
-        const char *modelDir = argc > 2 ? argv[2] : "build/dist/model";
+        ** not crash". argv[2] is the model dir; with none given, the same
+        ** directory `ask`/`index`/`cache pull` use (viki_model_dir()), so a
+        ** selftest without arguments tests the model viki would actually run. */
+        const char *modelDir = argc > 2 ? argv[2] : viki_model_dir();
         viki_embedder *emb;
         float vA[1024], vB[1024], vC[1024];
         int dim, i;

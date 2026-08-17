@@ -26,9 +26,19 @@ static const char *SCHEMA_SQL =
     /* Side table: path -> (content_hash, mtime), so `viki index` can skip
     ** re-hashing/re-chunking files whose mtime hasn't moved. Not part of
     ** VIKI_DESIGN.md's schema block (which is intentionally content-
-    ** addressed, path-independent) -- this is purely a local bookkeeping
-    ** aid for incremental indexing and for `viki ask` to show a
-    ** human-friendly source hint. Rebuildable like everything else here. */
+    ** addressed, path-independent) -- this is a local bookkeeping aid for
+    ** incremental indexing and for `viki ask` to show a human-friendly
+    ** source hint. Rebuildable like everything else here.
+    **
+    ** It carries a third job that is easy to miss and easy to break: it is
+    ** the LIVENESS SET. A content_hash referenced by no row here is
+    ** unreachable content, and `viki index` deletes its chunks on that
+    ** basis (viki_index.c's gc_orphan_chunks). Two consequences. Deleting
+    ** a row is therefore not free bookkeeping -- it can retire chunks --
+    ** which is why viki_index.c only ever deletes rows it can prove are
+    ** stale. And because content is shared (two paths with identical bytes
+    ** collapse to one content_hash), liveness is a reference count, never
+    ** a one-to-one mapping. */
     "CREATE TABLE IF NOT EXISTS viki_source("
     "  path TEXT PRIMARY KEY,"
     "  content_hash TEXT NOT NULL,"

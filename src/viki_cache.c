@@ -1,12 +1,40 @@
 #include "viki_cache.h"
+#include "sha256.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 #define VIKI_UV_NAME "viki-cache.db"
+
+/* The pinned model travels as three uv blobs under one stable prefix.
+** Names are a wire contract (a puller built from a different checkout
+** must find them), so they are spelled out here once and nowhere else. */
+#define VIKI_UV_MODEL_MANIFEST "viki-model/viki-manifest.json"
+
+/* Push order is deliberate: blobs first, MANIFEST LAST. The manifest is
+** the epoch pin (VIKI_DESIGN.md), and it is also what the skip-if-
+** unchanged check below reads, so an interrupted push that got the model
+** up but not the manifest leaves the old pin in place and simply retries
+** next time -- rather than advertising an epoch whose bytes never
+** arrived. Pull mirrors it: manifest installed only after the blobs it
+** names are on disk and checksum-verified. */
+static const struct {
+    const char *zBase;    /* file name inside the model directory */
+    const char *zUv;      /* stable unversioned-file name */
+    const char *zShaKey;  /* manifest field pinning its sha256, or NULL */
+} aModelFile[] = {
+    { "vocab.txt",          "viki-model/vocab.txt",  "vocab_sha256" },
+    { "model.onnx",         "viki-model/model.onnx", "model_sha256" },
+    { "viki-manifest.json", VIKI_UV_MODEL_MANIFEST,  NULL },
+};
+#define VIKI_N_MODEL_FILE ((int)(sizeof(aModelFile)/sizeof(aModelFile[0])))
+/* The manifest is the last entry, by the ordering argument above. */
+#define VIKI_MANIFEST_IX  (VIKI_N_MODEL_FILE - 1)
 
 static int find_on_path(const char *name){
     const char *pathEnv = getenv("PATH");
@@ -43,12 +71,21 @@ const char *viki_fossil_user(void){
     return "viki";
 }
 
+const char *viki_model_dir(void){
+    const char *zDir = getenv("VIKI_MODEL_DIR");
+    if( zDir && zDir[0] ) return zDir;
+    return "build/dist/model";
+}
+
 /* Runs argv (NULL-terminated) as a child process, waits for it, and
 ** returns its exit code (or -1 on fork/exec failure). stdout/stderr are
 ** inherited so `fossil uv ...` output is visible directly -- these are
 ** infrequent, interactive-ish operations, not something to capture and
-** re-format. */
-static int run(char *const argv[]){
+** re-format. bQuiet sends both streams to /dev/null instead, for the
+** probes below whose FAILURE is a normal outcome (`uv export` of a name
+** the hub has never held is fossil_fatal + "no such uv-file", which
+** would otherwise look like a real error to whoever reads the log). */
+static int run_ex(char *const argv[], int bQuiet){
     pid_t pid = fork();
     int status;
 
@@ -57,6 +94,14 @@ static int run(char *const argv[]){
         return -1;
     }
     if( pid == 0 ){
+        if( bQuiet ){
+            int fd = open("/dev/null", O_WRONLY);
+            if( fd >= 0 ){
+                dup2(fd, 1);
+                dup2(fd, 2);
+                if( fd > 2 ) close(fd);
+            }
+        }
         execvp(argv[0], argv);
         fprintf(stderr, "viki: exec %s failed: %s\n", argv[0], strerror(errno));
         _exit(127);
@@ -69,11 +114,261 @@ static int run(char *const argv[]){
     return -1;
 }
 
-int viki_cmd_cache_push(const char *zCacheDbPath){
+static int run(char *const argv[]){ return run_ex(argv, 0); }
+
+/* -------------------------------------------------- small file helpers -- */
+
+static long long file_size(const char *zPath){
+    struct stat st;
+    if( stat(zPath, &st) != 0 || !S_ISREG(st.st_mode) ) return -1;
+    return (long long)st.st_size;
+}
+
+/* Human-readable size, always in MB with one decimal: the point of
+** printing it at all is that the model is ~23 MB and the reader should
+** see that number, so a unit that shrinks it back to "22.0" vs "0.2" is
+** exactly the comparison wanted. */
+static const char *fmt_mb(long long n, char *zBuf, size_t nBuf){
+    snprintf(zBuf, nBuf, "%.1f MB", (double)n / (1024.0*1024.0));
+    return zBuf;
+}
+
+/* Reads a whole file into a NUL-terminated malloc'd buffer. Used for the
+** manifest (a few hundred bytes) and for the model (~23 MB) -- the
+** latter only because viki_sha256_hex() has no streaming API. */
+static unsigned char *read_whole_file(const char *zPath, size_t *pnOut){
+    FILE *f = fopen(zPath, "rb");
+    long long sz;
+    unsigned char *pBuf;
+    size_t nRead;
+
+    if( !f ) return NULL;
+    sz = file_size(zPath);
+    if( sz < 0 ){ fclose(f); return NULL; }
+    pBuf = malloc((size_t)sz + 1);
+    if( !pBuf ){ fclose(f); return NULL; }
+    nRead = fread(pBuf, 1, (size_t)sz, f);
+    fclose(f);
+    if( nRead != (size_t)sz ){ free(pBuf); return NULL; }
+    pBuf[sz] = 0;
+    if( pnOut ) *pnOut = (size_t)sz;
+    return pBuf;
+}
+
+static int files_equal(const char *zA, const char *zB){
+    FILE *fa, *fb;
+    char bufA[65536], bufB[65536];
+    int rc = 1;
+
+    if( file_size(zA) != file_size(zB) ) return 0;
+    fa = fopen(zA, "rb");
+    if( !fa ) return 0;
+    fb = fopen(zB, "rb");
+    if( !fb ){ fclose(fa); return 0; }
+    for(;;){
+        size_t na = fread(bufA, 1, sizeof(bufA), fa);
+        size_t nb = fread(bufB, 1, sizeof(bufB), fb);
+        if( na != nb || memcmp(bufA, bufB, na) != 0 ){ rc = 0; break; }
+        if( na == 0 ) break;
+    }
+    fclose(fa);
+    fclose(fb);
+    return rc;
+}
+
+static int copy_file(const char *zFrom, const char *zTo){
+    FILE *fi = fopen(zFrom, "rb");
+    FILE *fo;
+    char buf[65536];
+    size_t n;
+
+    if( !fi ) return 1;
+    fo = fopen(zTo, "wb");
+    if( !fo ){ fclose(fi); return 1; }
+    while( (n = fread(buf, 1, sizeof(buf), fi)) > 0 ){
+        if( fwrite(buf, 1, n, fo) != n ){ fclose(fi); fclose(fo); return 1; }
+    }
+    fclose(fi);
+    return fclose(fo) == 0 ? 0 : 1;
+}
+
+/* mkdir -p. The default model directory is "build/dist/model", three
+** levels of which may not exist in a fresh clone. */
+static int mkdir_p(const char *zPath){
+    char zBuf[4096];
+    size_t i, n;
+    struct stat st;
+
+    n = strlen(zPath);
+    if( n == 0 || n >= sizeof(zBuf) ) return 1;
+    memcpy(zBuf, zPath, n + 1);
+    while( n > 1 && zBuf[n-1] == '/' ) zBuf[--n] = 0;
+    for( i = 1; i <= n; i++ ){
+        if( zBuf[i] != '/' && zBuf[i] != 0 ) continue;
+        zBuf[i] = 0;
+        if( stat(zBuf, &st) != 0 && mkdir(zBuf, 0755) != 0 && errno != EEXIST ){
+            fprintf(stderr, "viki: mkdir %s: %s\n", zBuf, strerror(errno));
+            return 1;
+        }
+        if( i < n ) zBuf[i] = '/';
+    }
+    return 0;
+}
+
+/* Pulls a "key": "value" string field out of the manifest. Same
+** deliberately-minimal approach as embed.c's read_manifest(): this file
+** is written by build.sh, not by an arbitrary producer, and pulling in a
+** JSON parser to read three flat string fields would be the larger risk. */
+static int manifest_field(const char *zJson, const char *zKey, char *zOut, size_t nOut){
+    char zNeedle[64];
+    const char *p, *end;
+    size_t n;
+
+    snprintf(zNeedle, sizeof(zNeedle), "\"%s\"", zKey);
+    p = strstr(zJson, zNeedle);
+    if( !p ) return 1;
+    p = strchr(p + strlen(zNeedle), ':');
+    if( !p ) return 1;
+    p = strchr(p, '"');
+    if( !p ) return 1;
+    p++;
+    end = strchr(p, '"');
+    if( !end ) return 1;
+    n = (size_t)(end - p);
+    if( n >= nOut ) return 1;
+    memcpy(zOut, p, n);
+    zOut[n] = 0;
+    return 0;
+}
+
+static int sha256_file_hex(const char *zPath, char zHexOut[65]){
+    size_t n = 0;
+    unsigned char *pBuf = read_whole_file(zPath, &n);
+    if( !pBuf ) return 1;
+    viki_sha256_hex(pBuf, n, zHexOut);
+    free(pBuf);
+    return 0;
+}
+
+static void temp_path(char *zBuf, size_t nBuf, const char *zTag){
+    const char *zTmp = getenv("TMPDIR");
+    if( !zTmp || !zTmp[0] ) zTmp = "/tmp";
+    snprintf(zBuf, nBuf, "%s/viki-uv-%s-%ld", zTmp, zTag, (long)getpid());
+}
+
+/* `fossil uv export NAME OUT`, silent on failure -- see run_ex(). */
+static int uv_export_quiet(const char *zFossil, const char *zUv, const char *zOut){
+    char *argv[] = { (char*)zFossil, "uv", "export", (char*)zUv, (char*)zOut, NULL };
+    return run_ex(argv, 1);
+}
+
+/* ------------------------------------------------------------- push -- */
+
+/* Publishes the pinned model directory as uv blobs. Returns 0 if the
+** model is now published OR legitimately absent, 1 only on a real
+** failure (a `fossil uv add` that errored).
+**
+** ABSENCE IS NOT AN ERROR. Degraded, model-less operation is a
+** first-class path in VIKI_DESIGN.md -- `viki index`/`viki ask` already
+** run BM25-only when no model is present -- so a peer that has never
+** built one must still be able to publish its embedding-free cache. It
+** is called out loudly instead, because the consequence (every peer
+** cloning this hub stays BM25-only) is invisible otherwise. */
+static int push_model(const char *zFossil){
+    const char *zDir = viki_model_dir();
+    char zLocal[VIKI_N_MODEL_FILE][4096];
+    char zManifestProbe[4096];
+    char zSize[32];
+    long long nTotal = 0;
+    int i, rc;
+    unsigned char *pManifest;
+    char zModelId[128];
+
+    for( i = 0; i < VIKI_N_MODEL_FILE; i++ ){
+        long long sz;
+        snprintf(zLocal[i], sizeof(zLocal[i]), "%s/%s", zDir, aModelFile[i].zBase);
+        sz = file_size(zLocal[i]);
+        if( sz < 0 ){
+            fprintf(stderr,
+                "viki cache push: no model to publish -- '%s' is missing.\n"
+                "viki cache push:   NOT AN ERROR: the embedding cache is still published. But no\n"
+                "viki cache push:   model travels with it, so peers cloning this hub get BM25-only\n"
+                "viki cache push:   (degraded) retrieval. Set $VIKI_MODEL_DIR or build build/dist/model.\n",
+                zLocal[i]);
+            return 0;
+        }
+        nTotal += sz;
+    }
+
+    pManifest = read_whole_file(zLocal[VIKI_MANIFEST_IX], NULL);
+    if( !pManifest ) return 1;
+    if( manifest_field((char*)pManifest, "model_id", zModelId, sizeof(zModelId)) != 0 ){
+        snprintf(zModelId, sizeof(zModelId), "(unknown)");
+    }
+
+    /* SKIP AN UNCHANGED EPOCH. uv is latest-wins with no history (D-12),
+    ** so re-adding identical bytes is harmless -- but not free: fossil's
+    ** `uv add` unconditionally REPLACEs the row (unversioned_write() in
+    ** fossil's unversioned.c has no is-it-different test) and stamps
+    ** mtime=now. Measured on the 23 MB pinned model: 1.14s of re-hashing
+    ** and re-deflating per push, and the bumped mtime then shows up at
+    ** every sync as `UV-PUSH-MTIME-ONLY: viki-model/model.onnx`. The wire
+    ** cost of that is trivial (~586 bytes, fossil compares hashes before
+    ** sending content) -- the CPU and the noise are the reasons. The
+    ** manifest is exactly the right thing to compare, because it IS the
+    ** epoch pin: it carries model_id plus the sha256 of both blobs, so
+    ** identical manifest == identical model. (Consequence, stated
+    ** plainly: editing model.onnx WITHOUT bumping the manifest will not
+    ** re-publish it. That is the epoch contract, not an oversight.)
+    **
+    ** The comparison is against what THIS repository already holds --
+    ** which is what previous pushes put there, or what a previous `uv
+    ** sync` brought down. A never-pushed spoke has no uv rows at all
+    ** (plain `fossil clone` does not carry unversioned content), so its
+    ** first push uploads the model even if the hub already has that
+    ** epoch; the alternative -- syncing first to find out -- would
+    ** download the same 23 MB it is trying to avoid uploading. */
+    temp_path(zManifestProbe, sizeof(zManifestProbe), "pushprobe");
+    if( uv_export_quiet(zFossil, VIKI_UV_MODEL_MANIFEST, zManifestProbe) == 0
+     && files_equal(zManifestProbe, zLocal[VIKI_MANIFEST_IX]) ){
+        unlink(zManifestProbe);
+        free(pManifest);
+        fprintf(stderr,
+            "viki cache push: model epoch '%s' (%s) is already published under viki-model/ --\n"
+            "viki cache push:   not re-pushing. Bump viki-manifest.json to publish a new epoch.\n",
+            zModelId, fmt_mb(nTotal, zSize, sizeof(zSize)));
+        return 0;
+    }
+    unlink(zManifestProbe);
+    free(pManifest);
+
+    fprintf(stderr, "viki cache push: publishing model epoch '%s' from '%s' (%s total)\n",
+            zModelId, zDir, fmt_mb(nTotal, zSize, sizeof(zSize)));
+    fprintf(stderr,
+        "viki cache push:   uv blobs are LATEST-WINS with no history (D-12): this REPLACES any\n"
+        "viki cache push:   model previously published to this hub, irreversibly.\n");
+
+    rc = 0;
+    for( i = 0; i < VIKI_N_MODEL_FILE; i++ ){
+        char *argvAdd[] = { (char*)zFossil, "uv", "add", zLocal[i], "--as",
+                            (char*)aModelFile[i].zUv, NULL };
+        fprintf(stderr, "viki cache push:   %-30s %s\n", aModelFile[i].zUv,
+                fmt_mb(file_size(zLocal[i]), zSize, sizeof(zSize)));
+        if( run(argvAdd) != 0 ){
+            fprintf(stderr, "viki cache push: 'fossil uv add %s' FAILED -- model NOT published\n",
+                    aModelFile[i].zUv);
+            rc = 1;
+            break;
+        }
+    }
+    return rc;
+}
+
+int viki_cmd_cache_push_opts(const char *zCacheDbPath, unsigned mFlags){
     const char *fossil = viki_fossil_binary();
     char *argvAdd[] = { (char*)fossil, "uv", "add", (char*)zCacheDbPath, "--as", VIKI_UV_NAME, NULL };
     char *argvSync[] = { (char*)fossil, "uv", "sync", NULL };
-    int rc;
+    int rc, rcModel = 0;
 
     fprintf(stderr, "viki cache push: %s uv add %s --as %s\n", fossil, zCacheDbPath, VIKI_UV_NAME);
     rc = run(argvAdd);
@@ -82,16 +377,161 @@ int viki_cmd_cache_push(const char *zCacheDbPath){
         return 1;
     }
 
+    if( mFlags & VIKI_CACHE_NO_MODEL ){
+        fprintf(stderr,
+            "viki cache push: --no-model: publishing the embedding cache only. Peers that do not\n"
+            "viki cache push:   already have the model will run BM25-only.\n");
+    }else{
+        /* A model failure does not skip the sync below: the cache add has
+        ** already happened locally and is worth getting to the hub either
+        ** way. The nonzero status still surfaces at the end. */
+        rcModel = push_model(fossil);
+    }
+
     fprintf(stderr, "viki cache push: %s uv sync\n", fossil);
     rc = run(argvSync);
     if( rc != 0 ){
         fprintf(stderr, "viki cache push: 'fossil uv sync' failed (exit %d)\n", rc);
         return 1;
     }
+    return rcModel;
+}
+
+/* ------------------------------------------------------------- pull -- */
+
+/* Materializes the published model into viki_model_dir() -- the same
+** directory viki.c resolves before opening the embedder, so a fresh
+** clone that pulls can immediately `viki ask` in hybrid mode with no
+** further configuration.
+**
+** Returns 0 when the model is now present OR when the hub simply has no
+** model published (a clear, non-fatal outcome: the cache still pulled,
+** retrieval is just BM25-only). Returns 1 only for a model that arrived
+** BROKEN -- a checksum that disagrees with the epoch pin is a real
+** failure and gets said out loud rather than silently degraded, because
+** the pinned checksum is the only integrity statement viki has about a
+** binary it is about to load and run inference with. */
+static int pull_model(const char *zFossil){
+    const char *zDir = viki_model_dir();
+    char zTmpManifest[4096], zDst[4096], zSize[32];
+    char zModelId[128], zWantHash[128], zGotHash[65];
+    unsigned char *pManifest;
+    long long nTotal = 0;
+    int i;
+
+    temp_path(zTmpManifest, sizeof(zTmpManifest), "manifest");
+    if( uv_export_quiet(zFossil, VIKI_UV_MODEL_MANIFEST, zTmpManifest) != 0 ){
+        fprintf(stderr,
+            "viki cache pull: no model published on this hub (no uv blob '%s').\n"
+            "viki cache pull:   The embedding cache pulled fine; retrieval here will be BM25-only\n"
+            "viki cache pull:   unless a model is available locally. Not an error -- run\n"
+            "viki cache pull:   'viki cache push' from a peer that has one.\n",
+            VIKI_UV_MODEL_MANIFEST);
+        unlink(zTmpManifest);
+        return 0;
+    }
+
+    pManifest = read_whole_file(zTmpManifest, NULL);
+    if( !pManifest ){ unlink(zTmpManifest); return 1; }
+    if( manifest_field((char*)pManifest, "model_id", zModelId, sizeof(zModelId)) != 0 ){
+        snprintf(zModelId, sizeof(zModelId), "(unknown)");
+    }
+
+    /* Same epoch check as push, in the other direction: if this checkout
+    ** already holds this exact epoch pin, the ~23 MB export is pure
+    ** waste. The pin alone is not enough evidence, though -- a manifest
+    ** whose blobs were deleted underneath it would skip the fetch and
+    ** leave the directory broken -- so require the blobs on disk too. */
+    snprintf(zDst, sizeof(zDst), "%s/%s", zDir, aModelFile[VIKI_MANIFEST_IX].zBase);
+    if( files_equal(zTmpManifest, zDst) ){
+        int bComplete = 1;
+        for( i = 0; i < VIKI_MANIFEST_IX; i++ ){
+            char zHave[4096];
+            snprintf(zHave, sizeof(zHave), "%s/%s", zDir, aModelFile[i].zBase);
+            if( file_size(zHave) <= 0 ) bComplete = 0;
+        }
+        if( bComplete ){
+            fprintf(stderr, "viki cache pull: model epoch '%s' already present at '%s' -- nothing to fetch\n",
+                    zModelId, zDir);
+            unlink(zTmpManifest);
+            free(pManifest);
+            return 0;
+        }
+        fprintf(stderr, "viki cache pull: '%s' pins epoch '%s' but its files are missing -- refetching\n",
+                zDst, zModelId);
+    }
+
+    if( mkdir_p(zDir) != 0 ){ unlink(zTmpManifest); free(pManifest); return 1; }
+
+    for( i = 0; i < VIKI_MANIFEST_IX; i++ ){   /* manifest installed last */
+        snprintf(zDst, sizeof(zDst), "%s/%s", zDir, aModelFile[i].zBase);
+        fprintf(stderr, "viki cache pull: %s uv export %s %s\n", zFossil, aModelFile[i].zUv, zDst);
+        if( uv_export_quiet(zFossil, aModelFile[i].zUv, zDst) != 0 ){
+            fprintf(stderr,
+                "viki cache pull: '%s' is missing from the hub even though '%s' is present --\n"
+                "viki cache pull:   the published model is INCOMPLETE. Re-run 'viki cache push'\n"
+                "viki cache pull:   from a peer that has the full model directory.\n",
+                aModelFile[i].zUv, VIKI_UV_MODEL_MANIFEST);
+            unlink(zTmpManifest);
+            free(pManifest);
+            return 1;
+        }
+        nTotal += file_size(zDst);
+
+        /* Verify against the epoch pin's own checksum. build.sh records
+        ** model_sha256/vocab_sha256 in the manifest; nothing else in viki
+        ** ever checks them, so this is the one place a corrupted or
+        ** truncated model gets caught -- before ONNX Runtime is asked to
+        ** load it. Older manifests without the field are tolerated (noted,
+        ** not failed): the pin is versioned content and viki must still
+        ** work against a hub written by an older build. */
+        {
+            const char *zKey = aModelFile[i].zShaKey;
+            if( !zKey || manifest_field((char*)pManifest, zKey, zWantHash, sizeof(zWantHash)) != 0 ){
+                fprintf(stderr, "viki cache pull:   (manifest has no %s -- integrity unverified)\n",
+                        zKey ? zKey : "checksum");
+            }else if( sha256_file_hex(zDst, zGotHash) != 0 ){
+                fprintf(stderr, "viki cache pull:   cannot read back '%s' to verify it\n", zDst);
+                unlink(zTmpManifest);
+                free(pManifest);
+                return 1;
+            }else if( strcmp(zGotHash, zWantHash) != 0 ){
+                fprintf(stderr,
+                    "viki cache pull: CHECKSUM MISMATCH on '%s'\n"
+                    "viki cache pull:   manifest pins %s\n"
+                    "viki cache pull:   pulled bytes are %s\n"
+                    "viki cache pull:   Refusing to install the epoch pin -- the model directory is\n"
+                    "viki cache pull:   left without a manifest, so viki degrades to BM25-only\n"
+                    "viki cache pull:   rather than running inference on unverified bytes.\n",
+                    zDst, zWantHash, zGotHash);
+                unlink(zTmpManifest);
+                free(pManifest);
+                return 1;
+            }else{
+                fprintf(stderr, "viki cache pull:   %s sha256 verified against the epoch pin\n",
+                        aModelFile[i].zBase);
+            }
+        }
+    }
+    free(pManifest);
+
+    /* Install the pin only now that everything it names is on disk and
+    ** verified -- see the push-order comment at the top of this file. */
+    snprintf(zDst, sizeof(zDst), "%s/viki-manifest.json", zDir);
+    if( copy_file(zTmpManifest, zDst) != 0 ){
+        fprintf(stderr, "viki cache pull: cannot write '%s': %s\n", zDst, strerror(errno));
+        unlink(zTmpManifest);
+        return 1;
+    }
+    nTotal += file_size(zDst);
+    unlink(zTmpManifest);
+
+    fprintf(stderr, "viki cache pull: model epoch '%s' installed at '%s' (%s) -- hybrid retrieval available\n",
+            zModelId, zDir, fmt_mb(nTotal, zSize, sizeof(zSize)));
     return 0;
 }
 
-int viki_cmd_cache_pull(const char *zCacheDbPath){
+int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags){
     const char *fossil = viki_fossil_binary();
     char *argvSync[] = { (char*)fossil, "uv", "sync", NULL };
     char *argvExport[] = { (char*)fossil, "uv", "export", VIKI_UV_NAME, (char*)zCacheDbPath, NULL };
@@ -112,5 +552,18 @@ int viki_cmd_cache_pull(const char *zCacheDbPath){
             "if this is a fresh clone with nothing pushed yet, that's expected\n", rc);
         return 1;
     }
-    return 0;
+
+    if( mFlags & VIKI_CACHE_NO_MODEL ){
+        fprintf(stderr, "viki cache pull: --no-model: embedding cache only, model not fetched\n");
+        return 0;
+    }
+    return pull_model(fossil);
+}
+
+int viki_cmd_cache_push(const char *zCacheDbPath){
+    return viki_cmd_cache_push_opts(zCacheDbPath, 0);
+}
+
+int viki_cmd_cache_pull(const char *zCacheDbPath){
+    return viki_cmd_cache_pull_opts(zCacheDbPath, 0);
 }
