@@ -1,0 +1,78 @@
+#!/bin/sh
+#
+# capture-probe.sh -- the capture loop: `viki capture` / projection / `viki notes`.
+#
+# WHY THIS EXISTS
+# ---------------
+# The capture loop answers the two questions similarity ranking cannot, and
+# both were WRONG in the first implementation:
+#
+#   "what needs to be done in monument rocks?"  -- needs filter + aggregate
+#   "who baited rimi site last?"                -- needs a temporal superlative
+#
+# C1/C2 are those two questions, and C3 is the control that matters most: an
+# OBSERVATION ("new foal in rimi's band") must never be returned as a chore.
+# `viki ask` returned exactly that, which is why `notes` exists.
+#
+# THE REGRESSION THIS FILE EXISTS TO PIN (R1): the first implementation gave
+# every capture in the same SECOND the same id, and the projection's
+# INSERT OR REPLACE silently kept only the last -- 7 captured, 3 projected.
+# It was even documented as acceptable. It is not: capture is the one
+# operation that must never lose an input, and rapid capture is normal use.
+# R1 captures a burst as fast as the shell can and asserts NOTHING is lost.
+#
+# Usage: sh build/capture-probe.sh <scratch-dir> [viki-binary]
+set -e
+DIR="${1:?usage: capture-probe.sh <scratch-dir> [viki-binary]}"
+VIKI="${2:-$(cd "$(dirname "$0")/.." && pwd)/build/dist/viki}"
+case "$VIKI" in /*) ;; *) echo "ERR: viki path must be ABSOLUTE"; exit 2 ;; esac
+PASS=0; FAIL=0
+ck(){ if eval "$2" >/dev/null 2>&1; then PASS=$((PASS+1)); echo "  PASS  $1"; else FAIL=$((FAIL+1)); echo "  FAIL  $1"; fi; }
+
+rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
+# NO model anywhere: capture must work offline, on a phone, with nothing built.
+export VIKI_MODEL_DIR=/nonexistent-on-purpose
+
+"$VIKI" capture "camper needs propane"                        --type task --place "Monument Rocks" >/dev/null
+"$VIKI" capture "new foal in rimi's band"                     --type observation --place "Rimi site" >/dev/null
+"$VIKI" capture "buffalo wallow tank 3 is cracked"            --type task --place "monument rocks" >/dev/null
+"$VIKI" capture "renee cannot lift heavy items"               --type rule --who Renee >/dev/null
+"$VIKI" capture "put out mineral and bait"   --type task --place "Rimi site" --who Warren --state closed >/dev/null
+"$VIKI" capture "salted and re-baited the station" --type task --place "Rimi site" --who Marta --state closed >/dev/null
+"$VIKI" capture "bait station serviced again"      --type task --place "Rimi site" --who Hugh  --state closed >/dev/null
+"$VIKI" index . >/dev/null 2>&1
+
+ck "S1 capture works with NO model present"        '[ -f captures/*.md ]'
+ck "S2 every capture reached the projection"       '[ "$("$VIKI" notes --k 99 2>/dev/null | grep -c "^[0-9]\{8\}-")" -eq 7 ]'
+ck "C1 open tasks at a place, and ONLY those"      '[ "$("$VIKI" notes --place "monument rocks" --state open --type task 2>/dev/null | grep -c "^[0-9]")" -eq 2 ]'
+ck "C1b CONTROL: a different place gives different work" \
+   '! "$VIKI" notes --place "rimi site" --state open --type task 2>/dev/null | grep -q "propane"'
+ck "C2 --last returns the MOST RECENT, not the best-worded" \
+   '"$VIKI" notes --place "rimi site" --grep bait --last 2>/dev/null | grep -q "hugh"'
+ck "C2b CONTROL: without --last the older ones are still there" \
+   '[ "$("$VIKI" notes --place "rimi site" --grep bait 2>/dev/null | grep -c "^[0-9]")" -eq 3 ]'
+ck "C3 an OBSERVATION is never returned as a chore" \
+   '! "$VIKI" notes --state open --type task 2>/dev/null | grep -q "new foal"'
+ck "C3b CONTROL: the observation IS retrievable as itself" \
+   '"$VIKI" notes --type observation 2>/dev/null | grep -q "new foal"'
+ck "C4 a RULE is not a chore either"               '! "$VIKI" notes --type task 2>/dev/null | grep -q "cannot lift"'
+ck "N1 place spelling is normalised on both sides" \
+   '[ "$("$VIKI" notes --place "MONUMENT   rocks" 2>/dev/null | grep -c "^[0-9]")" -eq 2 ]'
+ck "N2 --who filters"                              '"$VIKI" notes --who marta 2>/dev/null | grep -q "salted"'
+ck "N3 --since excludes the past"                  '[ "$("$VIKI" notes --since 2099-01-01 2>/dev/null | grep -c "^[0-9]")" -eq 0 ]'
+ck "N4 --grep is a regex, not a substring"         '"$VIKI" notes --grep "re-?baited" 2>/dev/null | grep -q "salted"'
+
+# R1 -- the data-loss regression, pinned. A burst as fast as the shell allows.
+mkdir -p "$DIR/burst" && cd "$DIR/burst"
+i=0; while [ $i -lt 25 ]; do "$VIKI" capture "burst note $i" --type task >/dev/null; i=$((i+1)); done
+"$VIKI" index . >/dev/null 2>&1
+ck "R1 a 25-note burst loses NOTHING (same-second ids)" \
+   '[ "$("$VIKI" notes --k 99 2>/dev/null | grep -c "^[0-9]\{8\}-")" -eq 25 ]'
+ck "R1b ... and every id is distinct" \
+   '[ "$("$VIKI" notes --k 99 2>/dev/null | grep -o "^[0-9]\{8\}-[0-9]\{6\}-[0-9]\{6\}" | sort -u | wc -l)" -eq 25 ]'
+ck "R2 rebuild is idempotent, not cumulative" \
+   '"$VIKI" index . >/dev/null 2>&1; [ "$("$VIKI" notes --k 99 2>/dev/null | grep -c "^[0-9]\{8\}-")" -eq 25 ]'
+
+echo
+echo "PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" -eq 0 ]

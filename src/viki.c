@@ -13,6 +13,7 @@
 #include "viki_ask.h"
 #include "viki_muse.h"
 #include "viki_grep.h"
+#include "viki_note.h"
 #include "viki_cache.h"
 #include "viki_serve.h"
 #include "embed.h"
@@ -65,6 +66,18 @@ static void usage(void){
         "                           NOT PCRE: use [[:digit:]] not \\d, and there is no\n"
         "                           lookaround. -i is case-insensitive; --source filters by\n"
         "                           SQL LIKE on the source path (e.g. --source 'ckin:%').\n"
+        "  capture \"<text>\" [--place P] [--type T] [--who W] [--due D] [--state S]\n"
+        "                           Append a note to captures/YYYY-MM.md. OFFLINE: no model, no\n"
+        "                           network, no fossil needed. Structure is optional -- capture\n"
+        "                           must never block on what the capturer does not know; an\n"
+        "                           agent can add @key lines later. --type task defaults the\n"
+        "                           state to open.\n"
+        "  notes [--place P] [--type T] [--state S] [--who W] [--since ISO]\n"
+        "        [--grep RE] [--last] [--k N]\n"
+        "                           Query captured notes by FIELD, not by similarity: filter,\n"
+        "                           aggregate, and order by time. Answers what `ask` cannot --\n"
+        "                           \"what is open at monument rocks\" (a list, not five chunks)\n"
+        "                           and \"who did X last\" (a superlative similarity cannot do).\n"
         "  serve [--host H] [--port N]\n"
         "                           Local HTTP server: human search page at / plus a JSON API for\n"
         "                           agents/scripts (GET /api/ask?q=&k=, /api/chunk?hash=&ix=,\n"
@@ -158,6 +171,45 @@ int main(int argc, char **argv){
         emb = open_embedder_if_available();
         rc = viki_cmd_ask_opts(db, argv[2], k, emb, &aopts);
         if( emb ) viki_embedder_close(emb);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "capture") == 0 ){
+        const char *zPlace=NULL,*zType=NULL,*zWho=NULL,*zDue=NULL,*zState=NULL;
+        int i;
+        if( argc < 3 ){ fprintf(stderr, "usage: viki capture \"<text>\" [--place P] [--type T] [--who W] [--due D] [--state S]\n"); return 1; }
+        for( i = 3; i < argc; i++ ){
+            if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
+            else if( strcmp(argv[i], "--type") == 0 && i+1 < argc ) zType = argv[++i];
+            else if( strcmp(argv[i], "--who") == 0 && i+1 < argc ) zWho = argv[++i];
+            else if( strcmp(argv[i], "--due") == 0 && i+1 < argc ) zDue = argv[++i];
+            else if( strcmp(argv[i], "--state") == 0 && i+1 < argc ) zState = argv[++i];
+            else { fprintf(stderr, "viki capture: unknown option '%s'\n", argv[i]); return 1; }
+        }
+        /* Deliberately does NOT open the cache db: capture must work on a
+        ** phone in a field with no model, no network and nothing indexed. */
+        return viki_cmd_capture(".", argv[2], zPlace, zType, zWho, zDue, zState);
+    }
+
+    if( strcmp(sub, "notes") == 0 ){
+        sqlite3 *db;
+        const char *zPlace=NULL,*zType=NULL,*zState=NULL,*zWho=NULL,*zSince=NULL,*zGrep=NULL;
+        int bLast = 0, nMax = 0, i;
+        for( i = 2; i < argc; i++ ){
+            if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
+            else if( strcmp(argv[i], "--type") == 0 && i+1 < argc ) zType = argv[++i];
+            else if( strcmp(argv[i], "--state") == 0 && i+1 < argc ) zState = argv[++i];
+            else if( strcmp(argv[i], "--who") == 0 && i+1 < argc ) zWho = argv[++i];
+            else if( strcmp(argv[i], "--since") == 0 && i+1 < argc ) zSince = argv[++i];
+            else if( strcmp(argv[i], "--grep") == 0 && i+1 < argc ) zGrep = argv[++i];
+            else if( strcmp(argv[i], "--last") == 0 ) bLast = 1;
+            else if( strcmp(argv[i], "--k") == 0 && i+1 < argc ) nMax = atoi(argv[++i]);
+            else { fprintf(stderr, "viki notes: unknown option '%s'\n", argv[i]); return 1; }
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        rc = viki_cmd_notes(db, zPlace, zType, zState, zWho, zSince, zGrep, bLast, nMax);
         sqlite3_close(db);
         return rc;
     }

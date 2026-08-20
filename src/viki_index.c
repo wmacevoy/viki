@@ -1,4 +1,5 @@
 #include "viki_index.h"
+#include "viki_note.h"
 #include "viki_cache.h" /* viki_fossil_binary/viki_fossil_user, shared subprocess config */
 #include "sha256.h"
 
@@ -1814,5 +1815,13 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
                 auth.attach ? "" : " attach:",
                 auth.uv     ? "" : " uv:");
     }
-    return 0;
+        {
+        /* Capture projection, after the chunk work: viki_note is rebuilt from
+        ** captures/*.md wholesale, so it can never carry a stale row and needs
+        ** none of the sweep-scoping care above. */
+        int nNote = viki_note_reindex(db, zDir);
+        if( nNote >= 0 )
+            fprintf(stderr, "viki index: %d captured note(s) projected\n", nNote);
+    }
+return 0;
 }

@@ -23,6 +23,30 @@ working online; his own access is secondary and may be offline):
   5. §17 multi-resolution indexing -- what §19c's negative result argues for
   6. §1 external-corpus eval -- most of this queue rests on a degenerate corpus
 
+## 0. EVAL DISCIPLINE -- binding on every entry below (Warren, 2026-08-20)
+
+**Every retrieval measurement runs against BOTH corpora, always:**
+
+1. `../life-by-the-numbers` -- 36 .tex files, ~41k words of real authored prose.
+   Queries come from the author's own chapter phrasings, so the query set carries
+   no contamination from whoever is running the experiment.
+2. **Fabricated field notes** -- short operational records with the properties
+   viki's actual use has and project docs do not: proper nouns, domain vocabulary
+   whose spelling differs from how anyone later asks (`off fore` vs `right front`),
+   dates, people, places, and open/closed state. Live at `test/field-notes/`.
+
+Neither alone is enough, and they fail in OPPOSITE directions -- which is the
+point. The book is long-form prose queried topically; the notes are one-line
+records queried for specific facts. Section 19c is the proof: token-budgeted
+chunking won decisively on project docs, then LOST on the book, because chunk
+size trades against query specificity. A single corpus cannot show that.
+
+**viki's own docs are NOT an acceptable corpus.** They are degenerate: median
+chunk-to-chunk cosine 0.397 against the book's 0.296, because most of the text
+is agents writing about one project. Entries measured that way carry a
+DEPRECATED banner and are hypotheses, not findings.
+
+
 ## 1. External-corpus eval mode  (user approved 2026-08-16)
 Extend the round's eval harness so a corpus path comes from env (life-by-the-numbers at
 `../life-by-the-numbers`, 36 .tex files, ~41k words). Queries + expected-answer keys live
@@ -78,6 +102,12 @@ HTML and source files. Belongs with the tokenizer work.
 - `viki index sub` vs `viki index ./sub` re-keys viki_source and inflates the retired count.
 
 ## 8. Fixing the negative-trap class -- the worst-scoring and most valuable class
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 Baseline: negative-trap scores recall@5 0.333 dev, **0.000 held-out**. These are queries
 phrased as a SYMPTOM ("I rewrote a file and re-ran the indexer but the old wording keeps
 coming back") whose answer chunk is written in HINDSIGHT vocabulary (mtime, sweep_sources).
@@ -114,6 +144,12 @@ invariance and works (that asymmetry is real: query->chunk tops out ~0.51 while
 chunk->chunk runs 0.30-0.40 median).
 
 ## 9. Typo tolerance -- a REQUIREMENT, not a nicety (phone, in the field, blurry text)
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 Measured on the repo-docs corpus, 3 typos per query (adjacent-key, transposition, drop):
 - MATCHING is unaffected: implicit-AND returns 0 rows / OR-of-terms returns 158 rows, and
   158 is IDENTICAL for clean, one-typo and three-typo queries. A typo removes one disjunct
@@ -166,6 +202,12 @@ WORTH STEALING: the typo model -- an edit-distance budget scaled to word length 
 precision does not degrade for people who typed it correctly. Implement inside §10.
 
 ## 14. THE VECTOR LEG HURTS RANK-1 PRECISION -- root cause is chunk truncation
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 Measured 2026-08-17 by me, three configurations, SAME 138-chunk corpus, 43 queries:
 | config | hybrid r@1 | its own BM25-only control |
 |---|---|---|
@@ -241,6 +283,12 @@ centroid joins the epoch pin in viki-manifest.
 Analogy's limit: Haar is orthogonal and invertible; this is neither.
 
 ## 18. SLIDING WINDOW (stride < width) -- measured 2026-08-20, the biggest single win yet
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 Warren's proposal: slide 20 with width 40. Framing: non-overlapping chunks are SHIFT-VARIANT
 (where the boundary falls changes the representation arbitrarily); stride<width is the
 undecimated / a-trous transform, which trades redundancy for shift-invariance.
@@ -269,6 +317,12 @@ Implementation note: VIKI_CHUNK_LINES is a compile-time #define in src/viki_inde
 change needs a stride parameter, and the manifest must record BOTH width and stride.
 
 ## 19. TOKEN-BUDGETED CHUNKING -- supersedes §18's recommendation. DO THIS.
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 Warren: "match viki chunking to 254 -- this is an impedance mismatch." Correct, and severe.
 THE MISMATCH, measured with the real vocab.txt (WordPiece reimplemented in Python):
   width 40 lines: median 636 tok, 96.9% of windows exceed 254 -> **60.9% of ALL corpus
@@ -302,6 +356,12 @@ in the manifest, and any change to them is an EPOCH BUMP.
 STILL UNTESTED: fusion (this is vector-only), and a non-degenerate corpus (§1, the book).
 
 ## 19b. Refinement: tokens are the UNIT, lines are still the CUT POINT (2026-08-20)
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 Warren asked why lines at all -- why not slide continuously through a token stream. Tested.
 (whitespace-insensitive anchor matching, so tok254 reads slightly higher than in §19)
 | chunking | windows | r@1 | r@5 | r@10 | med |
@@ -321,6 +381,12 @@ Answer to "why lines?": no reason. AGENTS.md has flagged "fixed 40-line splits, 
 no token awareness" as naive since M1. It was a placeholder, never a design.
 
 ## 20. Fragment marking ("...") at chunk boundaries  (Warren, 2026-08-20)
+
+> **DEPRECATED MEASUREMENT (2026-08-20).** The numbers in this entry were taken
+> against viki's OWN docs -- a degenerate corpus (median chunk-chunk cosine 0.397;
+> fourteen agents writing about one project). Section 19c shows a result measured
+> that way can REVERSE on real prose. Treat these as hypotheses, not findings, until
+> re-run against BOTH `../life-by-the-numbers` and the fabricated field notes.
 viki does NO boundary marking today: a window starting mid-sentence is stored and embedded
 as if it were a complete text ("and twenty years ago" reads as an assertion, not an excerpt).
 Tested on the tok254_s127 winner: prepend "... " unless the window starts the document,

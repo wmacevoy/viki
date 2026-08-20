@@ -39,6 +39,25 @@ static const char *SCHEMA_SQL =
     ** stale. And because content is shared (two paths with identical bytes
     ** collapse to one content_hash), liveness is a reference count, never
     ** a one-to-one mapping. */
+    /* Capture-loop projection. Like everything else in this file it is
+    ** DERIVED and disposable (D-10): captures/*.md in the checkout are the
+    ** truth, and viki_note is rebuilt from them wholesale on every index --
+    ** see viki_note.h for why a full rebuild rather than incremental
+    ** invalidation. It exists because similarity ranking cannot filter by
+    ** state or aggregate, and knows nothing about "last". */
+    "CREATE TABLE IF NOT EXISTS viki_note("
+    "  note_id     TEXT PRIMARY KEY,"
+    "  ts          TEXT NOT NULL,"   /* ISO-8601 UTC: lexical order IS time order */
+    "  type        TEXT,"
+    "  place       TEXT,"
+    "  who         TEXT,"
+    "  due         TEXT,"
+    "  state       TEXT,"
+    "  text        TEXT NOT NULL,"
+    "  source_path TEXT"
+    ");"
+    "CREATE INDEX IF NOT EXISTS viki_note_ts ON viki_note(ts DESC);"
+    "CREATE INDEX IF NOT EXISTS viki_note_place ON viki_note(place);"
     "CREATE TABLE IF NOT EXISTS viki_source("
     "  path TEXT PRIMARY KEY,"
     "  content_hash TEXT NOT NULL,"
