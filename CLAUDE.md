@@ -45,6 +45,9 @@ build/dist/viki index <dir>              # walk + chunk + hash + embed into .vik
 build/dist/viki ask "<query>" [--k N]    # hybrid top-5; each hit prints
                                          #   [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>
                                          # then the snippet indented 4 spaces
+build/dist/viki grep "<regex>"           # exact POSIX-ERE regex over every indexed chunk,
+                                         #   including artifacts `rg` cannot see (ckin:, wiki:,
+                                         #   ticket:, forum:, note:, attach:, uv:). ERE not PCRE.
 build/dist/viki muse [--k N] [--seed N] [--from <hash>#<ix>]
                                          # undirected recall: NO query. Returns chunks from
                                          # the MIDDLE of a random seed chunk's cosine band.

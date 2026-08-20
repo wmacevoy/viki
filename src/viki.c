@@ -12,6 +12,7 @@
 #include "viki_index.h"
 #include "viki_ask.h"
 #include "viki_muse.h"
+#include "viki_grep.h"
 #include "viki_cache.h"
 #include "viki_serve.h"
 #include "embed.h"
@@ -55,6 +56,15 @@ static void usage(void){
         "                           --seed makes a run replayable; the seed used is always\n"
         "                           printed. Run header on stderr, hits on stdout, in `ask` form:\n"
         "                             [<n>] cos=<c> rank=<r>  <content_hash>#<chunk_ix>  <source>\n"
+        "  grep \"<regex>\" [--k N] [-i] [--source <like>] [--chars N]\n"
+        "                           POSIX regex over EVERY indexed chunk -- including the\n"
+        "                           artifacts that are not files and so cannot be grepped:\n"
+        "                           check-in comments, wiki, tickets, forum posts, tech\n"
+        "                           notes, ticket changes, attachments, unversioned files.\n"
+        "                           Exact and UNRANKED, unlike 'ask'. Syntax is POSIX ERE,\n"
+        "                           NOT PCRE: use [[:digit:]] not \\d, and there is no\n"
+        "                           lookaround. -i is case-insensitive; --source filters by\n"
+        "                           SQL LIKE on the source path (e.g. --source 'ckin:%').\n"
         "  serve [--host H] [--port N]\n"
         "                           Local HTTP server: human search page at / plus a JSON API for\n"
         "                           agents/scripts (GET /api/ask?q=&k=, /api/chunk?hash=&ix=,\n"
@@ -145,6 +155,33 @@ int main(int argc, char **argv){
         emb = open_embedder_if_available();
         rc = viki_cmd_ask(db, argv[2], k, emb);
         if( emb ) viki_embedder_close(emb);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "grep") == 0 ){
+        /* Regex over the indexed corpus. No embedder is opened: this path
+        ** never embeds anything, and loading the ONNX model costs more than
+        ** the whole scan on a personal-scale cache. */
+        sqlite3 *db;
+        int k = 0, icase = 0, nChars = 160, i;
+        const char *zSrc = NULL;
+        if( argc < 3 ){ fprintf(stderr, "usage: viki grep \"<regex>\" [--k N] [-i] [--source <like>] [--chars N]\n"); return 1; }
+        for( i = 3; i < argc; i++ ){
+            if( strcmp(argv[i], "--k") == 0 && i + 1 < argc ) k = atoi(argv[++i]);
+            else if( strcmp(argv[i], "-i") == 0 ) icase = 1;
+            else if( strcmp(argv[i], "--source") == 0 && i + 1 < argc ) zSrc = argv[++i];
+            else if( strcmp(argv[i], "--chars") == 0 && i + 1 < argc ) nChars = atoi(argv[++i]);
+            else { fprintf(stderr, "viki grep: unknown option '%s'\n", argv[i]); return 1; }
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        if( viki_grep_register(db) != SQLITE_OK ){
+            fprintf(stderr, "viki grep: could not register regexp()\n");
+            sqlite3_close(db);
+            return 1;
+        }
+        rc = viki_cmd_grep(db, argv[2], k, icase, zSrc, nChars);
         sqlite3_close(db);
         return rc;
     }

@@ -87,10 +87,11 @@ FINDINGS.md.
 
 ```
 src/            viki CLI source (C)
-  viki.c          subcommand dispatch (index / ask / muse / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
+  viki.c          subcommand dispatch (index / ask / muse / grep / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
   viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: on an ENCRYPTED repo each `fossil` invocation pays a SQLCipher KDF, so the per-artifact idiom is minutes where this is seconds. Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
   viki_muse.c/.h  `viki muse`: undirected recall, NO query. Picks a seed chunk and returns chunks from the calibrated MIDDLE of that seed's cosine band -- close enough to be about something, far enough that `ask` would never surface them. Vector-only (an unembedded cache is refused, not faked with BM25), but needs no model FILE: a cache pulled from a peer muses with no `model.onnx` on disk. Rejected scorers (|cos|, sum|xi*yi|, random subspace, anti-search) are recorded in `viki_muse.h` WITH the numbers that killed them, against a uniform-random control
+  viki_grep.c/.h  `viki grep "<regex>"`: POSIX regex over every indexed chunk, exact and UNRANKED -- the complement to `ask`, for when you know the literal string rather than the idea. Its reason to exist is the artifacts `rg` CANNOT reach: five of the nine indexed classes (check-in comments, tech notes, ticket changes, attachments, unversioned files) plus wiki/tickets/forum are not files on disk. Engine is libc POSIX regcomp/regexec -- no vendored library, no download, no submodule -- so the syntax is ERE, NOT PCRE (`[[:digit:]]`, not `\d`; no lookaround). Registers `regexp()`/`regexpi()` on the cache db, which also makes SQLite's infix `x REGEXP y` work for agents driving .viki/cache.db directly. Compiled patterns are cached via sqlite3_set_auxdata so a scan compiles once, not once per row.
   viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
                   Each leg scores a given `(content_hash, chunk_ix)` at most once, at its best rank (`leg_hit()`), so a cache holding several `model_id` epochs of
                   the same content -- the normal steady state of D-11 sharing -- ranks identically to a single-epoch one instead of double-counting the BM25 leg (FINDINGS.md).
@@ -214,6 +215,8 @@ build/dist/viki index <dir>          # walk dir, populate .viki/cache.db (relati
 build/dist/viki ask "<query>"        # hybrid top-5 (--k N to change); each hit prints
                                     #   [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>
                                     # then the snippet indented 4 spaces
+build/dist/viki grep "<regex>"      # POSIX-ERE regex over ALL indexed artifacts, not just files;
+                                    #   -i, --k N, --chars N, --source 'ckin:%' to scope by class
 build/dist/viki cache push [db-path] [--no-model]
                                     # publish cache + pinned model as uv blobs (run from an open
                                     #   fossil-see checkout). --no-model = cache only; the model
