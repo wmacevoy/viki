@@ -72,6 +72,15 @@ static void usage(void){
         "                           must never block on what the capturer does not know; an\n"
         "                           agent can add @key lines later. --type task defaults the\n"
         "                           state to open.\n"
+        "  structure --pending [--k N]\n"
+        "  structure <note-id> [--type T] [--place P] [--who W] [--due D] [--state S]\n"
+        "            [--closes ID]\n"
+        "                           The ONLINE half of the capture loop. --pending lists\n"
+        "                           captures with no @type yet -- the agent's work queue.\n"
+        "                           Applying rewrites the block in its capture file (temp +\n"
+        "                           rename, so an interrupted pass cannot truncate it).\n"
+        "                           --closes marks the TARGET note closed and records the\n"
+        "                           link, which is how \"tire fixed\" retires \"tire is flat\".\n"
         "  notes [--place P] [--type T] [--state S] [--who W] [--since ISO]\n"
         "        [--grep RE] [--last] [--k N]\n"
         "                           Query captured notes by FIELD, not by similarity: filter,\n"
@@ -190,6 +199,36 @@ int main(int argc, char **argv){
         /* Deliberately does NOT open the cache db: capture must work on a
         ** phone in a field with no model, no network and nothing indexed. */
         return viki_cmd_capture(".", argv[2], zPlace, zType, zWho, zDue, zState);
+    }
+
+    if( strcmp(sub, "structure") == 0 ){
+        sqlite3 *db;
+        const char *zId=NULL,*zType=NULL,*zPlace=NULL,*zWho=NULL,*zDue=NULL,*zState=NULL,*zCloses=NULL;
+        int bPending = 0, nMax = 0, i;
+        for( i = 2; i < argc; i++ ){
+            if( strcmp(argv[i], "--pending") == 0 ) bPending = 1;
+            else if( strcmp(argv[i], "--k") == 0 && i+1 < argc ) nMax = atoi(argv[++i]);
+            else if( strcmp(argv[i], "--type") == 0 && i+1 < argc ) zType = argv[++i];
+            else if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
+            else if( strcmp(argv[i], "--who") == 0 && i+1 < argc ) zWho = argv[++i];
+            else if( strcmp(argv[i], "--due") == 0 && i+1 < argc ) zDue = argv[++i];
+            else if( strcmp(argv[i], "--state") == 0 && i+1 < argc ) zState = argv[++i];
+            else if( strcmp(argv[i], "--closes") == 0 && i+1 < argc ) zCloses = argv[++i];
+            else if( argv[i][0] != '-' && !zId ) zId = argv[i];
+            else { fprintf(stderr, "viki structure: unknown option '%s'\n", argv[i]); return 1; }
+        }
+        if( !bPending && !zId ){
+            fprintf(stderr, "usage: viki structure --pending [--k N]\n"
+                            "       viki structure <note-id> [--type T] [--place P] [--who W]"
+                            " [--due D] [--state S] [--closes ID]\n");
+            return 1;
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        rc = bPending ? viki_cmd_structure_pending(db, nMax)
+                      : viki_cmd_structure_apply(db, zId, zType, zPlace, zWho, zDue, zState, zCloses);
+        sqlite3_close(db);
+        return rc;
     }
 
     if( strcmp(sub, "notes") == 0 ){

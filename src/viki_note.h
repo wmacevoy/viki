@@ -59,6 +59,32 @@ int viki_cmd_capture(const char *zDir, const char *zText,
 ** `viki index` after the chunk work. Returns rows projected, or -1. */
 int viki_note_reindex(sqlite3 *db, const char *zDir);
 
+/* `viki structure --pending [--k N]`: lists captures that carry no @type yet,
+** i.e. the work queue FOR THE AGENT. Output is one note per line, id first,
+** so a caller can iterate it without parsing prose. */
+int viki_cmd_structure_pending(sqlite3 *db, int nMax);
+
+/* `viki structure <note-id> [--type T] [--place P] [--who W] [--due D]
+**                           [--state S] [--closes ID]`
+**
+** Rewrites the block in its capture file, adding or replacing @key lines.
+** viki owns this write rather than telling an agent to hand-edit, because a
+** malformed block silently becomes a different note (or merges with its
+** neighbour), and capture files are the TRUTH here -- the projection is
+** disposable but they are not. Writes via temp file + rename so an
+** interrupted structure pass cannot leave a half-written capture file.
+**
+** --closes is supersession, made explicit: it marks the TARGET note closed
+** and records the link on this one. "tire for utv fixed" closing "utv tire
+** is flat" is the same relation as a forum edit superseding its original and
+** a corrected measurement superseding a stale one -- the spine this project
+** has now met at four different layers. Recording WHICH note closed a thing
+** is what makes the history answerable later, rather than just the state.
+*/
+int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
+                             const char *zPlace, const char *zWho, const char *zDue,
+                             const char *zState, const char *zCloses);
+
 /* `viki notes [filters]` -- the aggregation and recency surface.
 ** NULL/0 means "no filter on that field". bLast returns only the most recent
 ** match, which is the "who baited rimi site last" shape. */

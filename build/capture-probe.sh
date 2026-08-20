@@ -73,6 +73,33 @@ ck "R1b ... and every id is distinct" \
 ck "R2 rebuild is idempotent, not cumulative" \
    '"$VIKI" index . >/dev/null 2>&1; [ "$("$VIKI" notes --k 99 2>/dev/null | grep -c "^[0-9]\{8\}-")" -eq 25 ]'
 
+
+# ---- the STRUCTURE half: viki finds the work, an agent judges, viki writes ----
+mkdir -p "$DIR/st" && cd "$DIR/st"
+"$VIKI" capture "utv tire is flat, left at low gap" >/dev/null
+"$VIKI" capture "camper needs propane" >/dev/null
+"$VIKI" index . >/dev/null 2>&1
+FLAT=$("$VIKI" structure --pending 2>/dev/null | grep "tire is flat" | cut -f1)
+ORIG_TEXT="$(grep -c 'utv tire is flat, left at low gap' captures/*.md)"
+
+ck "ST1 --pending lists captures with no @type"     '[ "$("$VIKI" structure --pending 2>/dev/null | grep -c "^[0-9]")" -eq 2 ]'
+ck "ST2 applying a type makes it queryable"         '"$VIKI" structure "$FLAT" --type task --place "Low Gap" --state open >/dev/null 2>&1; "$VIKI" index . >/dev/null 2>&1; "$VIKI" notes --place "low gap" --state open 2>/dev/null | grep -q "tire is flat"'
+ck "ST2b CONTROL: --pending no longer lists it"     '! "$VIKI" structure --pending 2>/dev/null | grep -q "tire is flat"'
+ck "ST3 the CAPTURED TEXT is byte-identical after a rewrite"    '[ "$(grep -c "utv tire is flat, left at low gap" captures/*.md)" -eq "$ORIG_TEXT" ]'
+ck "ST3b the other note in the same file survived"  'grep -q "camper needs propane" captures/*.md'
+ck "ST4 re-structuring does not duplicate @ lines"    '"$VIKI" structure "$FLAT" --place "Low Gap" >/dev/null 2>&1; [ "$(grep -c "^@place" captures/*.md)" -eq 1 ]'
+ck "ST5 an unknown id fails, and says so"           '! "$VIKI" structure 99999999-999999-999999 --type task >/dev/null 2>&1'
+
+# supersession: the fix retires the original
+"$VIKI" capture "tire for utv fixed. parked at low gap." >/dev/null
+"$VIKI" index . >/dev/null 2>&1
+FIX=$("$VIKI" structure --pending 2>/dev/null | grep "tire for utv fixed" | cut -f1)
+"$VIKI" structure "$FIX" --type task --place "Low Gap" --state closed --closes "$FLAT" >/dev/null 2>&1
+"$VIKI" index . >/dev/null 2>&1
+ck "ST6 --closes retires the TARGET note"           '! "$VIKI" notes --state open 2>/dev/null | grep -q "tire is flat"'
+ck "ST6b ... and the link is recorded, not just the state"    '"$VIKI" notes --k 99 2>/dev/null >/dev/null; grep -q "^@closes $FLAT" captures/*.md'
+ck "ST6c CONTROL: an unrelated open note is untouched"    '"$VIKI" structure --pending 2>/dev/null | grep -q "camper" || "$VIKI" notes 2>/dev/null | grep -q "camper"'
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

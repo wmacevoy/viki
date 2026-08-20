@@ -53,6 +53,7 @@ static const char *SCHEMA_SQL =
     "  who         TEXT,"
     "  due         TEXT,"
     "  state       TEXT,"
+    "  closes      TEXT,"   /* note_id this one supersedes -- see viki_note.h */
     "  text        TEXT NOT NULL,"
     "  source_path TEXT"
     ");"

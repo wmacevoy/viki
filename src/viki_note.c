@@ -19,6 +19,7 @@ typedef struct {
     char who[64];
     char due[32];
     char state[16];
+    char closes[40];
     char text[1024];
 } viki_note;
 
@@ -77,6 +78,7 @@ static void set_field(viki_note *p, const char *key, const char *val){
     else if( strcmp(key, "who") == 0 ) normalize_key(val, p->who, sizeof(p->who));
     else if( strcmp(key, "due") == 0 ) strncpy(p->due, val, sizeof(p->due)-1);
     else if( strcmp(key, "state") == 0 ) normalize_key(val, p->state, sizeof(p->state));
+    else if( strcmp(key, "closes") == 0 ) strncpy(p->closes, val, sizeof(p->closes)-1);
 }
 
 int viki_cmd_capture(const char *zDir, const char *zText,
@@ -158,6 +160,7 @@ static void note_flush(sqlite3_stmt *ins, viki_note *p, const char *zPath, int *
     sqlite3_bind_text(ins, 7, p->state, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(ins, 8, p->text, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(ins, 9, zPath, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 10, p->closes, -1, SQLITE_TRANSIENT);
     if( sqlite3_step(ins) == SQLITE_DONE ) (*pN)++;
     note_clear(p);
 }
@@ -209,8 +212,8 @@ int viki_note_reindex(sqlite3 *db, const char *zDir){
 
     if( sqlite3_prepare_v2(db,
             "INSERT OR REPLACE INTO viki_note"
-            "(note_id,ts,type,place,who,due,state,text,source_path)"
-            " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", -1, &ins, NULL) != SQLITE_OK ){
+            "(note_id,ts,type,place,who,due,state,text,source_path,closes)"
+            " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", -1, &ins, NULL) != SQLITE_OK ){
         closedir(d);
         return -1;
     }
@@ -287,5 +290,146 @@ int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
     sqlite3_finalize(st);
     if( n == 0 ) fprintf(stderr, "(no notes match)\n");
     else fprintf(stderr, "viki notes: %d note(s)\n", n);
+    return 0;
+}
+
+
+/* ---- structure: find the work, then apply it safely ---- */
+
+int viki_cmd_structure_pending(sqlite3 *db, int nMax){
+    sqlite3_stmt *st;
+    int n = 0;
+    /* "Unstructured" means no @type. Type is the field that decides whether a
+    ** note is a chore at all, and it is the one an agent must supply before
+    ** `viki notes` can answer anything useful -- an untyped note is invisible
+    ** to every --type filter and would otherwise sit in the file forever. */
+    if( sqlite3_prepare_v2(db,
+            "SELECT note_id, ts, text FROM viki_note"
+            " WHERE type IS NULL OR type='' ORDER BY ts ASC LIMIT ?1",
+            -1, &st, NULL) != SQLITE_OK ){
+        fprintf(stderr, "viki structure: %s\n", sqlite3_errmsg(db));
+        return 1;
+    }
+    sqlite3_bind_int(st, 1, nMax > 0 ? nMax : 100);
+    while( sqlite3_step(st) == SQLITE_ROW ){
+        n++;
+        printf("%s\t%s\t%s\n", sqlite3_column_text(st, 0),
+               sqlite3_column_text(st, 1), sqlite3_column_text(st, 2));
+    }
+    sqlite3_finalize(st);
+    if( n == 0 ) fprintf(stderr, "(nothing pending -- every capture has a @type)\n");
+    else fprintf(stderr, "viki structure: %d capture(s) awaiting structure\n", n);
+    return 0;
+}
+
+/* Emits the @key line for one field if the caller supplied it, else the
+** original line if there was one. Returning "was it written" lets the caller
+** append any field the block did not already carry. */
+static int emit_field(FILE *out, const char *key, const char *zNew, const char *zOld){
+    const char *v = zNew ? zNew : zOld;
+    if( !v || !v[0] ) return 0;
+    fprintf(out, "@%s %s\n", key, v);
+    return 1;
+}
+
+int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
+                             const char *zPlace, const char *zWho, const char *zDue,
+                             const char *zState, const char *zCloses){
+    sqlite3_stmt *st;
+    char path[1200], tmp[1300];
+    FILE *in, *out;
+    char line[2048];
+    int inBlock = 0, wroteFields = 0, found = 0;
+    char oT[64]={0}, oP[64]={0}, oW[64]={0}, oD[32]={0}, oS[16]={0}, oC[40]={0};
+
+    if( sqlite3_prepare_v2(db, "SELECT source_path FROM viki_note WHERE note_id=?1",
+                           -1, &st, NULL) != SQLITE_OK ) return 1;
+    sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) != SQLITE_ROW ){
+        sqlite3_finalize(st);
+        fprintf(stderr, "viki structure: no note %s (run `viki index` first?)\n", zId);
+        return 1;
+    }
+    snprintf(path, sizeof(path), "%s", (const char*)sqlite3_column_text(st, 0));
+    sqlite3_finalize(st);
+
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    in = fopen(path, "r");
+    if( !in ){ perror("viki structure: open"); return 1; }
+    out = fopen(tmp, "w");
+    if( !out ){ perror("viki structure: temp"); fclose(in); return 1; }
+
+    while( fgets(line, sizeof(line), in) ){
+        if( strncmp(line, "@note ", 6) == 0 ){
+            /* Leaving a block: flush any field the caller added that the block
+            ** did not already have, before the boundary moves past it. */
+            if( inBlock && !wroteFields ) wroteFields = 1;
+            inBlock = (strncmp(line + 6, zId, strlen(zId)) == 0);
+            if( inBlock ) found = 1;
+            fputs(line, out);
+            continue;
+        }
+        if( inBlock && line[0] == '@' ){
+            /* Field lines inside the target block are dropped here and
+            ** re-emitted in a fixed order below, so repeated structure passes
+            ** cannot accumulate duplicate @place lines. */
+            char key[32];
+            const char *sp = strchr(line + 1, ' ');
+            size_t klen = sp ? (size_t)(sp - line - 1) : 0;
+            char val[256]; size_t vl;
+            if( klen && klen < sizeof(key) ){
+                memcpy(key, line + 1, klen); key[klen] = '\0';
+                vl = strlen(sp + 1);
+                while( vl && (sp[vl] == '\n' || sp[vl] == '\r') ) vl--;
+                snprintf(val, sizeof(val), "%.*s", (int)vl, sp + 1);
+                if( strcmp(key, "at") == 0 ){ fputs(line, out); continue; }
+                if( strcmp(key, "type")  == 0 ) snprintf(oT, sizeof(oT), "%s", val);
+                else if( strcmp(key, "place") == 0 ) snprintf(oP, sizeof(oP), "%s", val);
+                else if( strcmp(key, "who")   == 0 ) snprintf(oW, sizeof(oW), "%s", val);
+                else if( strcmp(key, "due")   == 0 ) snprintf(oD, sizeof(oD), "%s", val);
+                else if( strcmp(key, "state") == 0 ) snprintf(oS, sizeof(oS), "%s", val);
+                else if( strcmp(key, "closes")== 0 ) snprintf(oC, sizeof(oC), "%s", val);
+                else fputs(line, out);
+                continue;
+            }
+        }
+        if( inBlock && !wroteFields ){
+            /* First non-@ line of the target block: the text begins, so every
+            ** field must already be on paper. */
+            emit_field(out, "type",  zType,  oT);
+            emit_field(out, "place", zPlace, oP);
+            emit_field(out, "who",   zWho,   oW);
+            emit_field(out, "due",   zDue,   oD);
+            emit_field(out, "state", zState, oS);
+            emit_field(out, "closes", zCloses, oC);
+            wroteFields = 1;
+        }
+        fputs(line, out);
+    }
+    fclose(in);
+    fclose(out);
+
+    if( !found ){
+        remove(tmp);
+        fprintf(stderr, "viki structure: %s not found in %s\n", zId, path);
+        return 1;
+    }
+    /* rename() over the original is atomic on POSIX, so an interrupted run
+    ** leaves either the old file or the new one, never a truncated capture. */
+    if( rename(tmp, path) != 0 ){
+        perror("viki structure: rename");
+        remove(tmp);
+        return 1;
+    }
+
+    /* --closes marks the TARGET closed, in its own file, by recursing. */
+    if( zCloses && zCloses[0] ){
+        if( viki_cmd_structure_apply(db, zCloses, NULL, NULL, NULL, NULL, "closed", NULL) != 0 ){
+            fprintf(stderr, "viki structure: WARNING %s recorded as closing %s, "
+                            "but %s could not be marked closed\n", zId, zCloses, zCloses);
+        }
+    }
+    printf("%s updated in %s\n", zId, path);
+    fprintf(stderr, "viki structure: re-run `viki index` to project the change\n");
     return 0;
 }
