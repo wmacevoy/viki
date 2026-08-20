@@ -1,5 +1,6 @@
 #include "viki_serve.h"
 #include "viki_ask.h"
+#include "viki_note.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -390,6 +391,249 @@ static const char *const VIKI_SERVE_HTML =
     "</script>\n"
     "</body></html>\n";
 
+
+/* ---- capture-loop routes ----
+**
+** These exist so a UI can drive the whole loop over HTTP without linking
+** anything. They deliberately reuse viki_note_query() rather than
+** re-implementing the filters, so the CLI and the API cannot answer the same
+** question differently -- the same reason `viki serve` shares
+** viki_ask_query() with `viki ask`. */
+
+typedef struct { sbuf *body; int n; } note_json_ctx;
+
+static void note_json_row(void *pCtx, const viki_note_row *r){
+    note_json_ctx *c = (note_json_ctx*)pCtx;
+    if( c->n++ ) sbuf_puts(c->body, ",");
+    sbuf_puts(c->body, "{\"id\":");     sbuf_json_string(c->body, r->id ? r->id : "");
+    sbuf_puts(c->body, ",\"ts\":");     sbuf_json_string(c->body, r->ts ? r->ts : "");
+    sbuf_puts(c->body, ",\"type\":");   sbuf_json_string(c->body, r->type ? r->type : "");
+    sbuf_puts(c->body, ",\"place\":");  sbuf_json_string(c->body, r->place ? r->place : "");
+    sbuf_puts(c->body, ",\"who\":");    sbuf_json_string(c->body, r->who ? r->who : "");
+    sbuf_puts(c->body, ",\"due\":");    sbuf_json_string(c->body, r->due ? r->due : "");
+    sbuf_puts(c->body, ",\"state\":");  sbuf_json_string(c->body, r->state ? r->state : "");
+    sbuf_puts(c->body, ",\"closes\":"); sbuf_json_string(c->body, r->closes ? r->closes : "");
+    sbuf_puts(c->body, ",\"text\":");   sbuf_json_string(c->body, r->text ? r->text : "");
+    sbuf_puts(c->body, "}");
+}
+
+static int handle_notes(sbuf *body, sqlite3 *db, const char *query, int bPending){
+    char place[128]={0}, type[64]={0}, state[32]={0}, who[128]={0};
+    char since[64]={0}, grep[256]={0}, kbuf[16]={0}, last[8]={0};
+    viki_note_filter f;
+    note_json_ctx ctx;
+    int n;
+
+    get_query_param(query, "place", place, sizeof(place));
+    get_query_param(query, "type",  type,  sizeof(type));
+    get_query_param(query, "state", state, sizeof(state));
+    get_query_param(query, "who",   who,   sizeof(who));
+    get_query_param(query, "since", since, sizeof(since));
+    get_query_param(query, "grep",  grep,  sizeof(grep));
+    get_query_param(query, "k",     kbuf,  sizeof(kbuf));
+    get_query_param(query, "last",  last,  sizeof(last));
+
+    memset(&f, 0, sizeof(f));
+    f.place = place; f.type = type; f.state = state; f.who = who;
+    f.since = since; f.grep = grep;
+    f.bLast = last[0] && last[0] != '0';
+    f.nMax = kbuf[0] ? atoi(kbuf) : 50;
+    f.bPending = bPending;
+
+    sbuf_puts(body, "{\"pending\":");
+    sbuf_puts(body, bPending ? "true" : "false");
+    sbuf_puts(body, ",\"notes\":[");
+    ctx.body = body; ctx.n = 0;
+    n = viki_note_query(db, &f, note_json_row, &ctx);
+    sbuf_puts(body, "],\"count\":");
+    sbuf_int(body, ctx.n);
+    sbuf_puts(body, "}");
+    return n < 0 ? 500 : 200;
+}
+
+static int handle_capture(sbuf *body, const char *query){
+    char text[2048]={0}, place[128]={0}, type[64]={0};
+    char who[128]={0}, due[64]={0}, state[32]={0};
+    int rc;
+    get_query_param(query, "text", text, sizeof(text));
+    if( !text[0] ){
+        sbuf_puts(body, "{\"error\":\"missing text\"}");
+        return 400;
+    }
+    get_query_param(query, "place", place, sizeof(place));
+    get_query_param(query, "type",  type,  sizeof(type));
+    get_query_param(query, "who",   who,   sizeof(who));
+    get_query_param(query, "due",   due,   sizeof(due));
+    get_query_param(query, "state", state, sizeof(state));
+    /* "." is the server's cwd, which is the checkout it was started in --
+    ** the same directory `viki index` and `viki capture` use from a shell. */
+    rc = viki_cmd_capture(".", text, place[0]?place:NULL, type[0]?type:NULL,
+                          who[0]?who:NULL, due[0]?due:NULL, state[0]?state:NULL);
+    sbuf_puts(body, rc == 0 ? "{\"ok\":true" : "{\"ok\":false");
+    /* The caller must reindex before the capture is queryable; say so rather
+    ** than reindexing here, which would make a capture cost a full corpus
+    ** pass and would surprise anyone capturing in a burst. */
+    sbuf_puts(body, ",\"reindex_required\":true}");
+    return rc == 0 ? 200 : 500;
+}
+
+static int handle_structure(sbuf *body, sqlite3 *db, const char *query){
+    char id[64]={0}, type[64]={0}, place[128]={0}, who[128]={0};
+    char due[64]={0}, state[32]={0}, closes[64]={0};
+    int rc;
+    get_query_param(query, "id", id, sizeof(id));
+    if( !id[0] ){
+        sbuf_puts(body, "{\"error\":\"missing id\"}");
+        return 400;
+    }
+    get_query_param(query, "type",   type,   sizeof(type));
+    get_query_param(query, "place",  place,  sizeof(place));
+    get_query_param(query, "who",    who,    sizeof(who));
+    get_query_param(query, "due",    due,    sizeof(due));
+    get_query_param(query, "state",  state,  sizeof(state));
+    get_query_param(query, "closes", closes, sizeof(closes));
+    rc = viki_cmd_structure_apply(db, id, type[0]?type:NULL, place[0]?place:NULL,
+                                  who[0]?who:NULL, due[0]?due:NULL,
+                                  state[0]?state:NULL, closes[0]?closes:NULL);
+    sbuf_puts(body, rc == 0 ? "{\"ok\":true" : "{\"ok\":false");
+    sbuf_puts(body, ",\"reindex_required\":true}");
+    return rc == 0 ? 200 : 400;
+}
+
+static int handle_reindex(sbuf *body, sqlite3 *db){
+    /* Only the NOTE projection, not the whole corpus: it is a full rebuild of
+    ** a small table (see viki_note.h), so it is cheap enough to run after
+    ** every capture, which is what a UI wants. Chunk re-indexing stays a
+    ** deliberate `viki index` from a shell. */
+    int n = viki_note_reindex(db, ".");
+    sbuf_puts(body, "{\"projected\":");
+    sbuf_int(body, n < 0 ? 0 : n);
+    sbuf_puts(body, n < 0 ? ",\"ok\":false}" : ",\"ok\":true}");
+    return n < 0 ? 500 : 200;
+}
+
+/* The capture-loop UI. Same discipline as the search page: every value that
+** came out of the corpus is inserted with textContent or createTextNode, and
+** the string "innerHTML" does not appear -- captured notes are untrusted
+** markup exactly as indexed content is, and a note reading
+** "<img onerror=...>" must render as those characters.
+**
+** fetch() sets X-Viki-Local on the mutating calls. It can, because these are
+** same-origin; a page on another origin cannot, which is the whole point of
+** the header (see handle_client). */
+static const char VIKI_CAPTURE_HTML[] =
+"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>viki capture</title><style>"
+":root{color-scheme:light dark}"
+"body{font:15px/1.5 system-ui,sans-serif;margin:0;padding:1rem;max-width:52rem}"
+"h1{font-size:1.1rem;margin:0 0 .25rem}h2{font-size:.95rem;margin:1.5rem 0 .5rem}"
+"p.sub{margin:0 0 1rem;opacity:.7;font-size:.85rem}"
+"input,select,button,textarea{font:inherit;padding:.35rem .5rem;border-radius:6px;"
+"border:1px solid rgba(128,128,128,.45);background:transparent;color:inherit}"
+"button{cursor:pointer}button.primary{border-color:transparent;background:#2563eb;color:#fff}"
+"#cap{width:100%;box-sizing:border-box}"
+".row{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.4rem 0}"
+".note{border:1px solid rgba(128,128,128,.3);border-radius:8px;padding:.6rem;margin:.5rem 0}"
+".txt{margin:0 0 .4rem}"
+".meta{font-size:.8rem;opacity:.75;font-family:ui-monospace,monospace}"
+".tag{display:inline-block;border:1px solid rgba(128,128,128,.4);border-radius:999px;"
+"padding:0 .5rem;margin-right:.3rem;font-size:.75rem}"
+".empty{opacity:.6;font-style:italic}"
+"</style></head><body>"
+"<h1>viki capture</h1>"
+"<p class='sub'>Capture is offline and needs nothing. Structure adds judgement. "
+"Only <code>task</code> appears in what needs doing.</p>"
+"<textarea id='cap' rows='2' placeholder='what happened? (plain words are fine)'></textarea>"
+"<div class='row'>"
+"<button class='primary' id='capbtn'>Capture</button>"
+"<span class='meta' id='capmsg'></span></div>"
+"<h2>Pending &mdash; needs a type</h2><div id='pending'></div>"
+"<h2>Notes</h2><div class='row'>"
+"<select id='fType'><option value=''>any type</option><option>task</option>"
+"<option>observation</option><option>rule</option><option>schedule</option>"
+"<option>alert</option><option>question</option><option>note</option></select>"
+"<select id='fState'><option value=''>any state</option><option>open</option>"
+"<option>closed</option></select>"
+"<input id='fPlace' placeholder='place'><input id='fGrep' placeholder='regex'>"
+"<button id='refresh'>Show</button></div>"
+"<div id='notes'></div>"
+"<script>\n"
+"var TYPES=['task','observation','rule','schedule','alert','question','note'];\n"
+"function el(t,c,txt){var e=document.createElement(t);if(c)e.className=c;\n"
+"  if(txt!==undefined)e.textContent=txt;return e;}\n"
+"function post(url){return fetch(url,{method:'POST',headers:{'X-Viki-Local':'1'}})\n"
+"  .then(function(r){return r.json();});}\n"
+"function reindex(){return post('/api/reindex');}\n"
+"document.getElementById('capbtn').onclick=function(){\n"
+"  var t=document.getElementById('cap').value.trim();\n"
+"  var msg=document.getElementById('capmsg');\n"
+"  if(!t){msg.textContent='nothing to capture';return;}\n"
+"  post('/api/capture?text='+encodeURIComponent(t)).then(function(j){\n"
+"    msg.textContent=j.ok?'captured':'failed';\n"
+"    document.getElementById('cap').value='';\n"
+"    return reindex();}).then(loadPending).then(loadNotes);\n"
+"};\n"
+"function structureRow(n){\n"
+"  var d=el('div','note');\n"
+"  d.appendChild(el('p','txt',n.text));\n"
+"  d.appendChild(el('div','meta',n.id+'  '+n.ts));\n"
+"  var r=el('div','row');\n"
+"  var sel=el('select');sel.appendChild(el('option','', ''));\n"
+"  TYPES.forEach(function(t){var o=el('option','',t);o.value=t;sel.appendChild(o);});\n"
+"  var place=el('input');place.placeholder='place';\n"
+"  var who=el('input');who.placeholder='who';\n"
+"  var due=el('input');due.placeholder='due (YYYY-MM-DD)';\n"
+"  var b=el('button','primary','Apply');\n"
+"  b.onclick=function(){\n"
+"    if(!sel.value){b.textContent='pick a type';return;}\n"
+"    var q='/api/structure?id='+encodeURIComponent(n.id)+'&type='+encodeURIComponent(sel.value);\n"
+"    if(place.value)q+='&place='+encodeURIComponent(place.value);\n"
+"    if(who.value)q+='&who='+encodeURIComponent(who.value);\n"
+"    if(due.value)q+='&due='+encodeURIComponent(due.value);\n"
+"    if(sel.value==='task')q+='&state=open';\n"
+"    post(q).then(reindex).then(loadPending).then(loadNotes);\n"
+"  };\n"
+"  [sel,place,who,due,b].forEach(function(x){r.appendChild(x);});\n"
+"  d.appendChild(r);return d;\n"
+"}\n"
+"function loadPending(){return fetch('/api/pending').then(function(r){return r.json();})\n"
+"  .then(function(j){var box=document.getElementById('pending');box.textContent='';\n"
+"    if(!j.count){box.appendChild(el('p','empty','Nothing pending.'));return;}\n"
+"    j.notes.forEach(function(n){box.appendChild(structureRow(n));});});}\n"
+"function noteRow(n){\n"
+"  var d=el('div','note');\n"
+"  d.appendChild(el('p','txt',n.text));\n"
+"  var m=el('div');\n"
+"  if(n.type)m.appendChild(el('span','tag',n.type));\n"
+"  if(n.state)m.appendChild(el('span','tag',n.state));\n"
+"  if(n.place)m.appendChild(el('span','tag','@'+n.place));\n"
+"  if(n.who)m.appendChild(el('span','tag','~'+n.who));\n"
+"  if(n.due)m.appendChild(el('span','tag','due '+n.due));\n"
+"  d.appendChild(m);\n"
+"  d.appendChild(el('div','meta',n.id+(n.closes?('  closes '+n.closes):'')));\n"
+"  if(n.type==='task'&&n.state!=='closed'){\n"
+"    var b=el('button','','Mark done');\n"
+"    b.onclick=function(){post('/api/structure?id='+encodeURIComponent(n.id)+'&state=closed')\n"
+"      .then(reindex).then(loadNotes).then(loadPending);};\n"
+"    d.appendChild(b);}\n"
+"  return d;}\n"
+"function loadNotes(){\n"
+"  var q='/api/notes?k=100';\n"
+"  var t=document.getElementById('fType').value,st=document.getElementById('fState').value;\n"
+"  var p=document.getElementById('fPlace').value,g=document.getElementById('fGrep').value;\n"
+"  if(t)q+='&type='+encodeURIComponent(t);\n"
+"  if(st)q+='&state='+encodeURIComponent(st);\n"
+"  if(p)q+='&place='+encodeURIComponent(p);\n"
+"  if(g)q+='&grep='+encodeURIComponent(g);\n"
+"  return fetch(q).then(function(r){return r.json();}).then(function(j){\n"
+"    var box=document.getElementById('notes');box.textContent='';\n"
+"    if(!j.count){box.appendChild(el('p','empty','No notes match.'));return;}\n"
+"    j.notes.forEach(function(n){box.appendChild(noteRow(n));});});}\n"
+"document.getElementById('refresh').onclick=loadNotes;\n"
+"loadPending();loadNotes();\n"
+"</script></body></html>\n";
+
 static void handle_client(int fd, sqlite3 *db, viki_embedder *emb, const char *version){
     char req[16384];
     ssize_t total = 0;
@@ -397,6 +641,9 @@ static void handle_client(int fd, sqlite3 *db, viki_embedder *emb, const char *v
     char *lineEnd;
     char *qmark;
     const char *query;
+    char reqCopy[16384];
+    const char *body = NULL;
+    int bPost = 0;
 
     while( total < (ssize_t)sizeof(req) - 1 ){
         ssize_t r = recv(fd, req + total, sizeof(req) - 1 - (size_t)total, 0);
@@ -407,6 +654,10 @@ static void handle_client(int fd, sqlite3 *db, viki_embedder *emb, const char *v
     }
     if( total <= 0 ) return;
     req[total] = '\0';
+    /* Headers are consumed after the request line is chopped by strtok-style
+    ** truncation below, so keep an intact copy for header lookups and body. */
+    snprintf(reqCopy, sizeof(reqCopy), "%s", req);
+    { const char *b = strstr(reqCopy, "\r\n\r\n"); if( b ) body = b + 4; }
 
     lineEnd = strstr(req, "\r\n");
     if( lineEnd ) *lineEnd = '\0';
@@ -416,14 +667,42 @@ static void handle_client(int fd, sqlite3 *db, viki_embedder *emb, const char *v
         return;
     }
 
-    if( strcmp(method, "GET") != 0 ){
-        send_json_error(fd, 405, "Method Not Allowed", "only GET is supported");
+    /* MUTATING ROUTES ARE POST-ONLY, AND REQUIRE A CUSTOM HEADER.
+    **
+    ** This server is loopback-only with no auth by design, which is fine
+    ** while every route is read-only. Capture and structure WRITE, and that
+    ** changes the threat model: a page open in the user's browser on any
+    ** other origin can make the browser issue a cross-origin request to
+    ** 127.0.0.1 without the user doing anything.
+    **
+    ** POST alone does not stop that -- an HTML form posts cross-origin
+    ** freely. Requiring a header the browser will not let a cross-origin
+    ** script set without a CORS preflight DOES, and we answer no preflight,
+    ** so the request never arrives. Cheap, and it does not pretend to be
+    ** authentication: any LOCAL process can still call this, exactly as it
+    ** can already read every route. */
+    if( strcmp(method, "POST") == 0 ){
+        if( !strstr(reqCopy, "X-Viki-Local:") ){
+            send_json_error(fd, 403, "Forbidden",
+                "mutating routes require the X-Viki-Local header "
+                "(this blocks cross-origin browser requests; it is not authentication)");
+            return;
+        }
+        bPost = 1;
+    }else if( strcmp(method, "GET") != 0 ){
+        send_json_error(fd, 405, "Method Not Allowed", "only GET and POST are supported");
         return;
     }
 
     query = NULL;
     qmark = strchr(target, '?');
     if( qmark ){ *qmark = '\0'; query = qmark + 1; }
+
+    if( strcmp(target, "/capture") == 0 ){
+        send_response(fd, 200, "OK", "text/html; charset=utf-8",
+                      VIKI_CAPTURE_HTML, strlen(VIKI_CAPTURE_HTML));
+        return;
+    }
 
     if( strcmp(target, "/") == 0 ){
         send_response(fd, 200, "OK", "text/html; charset=utf-8", VIKI_SERVE_HTML, strlen(VIKI_SERVE_HTML));
@@ -439,6 +718,19 @@ static void handle_client(int fd, sqlite3 *db, viki_embedder *emb, const char *v
             status = handle_health(&body, emb, version);
         }else if( strcmp(target, "/api/ask") == 0 ){
             status = handle_ask(&body, db, emb, query);
+        }else if( strcmp(target, "/api/notes") == 0 ){
+            status = handle_notes(&body, db, query, 0);
+        }else if( strcmp(target, "/api/pending") == 0 ){
+            status = handle_notes(&body, db, query, 1);
+        }else if( strcmp(target, "/api/capture") == 0 ){
+            if( !bPost ) status = (sbuf_puts(&body, "{\"error\":\"POST required\"}"), 405);
+            else status = handle_capture(&body, query);
+        }else if( strcmp(target, "/api/structure") == 0 ){
+            if( !bPost ) status = (sbuf_puts(&body, "{\"error\":\"POST required\"}"), 405);
+            else status = handle_structure(&body, db, query);
+        }else if( strcmp(target, "/api/reindex") == 0 ){
+            if( !bPost ) status = (sbuf_puts(&body, "{\"error\":\"POST required\"}"), 405);
+            else status = handle_reindex(&body, db);
         }else if( strcmp(target, "/api/chunk") == 0 ){
             status = handle_chunk(&body, db, query);
         }

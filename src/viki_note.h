@@ -59,6 +59,29 @@ int viki_cmd_capture(const char *zDir, const char *zText,
 ** `viki index` after the chunk work. Returns rows projected, or -1. */
 int viki_note_reindex(sqlite3 *db, const char *zDir);
 
+/* One projected note, as borrowed pointers valid only for the callback call.
+** A callback rather than an allocated array: the CLI prints as it goes and
+** the HTTP layer appends JSON as it goes, so neither needs the rows to
+** outlive the scan, and neither has to free anything. */
+typedef struct {
+    const char *id, *ts, *type, *place, *who, *due, *state, *text, *closes;
+} viki_note_row;
+
+typedef void (*viki_note_cb)(void *pCtx, const viki_note_row *row);
+
+/* Filters. Empty/NULL means "no filter on that field". */
+typedef struct {
+    const char *place, *type, *state, *who, *since, *grep;
+    int bLast;      /* only the most recent match */
+    int nMax;
+    int bPending;   /* untyped captures only -- the agent's work queue */
+} viki_note_filter;
+
+/* PURE query: no output of its own. `viki notes`, `viki structure --pending`
+** and the HTTP API all run through this, so there is one filter
+** implementation rather than three that drift. Returns rows visited, or -1. */
+int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, void *pCtx);
+
 /* `viki structure --pending [--k N]`: lists captures that carry no @type yet,
 ** i.e. the work queue FOR THE AGENT. Output is one note per line, id first,
 ** so a caller can iterate it without parsing prose. */

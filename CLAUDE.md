@@ -30,6 +30,12 @@ them. The ones that constrain code most:
 
 ## Capturing and structuring notes
 
+There is a browser UI for the whole loop at `http://127.0.0.1:8080/capture`
+once `viki serve` is running, and a JSON API behind it (`/api/pending`,
+`/api/notes`, `/api/capture`, `/api/structure`, `/api/reindex`). Mutating
+routes are POST-only and need an `X-Viki-Local` header -- a cross-origin
+guard, not authentication.
+
 `viki capture "..."` records raw text with no model, network or fossil
 needed. `viki structure --pending` is the work queue for adding judgement,
 and `viki structure <id> --type ... --place ...` writes it back.

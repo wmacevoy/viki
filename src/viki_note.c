@@ -282,61 +282,28 @@ int viki_note_reindex(sqlite3 *db, const char *zDir){
 
 /* ---- query ---- */
 
+static void print_note_row(void *pCtx, const viki_note_row *r){
+    (void)pCtx;
+    printf("%s  %s", r->id ? r->id : "?", r->ts ? r->ts : "");
+    if( r->type  && r->type[0] )  printf("  [%s]", r->type);
+    if( r->state && r->state[0] ) printf("  <%s>", r->state);
+    if( r->place && r->place[0] ) printf("  @%s", r->place);
+    if( r->who   && r->who[0] )   printf("  ~%s", r->who);
+    if( r->due   && r->due[0] )   printf("  due:%s", r->due);
+    if( r->closes&& r->closes[0] )printf("  closes:%s", r->closes);
+    printf("\n    %s\n", r->text ? r->text : "");
+}
+
 int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
                    const char *zState, const char *zWho, const char *zSince,
                    const char *zGrep, int bLast, int nMax){
-    char sql[1400];
-    char place[64], type[32], who[64], state[16];
-    sqlite3_stmt *st;
-    int n = 0;
-
-    normalize_key(zPlace, place, sizeof(place));
-    normalize_key(zType,  type,  sizeof(type));
-    normalize_key(zWho,   who,   sizeof(who));
-    normalize_key(zState, state, sizeof(state));
-
-    /* ORDER BY ts DESC is the whole point of --last, and it works without any
-    ** date arithmetic because ts is ISO-8601 UTC (see iso_now). */
-    sqlite3_snprintf(sizeof(sql), sql,
-        "SELECT note_id, ts, type, place, who, due, state, text FROM viki_note"
-        " WHERE (?1='' OR place=?1) AND (?2='' OR type=?2)"
-        "   AND (?3='' OR state=?3) AND (?4='' OR who=?4)"
-        "   AND (?5='' OR ts >= ?5) AND (?6='' OR %s(?6, text))"
-        " ORDER BY ts DESC LIMIT ?7",
-        "regexp");
-
-    if( viki_grep_register(db) != SQLITE_OK ) return 1;
-    if( sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK ){
-        fprintf(stderr, "viki notes: %s\n", sqlite3_errmsg(db));
-        return 1;
-    }
-    sqlite3_bind_text(st, 1, place, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 2, type,  -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 3, state, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 4, who,   -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 5, zSince ? zSince : "", -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 6, zGrep ? zGrep : "", -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 7, bLast ? 1 : (nMax > 0 ? nMax : 50));
-
-    while( sqlite3_step(st) == SQLITE_ROW ){
-        const char *id = (const char*)sqlite3_column_text(st, 0);
-        const char *ts = (const char*)sqlite3_column_text(st, 1);
-        const char *ty = (const char*)sqlite3_column_text(st, 2);
-        const char *pl = (const char*)sqlite3_column_text(st, 3);
-        const char *wh = (const char*)sqlite3_column_text(st, 4);
-        const char *du = (const char*)sqlite3_column_text(st, 5);
-        const char *stt= (const char*)sqlite3_column_text(st, 6);
-        const char *tx = (const char*)sqlite3_column_text(st, 7);
-        n++;
-        printf("%s  %s", id ? id : "?", ts ? ts : "");
-        if( ty && ty[0] )  printf("  [%s]", ty);
-        if( stt && stt[0] ) printf("  <%s>", stt);
-        if( pl && pl[0] )  printf("  @%s", pl);
-        if( wh && wh[0] )  printf("  ~%s", wh);
-        if( du && du[0] )  printf("  due:%s", du);
-        printf("\n    %s\n", tx ? tx : "");
-    }
-    sqlite3_finalize(st);
+    viki_note_filter f;
+    int n;
+    memset(&f, 0, sizeof(f));
+    f.place=zPlace; f.type=zType; f.state=zState; f.who=zWho;
+    f.since=zSince; f.grep=zGrep; f.bLast=bLast; f.nMax=nMax;
+    n = viki_note_query(db, &f, print_note_row, NULL);
+    if( n < 0 ) return 1;
     if( n == 0 ) fprintf(stderr, "(no notes match)\n");
     else fprintf(stderr, "viki notes: %d note(s)\n", n);
     return 0;
@@ -345,27 +312,73 @@ int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
 
 /* ---- structure: find the work, then apply it safely ---- */
 
-int viki_cmd_structure_pending(sqlite3 *db, int nMax){
+int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, void *pCtx){
+    char sql[1500];
+    char place[64], type[32], who[64], state[16];
     sqlite3_stmt *st;
     int n = 0;
-    /* "Unstructured" means no @type. Type is the field that decides whether a
-    ** note is a chore at all, and it is the one an agent must supply before
-    ** `viki notes` can answer anything useful -- an untyped note is invisible
-    ** to every --type filter and would otherwise sit in the file forever. */
-    if( sqlite3_prepare_v2(db,
-            "SELECT note_id, ts, text FROM viki_note"
-            " WHERE type IS NULL OR type='' ORDER BY ts ASC LIMIT ?1",
-            -1, &st, NULL) != SQLITE_OK ){
-        fprintf(stderr, "viki structure: %s\n", sqlite3_errmsg(db));
-        return 1;
+
+    normalize_key(f->place, place, sizeof(place));
+    normalize_key(f->type,  type,  sizeof(type));
+    normalize_key(f->who,   who,   sizeof(who));
+    normalize_key(f->state, state, sizeof(state));
+
+    /* ORDER BY ts DESC is what makes --last work, and it needs no date
+    ** arithmetic because ts is ISO-8601 UTC (see iso_now). bPending is a
+    ** separate predicate rather than type='' so that "untyped" stays one
+    ** concept in one place. */
+    sqlite3_snprintf(sizeof(sql), sql,
+        "SELECT note_id, ts, type, place, who, due, state, text, closes FROM viki_note"
+        " WHERE (?1='' OR place=?1) AND (?2='' OR type=?2)"
+        "   AND (?3='' OR state=?3) AND (?4='' OR who=?4)"
+        "   AND (?5='' OR ts >= ?5) AND (?6='' OR regexp(?6, text))"
+        "   AND (%d=0 OR type IS NULL OR type='')"
+        " ORDER BY ts %s LIMIT ?7",
+        f->bPending ? 1 : 0, f->bPending ? "ASC" : "DESC");
+
+    if( viki_grep_register(db) != SQLITE_OK ) return -1;
+    if( sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK ){
+        fprintf(stderr, "viki notes: %s\n", sqlite3_errmsg(db));
+        return -1;
     }
-    sqlite3_bind_int(st, 1, nMax > 0 ? nMax : 100);
+    sqlite3_bind_text(st, 1, place, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, type,  -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, state, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, who,   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 5, f->since ? f->since : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 6, f->grep ? f->grep : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 7, f->bLast ? 1 : (f->nMax > 0 ? f->nMax : 50));
+
     while( sqlite3_step(st) == SQLITE_ROW ){
+        viki_note_row r;
+        r.id    = (const char*)sqlite3_column_text(st, 0);
+        r.ts    = (const char*)sqlite3_column_text(st, 1);
+        r.type  = (const char*)sqlite3_column_text(st, 2);
+        r.place = (const char*)sqlite3_column_text(st, 3);
+        r.who   = (const char*)sqlite3_column_text(st, 4);
+        r.due   = (const char*)sqlite3_column_text(st, 5);
+        r.state = (const char*)sqlite3_column_text(st, 6);
+        r.text  = (const char*)sqlite3_column_text(st, 7);
+        r.closes= (const char*)sqlite3_column_text(st, 8);
         n++;
-        printf("%s\t%s\t%s\n", sqlite3_column_text(st, 0),
-               sqlite3_column_text(st, 1), sqlite3_column_text(st, 2));
+        if( cb ) cb(pCtx, &r);
     }
     sqlite3_finalize(st);
+    return n;
+}
+
+static void print_pending_row(void *pCtx, const viki_note_row *r){
+    (void)pCtx;
+    printf("%s\t%s\t%s\n", r->id ? r->id : "?", r->ts ? r->ts : "", r->text ? r->text : "");
+}
+
+int viki_cmd_structure_pending(sqlite3 *db, int nMax){
+    viki_note_filter f;
+    int n;
+    memset(&f, 0, sizeof(f));
+    f.bPending = 1; f.nMax = nMax > 0 ? nMax : 100;
+    n = viki_note_query(db, &f, print_pending_row, NULL);
+    if( n < 0 ) return 1;
     if( n == 0 ) fprintf(stderr, "(nothing pending -- every capture has a @type)\n");
     else fprintf(stderr, "viki structure: %d capture(s) awaiting structure\n", n);
     return 0;

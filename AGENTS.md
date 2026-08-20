@@ -80,9 +80,19 @@ itself has still never executed on GitHub's runners.
 
 There's now also a `viki serve` local HTTP server: an HTML search page
 for humans at `/`, plus a JSON API (`/api/ask`, `/api/chunk`,
-`/api/health`) explicitly meant for agents/scripts to call directly,
+`/api/health`, and the capture loop: `/api/notes`, `/api/pending`,
+`/api/capture`, `/api/structure`, `/api/reindex`), with a second page at
+`/capture` that drives the whole capture loop in a browser explicitly meant for agents/scripts to call directly,
 sharing the exact same `viki_ask_query()` retrieval the CLI uses.
-`viki_serve.c` itself stays loopback-only with no auth by design; for
+**Mutating routes are POST-only AND require an `X-Viki-Local` header.** That
+is not authentication and does not pretend to be -- any local process can
+still call them, exactly as it can already read every route. It exists
+because capture and structure WRITE, and a page open on any other origin can
+make the browser issue a cross-origin request to 127.0.0.1 without the user
+acting. POST alone does not stop that (an HTML form posts cross-origin
+freely); a custom header does, because setting one cross-origin requires a
+CORS preflight this server never answers. `viki_serve.c` otherwise stays
+loopback-only with no auth by design; for
 internet exposure, `server/setup-viki-serve.sh` puts it behind the same
 Caddy (TLS + Basic Auth) instance `server/SERVER_SETUP.md` already runs
 for the Fossil hub, rather than hand-rolling TLS/auth in C -- see

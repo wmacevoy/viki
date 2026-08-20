@@ -111,6 +111,42 @@ ck "V2 CONTROL: a known @type does NOT warn"    '! grep -q "outside the known se
 "$VIKI" index . >/dev/null 2>&1
 ck "V3 an unknown type is KEPT, never rejected" '"$VIKI" notes --type todo 2>/dev/null | grep -q "invent a type"'
 
+# ---- HTTP: the capture loop over the API, and the UI page ----
+# Server lifecycle uses the lesson fragment-probe paid for: `exec` INSIDE the
+# subshell so $! names the server and not a wrapper, plus a precondition that
+# refuses to grade a port we do not own (a leaked server from a previous run
+# would otherwise answer and be graded as if it were this build).
+if command -v curl >/dev/null 2>&1; then
+  mkdir -p "$DIR/http" && cd "$DIR/http"
+  "$VIKI" capture "<img src=x onerror=alert(1)> hostile capture" >/dev/null
+  "$VIKI" index . >/dev/null 2>&1
+  PORT=18947
+  ( exec "$VIKI" serve --port $PORT >/dev/null 2>&1 ) &
+  SRV=$!
+  sleep 2
+  H="X-Viki-Local: 1"
+  ck "H0 PRECONDITION: the server under test is ours" \
+     '[ -n "$SRV" ] && kill -0 $SRV 2>/dev/null && curl -sf "http://127.0.0.1:'$PORT'/api/health" >/dev/null'
+  ck "H1 /capture serves the UI page"            'curl -sf "http://127.0.0.1:'$PORT'/capture" | grep -q "viki capture"'
+  ck "H2 the UI page contains NO innerHTML"       '[ "$(curl -s "http://127.0.0.1:'$PORT'/capture" | grep -c innerHTML)" -eq 0 ]'
+  ck "H3 GET /api/pending lists untyped captures" 'curl -sf "http://127.0.0.1:'$PORT'/api/pending" | grep -q "hostile capture"'
+  ck "H4 hostile text survives as DATA, escaped"  'curl -sf "http://127.0.0.1:'$PORT'/api/pending" | grep -q "onerror=alert(1)"'
+  ck "H5 POST /api/capture with the header works" 'curl -sf -X POST -H "$H" "http://127.0.0.1:'$PORT'/api/capture?text=api+note&type=task" | grep -q "\"ok\":true"'
+  ck "H6 POST /api/reindex projects it"           'curl -sf -X POST -H "$H" "http://127.0.0.1:'$PORT'/api/reindex" | grep -q "\"ok\":true"'
+  ck "H7 GET /api/notes filters by type"          'curl -sf "http://127.0.0.1:'$PORT'/api/notes?type=task" | grep -q "api note"'
+  ck "H8 GUARD: POST without the header is refused" \
+     '[ "$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:'$PORT'/api/capture?text=driveby")" = "403" ]'
+  ck "H8b ... and the drive-by did NOT capture anything" \
+     '! curl -sf "http://127.0.0.1:'$PORT'/api/notes?k=99" | grep -q "driveby"'
+  ck "H9 GUARD: GET on a mutating route is refused" \
+     '[ "$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:'$PORT'/api/capture?text=nope")" = "405" ]'
+  ck "H10 read-only routes still work unauthenticated" 'curl -sf "http://127.0.0.1:'$PORT'/api/health" | grep -q mode'
+  kill $SRV 2>/dev/null || true
+  wait $SRV 2>/dev/null || true
+else
+  echo "  SKIP  H0-H10 (no curl)"
+fi
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
