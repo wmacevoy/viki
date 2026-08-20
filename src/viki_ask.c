@@ -79,6 +79,9 @@ static viki_ask_result *find_or_add(viki_ask_result *pool, int *n, const char *h
     }
     if( *n >= VIKI_CANDIDATE_POOL ) return NULL;
     memset(&pool[*n], 0, sizeof(viki_ask_result));
+    /* memset leaves cos at 0.0, which is a LEGAL cosine (orthogonal) and would
+    ** read as a real, mediocre score. The sentinel says "never measured". */
+    pool[*n].cos = VIKI_COS_NONE;
     strncpy(pool[*n].hash, hash, 64);
     pool[*n].chunk_ix = chunk_ix;
     (*n)++;
@@ -137,7 +140,7 @@ static viki_ask_result *find_or_add(viki_ask_result *pool, int *n, const char *h
 ** of a 140-character chunk and of a 4000-character one look identical. */
 static void leg_hit(viki_ask_result *pool, int *n, unsigned leg, int *pRank,
                      const char *hash, int chunk_ix, const char *text,
-                     int bTextIsPrefix){
+                     int bTextIsPrefix, double cos){
     viki_ask_result *c = find_or_add(pool, n, hash, chunk_ix);
     if( c && (c->legs & leg) ) return;   /* duplicate row for an already-scored chunk */
     (*pRank)++;
@@ -146,6 +149,9 @@ static void leg_hit(viki_ask_result *pool, int *n, unsigned leg, int *pRank,
     ** must not depend on how much room the pool had left. */
     if( !c ) return;
     c->legs |= leg;
+    /* Recorded only by the vector leg; the FTS leg passes VIKI_COS_NONE
+    ** because bm25() is not a cosine and the two must not be conflated. */
+    if( leg == VIKI_LEG_VEC ) c->cos = cos;
     c->rrf += 1.0 / (VIKI_RRF_K + *pRank);
     if( text && !c->snippet[0] ){
         /* Two ways the string a surface will display is shorter than the
@@ -195,7 +201,7 @@ static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, viki_ask_re
         const char *hash = (const char*)sqlite3_column_text(st, 0);
         int chunk_ix = sqlite3_column_int(st, 1);
         const char *snippet = (const char*)sqlite3_column_text(st, 2);
-        leg_hit(pool, n, VIKI_LEG_FTS, &rank, hash, chunk_ix, snippet, 0);
+        leg_hit(pool, n, VIKI_LEG_FTS, &rank, hash, chunk_ix, snippet, 0, VIKI_COS_NONE);
         if( rank >= poolSize ) break; /* poolSize distinct chunks, not rows */
     }
     sqlite3_finalize(st);
@@ -212,9 +218,13 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
     ** are measured in the same unit and the comparison is exact rather than
     ** a byte-length approximation. */
     if( sqlite3_prepare_v2(db,
-            "SELECT content_hash, chunk_ix, substr(chunk_text,1,?5), length(chunk_text) > ?5 "
+            /* Column 4 SELECTs the similarity the ORDER BY already computes.
+            ** It was previously thrown away, which is why nothing downstream
+            ** could tell a strong match from the best of a bad lot. */
+            "SELECT content_hash, chunk_ix, substr(chunk_text,1,?5), length(chunk_text) > ?5, "
+            "       ndvss_cosine_similarity_f(?2, embedding, ?3) "
             "FROM viki_chunk WHERE model_id=?1 AND embedding IS NOT NULL "
-            "ORDER BY ndvss_cosine_similarity_f(?2, embedding, ?3) DESC LIMIT ?4",
+            "ORDER BY 5 DESC LIMIT ?4",
             -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki ask: vector query prepare failed: %s\n", sqlite3_errmsg(db));
         return;
@@ -230,7 +240,8 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
         int chunk_ix = sqlite3_column_int(st, 1);
         const char *excerpt = (const char*)sqlite3_column_text(st, 2);
         int bCut = sqlite3_column_int(st, 3);
-        leg_hit(pool, n, VIKI_LEG_VEC, &rank, hash, chunk_ix, excerpt, bCut);
+        double cos = sqlite3_column_double(st, 4);
+        leg_hit(pool, n, VIKI_LEG_VEC, &rank, hash, chunk_ix, excerpt, bCut, cos);
     }
     sqlite3_finalize(st);
 }
@@ -307,8 +318,20 @@ static void fill_fragment_flags(sqlite3 *db, viki_ask_result *pool, int n){
     if( st ) sqlite3_finalize(st);
 }
 
+void viki_ask_defaults(viki_ask_opts *o){
+    o->minCos = VIKI_MIN_COS_DEFAULT;
+}
+
 int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb,
                     viki_ask_result *results, int maxResults){
+    viki_ask_opts o;
+    viki_ask_defaults(&o);
+    return viki_ask_query_opts(db, zQuery, topK, emb, results, maxResults, &o, NULL);
+}
+
+int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb,
+                    viki_ask_result *results, int maxResults,
+                    const viki_ask_opts *opts, viki_ask_info *pInfo){
     char *ftsQuery;
     viki_ask_result pool[VIKI_CANDIDATE_POOL];
     int n = 0;
@@ -337,6 +360,29 @@ int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb
 
     nOut = n < maxResults ? n : maxResults;
     nOut = nOut < topK ? nOut : topK;
+
+    {
+        double best = VIKI_COS_NONE;
+        int i;
+        for( i = 0; i < n; i++ ) if( pool[i].cos > best ) best = pool[i].cos;
+        if( pInfo ){
+            pInfo->bestCos = best;
+            pInfo->lowConfidence = 0;
+            pInfo->nSuppressed = 0;
+        }
+        /* Suppress the WHOLE set, not individual hits. The question being
+        ** answered is "is there anything here worth acting on", and a set
+        ** whose best member is weak has no strong members by definition.
+        ** Only applies when the vector leg actually ran: with no model there
+        ** is no comparable absolute signal, and bm25()'s magnitude depends on
+        ** corpus statistics, so a floor on it would mean something different
+        ** on every repository. */
+        if( best > VIKI_COS_NONE && opts && opts->minCos > 0.0 && best < opts->minCos ){
+            if( pInfo ){ pInfo->lowConfidence = 1; pInfo->nSuppressed = nOut; }
+            return 0;
+        }
+    }
+
     if( nOut > 0 ) memcpy(results, pool, sizeof(viki_ask_result) * (size_t)nOut);
     return nOut;
 }
@@ -365,8 +411,17 @@ static void trim_excerpt(char *z){
 }
 
 int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
+    return viki_cmd_ask_opts(db, zQuery, topK, emb, NULL);
+}
+
+int viki_cmd_ask_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb,
+                      const viki_ask_opts *optsIn){
     viki_ask_result results[VIKI_CANDIDATE_POOL];
+    viki_ask_opts opts;
+    viki_ask_info info;
     int n, i;
+
+    if( optsIn ) opts = *optsIn; else viki_ask_defaults(&opts);
 
     if( emb ){
         fprintf(stderr, "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=%s)\n\n",
@@ -377,7 +432,7 @@ int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
             "model available; see FINDINGS.md / VIKI_DESIGN.md rung 1/2)\n\n");
     }
 
-    n = viki_ask_query(db, zQuery, topK, emb, results, VIKI_CANDIDATE_POOL);
+    n = viki_ask_query_opts(db, zQuery, topK, emb, results, VIKI_CANDIDATE_POOL, &opts, &info);
 
     for( i = 0; i < n; i++ ){
         /* content_hash#chunk_ix FIRST, source path last. KICKOFF.md
@@ -410,6 +465,20 @@ int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
                (results[i].frag & VIKI_FRAG_CUT)  ? " " VIKI_MARK_CUT  : "",
                (results[i].frag & VIKI_FRAG_TAIL) ? " " VIKI_MARK_TAIL : "");
     }
-    if( n == 0 ) fprintf(stderr, "(no matches)\n");
+    if( n == 0 ){
+        /* Two different answers, and an assistant must not confuse them:
+        ** nothing was retrieved at all, versus something was retrieved and
+        ** was not good enough to act on. */
+        if( info.lowConfidence ){
+            fprintf(stderr,
+                "(no confident match -- best cosine %.4f is below the %.2f floor; "
+                "%d weaker hit(s) withheld. Re-run with --min-cos 0 to see them.)\n",
+                info.bestCos, opts.minCos, info.nSuppressed);
+        }else{
+            fprintf(stderr, "(no matches)\n");
+        }
+    }else if( info.bestCos > VIKI_COS_NONE ){
+        fprintf(stderr, "viki ask: best cosine %.4f (floor %.2f)\n", info.bestCos, opts.minCos);
+    }
     return 0;
 }

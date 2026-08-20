@@ -146,14 +146,17 @@ int main(int argc, char **argv){
         viki_embedder *emb;
         int k = 5;
         int i;
-        if( argc < 3 ){ fprintf(stderr, "usage: viki ask \"<query>\" [--k N]\n"); return 1; }
+        viki_ask_opts aopts;
+        viki_ask_defaults(&aopts);
+        if( argc < 3 ){ fprintf(stderr, "usage: viki ask \"<query>\" [--k N] [--min-cos F]\n"); return 1; }
         for( i = 3; i < argc - 1; i++ ){
             if( strcmp(argv[i], "--k") == 0 ) k = atoi(argv[i+1]);
+            else if( strcmp(argv[i], "--min-cos") == 0 ) aopts.minCos = atof(argv[i+1]);
         }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
         emb = open_embedder_if_available();
-        rc = viki_cmd_ask(db, argv[2], k, emb);
+        rc = viki_cmd_ask_opts(db, argv[2], k, emb, &aopts);
         if( emb ) viki_embedder_close(emb);
         sqlite3_close(db);
         return rc;

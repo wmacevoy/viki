@@ -184,8 +184,22 @@ static int handle_ask(sbuf *body, sqlite3 *db, viki_embedder *emb, const char *q
     if( get_query_param(query, "k", kParam, sizeof kParam) ) k = atoi(kParam);
     if( k < 1 ) k = 1;
     if( k > VIKI_CANDIDATE_POOL ) k = VIKI_CANDIDATE_POOL;
+    viki_ask_info askInfo;
+    double askMinCos = 0.0;
+    askInfo.bestCos = VIKI_COS_NONE; askInfo.lowConfidence = 0; askInfo.nSuppressed = 0;
 
-    n = viki_ask_query(db, qParam, k, emb, results, VIKI_CANDIDATE_POOL);
+    {
+        /* Uses the _opts entry point rather than the wrapper so the JSON can
+        ** EXPLAIN a floored result. An empty "results" array with no reason
+        ** is indistinguishable from an empty corpus, and an agent acting on
+        ** this API needs "I found nothing worth acting on" to be a distinct,
+        ** readable outcome from "I found nothing". */
+        viki_ask_opts aopts;
+        viki_ask_defaults(&aopts);
+        n = viki_ask_query_opts(db, qParam, k, emb, results, VIKI_CANDIDATE_POOL,
+                                &aopts, &askInfo);
+        askMinCos = aopts.minCos;
+    }
 
     sbuf_puts(body, "{\"query\":");
     sbuf_json_string(body, qParam);
@@ -194,6 +208,16 @@ static int handle_ask(sbuf *body, sqlite3 *db, viki_embedder *emb, const char *q
     sbuf_puts(body, ",\"model_id\":");
     if( emb ) sbuf_json_string(body, viki_embedder_model_id(emb));
     else sbuf_puts(body, "null");
+    /* Confidence, reported alongside the mode so a client can decide whether
+    ** to act. best_cos is null in bm25-only mode: there is no cosine, and
+    ** emitting 0 there would read as a real (orthogonal) measurement. */
+    sbuf_puts(body, ",\"best_cos\":");
+    if( askInfo.bestCos > VIKI_COS_NONE ) sbuf_double(body, askInfo.bestCos);
+    else sbuf_puts(body, "null");
+    sbuf_puts(body, ",\"min_cos\":"); sbuf_double(body, askMinCos);
+    sbuf_puts(body, ",\"low_confidence\":");
+    sbuf_puts(body, askInfo.lowConfidence ? "true" : "false");
+    sbuf_puts(body, ",\"suppressed\":"); sbuf_int(body, askInfo.nSuppressed);
     sbuf_puts(body, ",\"results\":[");
     for( i = 0; i < n; i++ ){
         if( i ) sbuf_puts(body, ",");
