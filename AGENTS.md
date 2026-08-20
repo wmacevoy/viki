@@ -794,6 +794,20 @@ this file -- against a binary missing three fixes that were sitting in
   - Honest limit: **C11 skips** (and prints a SKIP line) when either the
     model or a stock `sqlite3` is missing; C10 and C16 do not.
 
+## Where the forward work is written down
+
+`QUEUE.md` holds the measured-but-not-yet-done list -- retrieval experiments
+with the numbers that produced them, corrections to earlier claims, and the
+capture/structure design specified from real field notes. It is
+CHRONOLOGICAL, not prioritised; its header carries the current priority
+order. Read its section 21 first: it records that stored data is disposable
+pre-alpha, which un-gates about half the entries below it.
+
+Corrections there are APPENDED, never edited in place (19c corrects 19; 23
+retracts part of 14 and 21), so a claim and its refutation stay together --
+the same discipline this repo uses in FINDINGS.md, and for the same reason:
+the hardest thing for a later agent to recover is why something was NOT done.
+
 ## Not yet built (see KICKOFF.md's full Milestone 1 spec for what's still owed)
 
 - **`release.yml` does not depend on the `m1` job.** A `v*` tag can publish

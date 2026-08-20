@@ -13,6 +13,77 @@ that entry as a dated block quote rather than by rewriting it.
 
 ---
 
+
+## Rare words are not unrepresented -- they are only representable AGAINST THEMSELVES
+
+**Date:** 2026-08-20. Chasing why a *correct* semantic retrieval scored a
+cosine of only 0.1859 while a *garbage* query scored 0.2174 on another corpus.
+
+Warren's hypothesis was that a 384-dimension model has roughly toki pona's
+expressive budget, so a domain word like `elastomer` "could easily just be
+0's". The tokenizer half of that checks out -- against the real
+`build/dist/model/vocab.txt` (30522 tokens), domain vocabulary shreds:
+
+```
+elastomer -> el ##ast ##ome ##r      subzero -> sub ##zer ##o
+fetlock   -> fe ##tl ##ock           propane -> prop ##ane
+```
+
+while `rubber`, `cold`, `material`, `horse`, `sock` are clean single tokens.
+
+**But the "zeros" conclusion is wrong, and the truth is more useful.** The
+same facts written two ways, queried three ways (noise control 0.0752):
+
+| query | vs ORIGINAL wording | vs SIMPLIFIED wording |
+|---|---|---|
+| technical: "synthetic elastomer performance in subzero conditions" | **0.6452** | 0.3042 |
+| plain: "did the rubber seal stay soft in very cold weather" | 0.4961 | **0.8191** |
+| domain: "which horse has a right front sock" | **0.5093** | 0.3115 |
+
+A technical query matches a technical document at 0.6452 -- *because both
+shred into the same fragments, and consistent noise correlates with itself*.
+`elastomer` is not a hole in the space; it is a private token that matches
+nothing but its own spelling. The failure is never blindness, it is
+cross-vocabulary matching: you write `off fore` and later ask `right front`.
+
+**Consequence for design.** A simplified restatement must NOT replace the
+original -- it loses 0.34 and 0.20 on domain-worded queries. As a SECOND
+vector citing the same `content_hash`, taking `max()` over forms, it never
+loses and sometimes wins hugely (0.4961 -> 0.8191). That makes simplified
+restatement and doc2query the same mechanism -- alternative surface forms of
+one chunk -- and they should be built once, not twice. See QUEUE.md §26.
+
+Provenance rule that falls out of it: rank on whichever form matched, but
+CITE THE ORIGINAL. A machine-generated restatement is an index artifact, not
+evidence, and quoting it back as though it were the note is the
+unmarked-fragment defect wearing a new costume.
+
+## Retrieval confidence cannot come from the fused score, and no global cosine floor works either
+
+**Date:** 2026-08-20. `viki ask` could not distinguish "here is the answer"
+from "here are the three least-bad rows in a corpus containing no answer".
+
+First trap: **the RRF score cannot carry confidence and never could.**
+Reciprocal rank fusion is purely positional, `1/(K+rank)`, so the top hit
+scores ~1/61 whether it is perfect or worthless. `run_vector()` was
+`ORDER BY`-ing on a cosine it then discarded, so the absolute evidence was
+thrown away before any score existed. It is now SELECTed and reported.
+
+Second trap, which killed the feature as originally specified: **there is no
+corpus-independent cutoff.** Shipped default-on at 0.30, calibrated where
+answerable queries scored 0.62-0.79 and garbage 0.14-0.22. It broke six
+assertions across two probes, because on a different corpus a CORRECT
+semantic retrieval scores **0.1859** -- below the **0.2174** that garbage
+scores on the first one. Cosine magnitude tracks chunk length and corpus, not
+correctness. Margin-from-median and best/median ratio fail identically: the
+correct hit has a SMALLER margin (0.110) than the garbage query (0.123), and
+nonsense scores the second-highest ratio in the set.
+
+So viki reports the evidence and declines to judge; `--min-cos` is opt-in.
+This is the same division of labour as the HyDE convention: the caller is an
+agent that can threshold for its own corpus. Anyone tempted to re-enable a
+default threshold should re-run those two numbers first.
+
 ## Two retrieval improvements that each measured well ALONE lost most of their gain when combined: the ranking work is worth +0.139 recall@1 on a 114-chunk corpus and +0.024 on the same corpus once 24 check-in-comment chunks are added
 
 **Date:** 2026-08-16, integrating the "episodic memory" round.
