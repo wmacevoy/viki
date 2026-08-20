@@ -12,13 +12,49 @@
 #define VIKI_LEG_FTS 0x1u    /* FTS5 BM25 keyword leg */
 #define VIKI_LEG_VEC 0x2u    /* ndvss cosine-similarity vector leg */
 
+/* FRAGMENT bits -- what a reader is NOT being shown, computed at query
+** time and never stored. `viki index` slices a document into 40-line
+** chunks and stores each slice raw, so a chunk taken from the middle of a
+** document is a dangling excerpt that reads as a complete text: "and
+** twenty years ago ..." looks like an assertion rather than the tail of a
+** sentence. Now that every hit carries a citable content_hash (KICKOFF.md
+** deliverable 2), an agent can quote that excerpt precisely -- which turns
+** an old cosmetic wart into a PROVENANCE defect. These bits are what a
+** surface uses to say so.
+**
+** HEAD/TAIL are properties of the CHUNK within its document; CUT is a
+** property of the EXCERPT within the chunk. They are three different
+** facts and are deliberately reported separately (see viki_ask.c). */
+#define VIKI_FRAG_HEAD 0x1u  /* chunk_ix > 0: document text precedes this chunk */
+#define VIKI_FRAG_TAIL 0x2u  /* chunk_ix < max(chunk_ix): document text follows it */
+#define VIKI_FRAG_CUT  0x4u  /* .snippet is itself a truncated PREFIX of the chunk */
+
+/* The literal marker strings. Every human-readable surface must use these
+** rather than spelling its own, so the CLI, `viki serve`'s HTML page and
+** any future surface mark the same fact the same way -- and so a probe can
+** grep for one string.
+**
+** THEY CONTAIN NO DOTS, ON PURPOSE. FTS5's snippet() already inserts
+** " ... " where it elided text from INSIDE a chunk, which is a different
+** fact at a different scope (intra-chunk elision, not "this chunk is a
+** slice of a longer document"). Keeping the two notations in disjoint
+** alphabets -- ellipsis for elision, angle brackets for fragmentation --
+** is what stops a reader collapsing them into one vague "something is
+** missing here". They also avoid '[' and ']', which the FTS snippet call
+** in viki_ask.c already spends on match highlighting. */
+#define VIKI_MARK_HEAD "<<document continues above>>"
+#define VIKI_MARK_TAIL "<<document continues below>>"
+#define VIKI_MARK_CUT  "<<excerpt truncated>>"
+
 typedef struct {
     char hash[65];     /* content_hash: sha256 of the source text, the citable identity */
     int chunk_ix;
     char source[512];  /* best-effort path from viki_source, or "(unknown)" */
-    char snippet[512]; /* best snippet/excerpt we've seen for this hit */
+    char snippet[512]; /* best snippet/excerpt we've seen for this hit, UNDECORATED */
     double rrf;
     unsigned legs;     /* internal bookkeeping: VIKI_LEG_* already scored into rrf */
+    unsigned frag;     /* VIKI_FRAG_* -- see above; display-side only, nothing stored */
+    int chunk_count;   /* chunks in this content_hash, or 0 when the extent is unknown */
 } viki_ask_result;
 
 /* Core retrieval: FTS5 BM25 top-K unioned with an ndvss cosine-similarity
@@ -52,7 +88,16 @@ int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb
 ** first because it is the authoritative identity and is fixed-width, while
 ** <source> is a best-effort human hint that may be absent
 ** ("(source path unknown)") or contain spaces -- so it goes last, where it
-** cannot shift the position of anything a script wants to read. */
+** cannot shift the position of anything a script wants to read.
+**
+** The excerpt line carries the VIKI_MARK_* fragment markers when the
+** corresponding VIKI_FRAG_* bit is set: VIKI_MARK_HEAD before the excerpt,
+** then VIKI_MARK_CUT and VIKI_MARK_TAIL after it, in that order (the
+** excerpt's own cut is nearer the excerpt than the document's). The header
+** line is deliberately NOT touched -- test/m1.sh (G1-G6),
+** build/forum-e2e-probe.sh (C6) and build/model-uv-e2e-probe.sh (F11) all
+** parse it by position, and `<hash>#<ix>` is a citation format, not a
+** display string. */
 int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb);
 
 #endif

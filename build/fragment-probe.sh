@@ -1,0 +1,389 @@
+#!/bin/sh
+#
+# fragment-probe.sh -- end-to-end probe for DISPLAY-SIDE FRAGMENT MARKING
+# in `viki ask`, `viki serve` and `viki grep`. See src/viki_ask.h
+# (VIKI_FRAG_*) for the rule; this file is its standing proof.
+#
+# WHY THIS EXISTS
+# ---------------
+# `viki index` slices a document into 40-line chunks and stores each slice
+# raw. Retrieval then hands one slice back as if it were a whole text: a
+# chunk taken from the middle of a document opens mid-sentence and closes
+# mid-sentence, and nothing in the output says so. That was a cosmetic
+# wart until `viki ask` started printing a citable content_hash -- an
+# agent can now quote the dangling fragment *precisely*, which makes it a
+# provenance defect. The fix is display-only: nothing stored changes, no
+# re-indexing is needed, and this probe asserts the display.
+#
+# The rule under test:
+#   * fragment at the HEAD  <=>  chunk_ix > 0
+#   * fragment at the TAIL  <=>  chunk_ix < max(chunk_ix) for that content
+#   * an excerpt that is a truncated PREFIX of its chunk is marked
+#     separately, because that is a different fact at a different scope.
+#
+# Traps this guards, each a real way the feature goes wrong:
+#   * off-by-one: a SINGLE-CHUNK document is chunk 0 AND the last chunk,
+#     so it must get NEITHER marker (F11/F12). This is the assertion most
+#     likely to catch a `<=` where a `<` belongs, and F10 keeps it from
+#     passing vacuously on empty output.
+#   * one-sidedness: "no head marker on chunk 0" also holds if markers
+#     never print at all, so F5 is paired with F6 and F8 with F9 -- each
+#     absence is asserted next to a presence on the SAME hit.
+#   * double-marking: FTS5's snippet() ALREADY writes ' ... ' where it
+#     elided text from INSIDE the chunk. That is not fragmentation, and
+#     the two notations must coexist without merging or duplicating
+#     (F14/F15).
+#   * the citation line: three other test files parse
+#     `[N] rrf=X.XXXX  <hash>#<ix>  <source>` by position, so the markers
+#     must land on the excerpt line and nowhere else (F13).
+#   * the JSON API: a client already parsing `snippet` must not silently
+#     start receiving viki's decoration mixed into indexed content (S3).
+#   * the HTML page: it renders untrusted indexed content, so adding
+#     markers must not reach for innerHTML (S5).
+#   * a second surface drifting: `viki grep` prints the same kind of
+#     excerpt under the same citable header, so it must mark the same
+#     facts with the SAME strings, not lookalikes of its own (R1-R8).
+#
+# Usage: sh build/fragment-probe.sh <scratch-dir> [viki-binary]
+#   VIKI_MODEL_DIR   as everywhere else; absent => the hybrid checks SKIP
+#   VIKI_PROBE_PORT  port for the `viki serve` checks (default 18771)
+set -e
+DIR="${1:?usage: fragment-probe.sh <scratch-dir> [viki-binary]}"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+VIKI="${2:-$REPO/build/dist/viki}"
+case "$VIKI" in /*) ;; *) echo "ERR: viki path must be ABSOLUTE"; exit 2 ;; esac
+[ -x "$VIKI" ] || { echo "ERR: no viki binary at $VIKI"; exit 2; }
+MODEL="${VIKI_MODEL_DIR:-$REPO/build/dist/model}"
+PORT="${VIKI_PROBE_PORT:-18771}"
+
+PASS=0; FAIL=0; SKIP=0
+ck(){ if eval "$2" >/dev/null 2>&1; then PASS=$((PASS+1)); echo "  PASS  $1"; else FAIL=$((FAIL+1)); echo "  FAIL  $1"; fi; }
+skip(){ SKIP=$((SKIP+1)); echo "  SKIP  $1 ($2)"; }
+
+SERVE_PID=""
+cleanup(){ [ -n "$SERVE_PID" ] && kill "$SERVE_PID" 2>/dev/null; return 0; }
+trap cleanup EXIT INT TERM
+
+rm -rf "$DIR"
+mkdir -p "$DIR/bm25/docs" "$DIR/vec/docs" "$DIR/nomodel" "$DIR/logs"
+LOG="$DIR/logs"
+
+# ------------------------------------------------------------- the corpus --
+# THREE chunks exactly. viki_index.c cuts every 40 lines, so 120 lines is
+# chunk_ix 0,1,2 -- and the three planted tokens sit one per chunk, each
+# unique in the corpus, so a one-word query names one chunk with no
+# ranking assumptions at all. Line numbers 5/50/100 are deliberately not
+# on a chunk boundary: a token AT the boundary would not distinguish a
+# correct implementation from one that is off by one chunk.
+i=1
+while [ "$i" -le 120 ]; do
+    case "$i" in
+        5)   echo "The alphamarker survey was filed with the county clerk." ;;
+        50)  echo "The betamarker inspection found corrosion on the flange." ;;
+        100) echo "The gammamarker rebuild finished ahead of the estimate." ;;
+        *)   echo "Routine line $i of the maintenance log, nothing notable recorded." ;;
+    esac
+    i=$((i+1))
+done > "$DIR/bm25/docs/long.md"
+
+# ONE chunk. The off-by-one case: chunk 0 is also the LAST chunk here.
+cat > "$DIR/bm25/docs/short.md" <<'EOF'
+A short standalone note, well under one chunk.
+The soloparagraph decision was recorded in March.
+EOF
+
+# ONE chunk whose FTS5 snippet is far larger than the 512-byte excerpt
+# buffer in viki_ask_result -- 24 tokens of 60 characters each blows past
+# it. This exercises the OTHER source of a truncated excerpt (the buffer,
+# not the vector leg's substr), with no model required. Being a
+# single-chunk document, it is also the control that says truncation and
+# fragmentation are independent facts: F16 wants the truncation marker and
+# NO fragment markers on the very same hit.
+LONGWORD=qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+{
+    printf 'Preamble line of the wide document.\n'
+    i=1
+    while [ "$i" -le 15 ]; do printf '%s%02d ' "$LONGWORD" "$i"; i=$((i+1)); done
+    printf 'needlelongword '
+    while [ "$i" -le 30 ]; do printf '%s%02d ' "$LONGWORD" "$i"; i=$((i+1)); done
+    printf '\n'
+} > "$DIR/bm25/docs/wide.md"
+
+cp "$DIR/bm25/docs/long.md" "$DIR/vec/docs/long.md"   # hybrid phase: ONE document,
+                                                      # so `#<ix>` alone names a chunk
+
+( cd "$DIR/bm25" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" index . ) \
+    >"$LOG/index.out" 2>"$LOG/index.err" || true
+
+# ------------------------------------------------------------- helpers --
+# BM25-only and --k 1: every query below names a token that occurs in
+# exactly one chunk of the whole corpus, so the FTS leg returns exactly
+# one row and the output holds exactly one hit. Nothing here depends on
+# ranking, on RRF, or on a model being present.
+ask(){ _o=$1; shift
+    ( cd "$DIR/bm25" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" ask "$*" --k 1 ) \
+        >"$LOG/$_o.out" 2>"$LOG/$_o.err" || true
+}
+# hit_ix <out> -- the chunk_ix the single hit's header line names.
+hit_ix(){ grep -E '^\[1\] rrf=' "$1" | head -1 | awk '{print $3}' | cut -d'#' -f2; }
+# nmark <out> <string> -- OCCURRENCES, not lines: an excerpt carries raw
+# newlines from the source, so a marker at each end can share a line or
+# not depending on the text, and `grep -c` would count either as 1.
+nmark(){ grep -o -- "$2" "$1" 2>/dev/null | wc -l; }
+
+HEAD_MARK='<<document continues above>>'
+TAIL_MARK='<<document continues below>>'
+CUT_MARK='<<excerpt truncated>>'
+
+echo "== A. viki ask: a chunk from the MIDDLE of a document is marked at both ends =="
+ask mid betamarker
+ck "F1 SETUP: the betamarker query lands on chunk #1 (the middle one)" \
+   '[ "$(hit_ix "$LOG/mid.out")" = "1" ]'
+ck "F2 the middle chunk is marked at its HEAD" \
+   '[ "$(nmark "$LOG/mid.out" "$HEAD_MARK")" -eq 1 ]'
+ck "F3 the middle chunk is marked at its TAIL" \
+   '[ "$(nmark "$LOG/mid.out" "$TAIL_MARK")" -eq 1 ]'
+
+echo "== B. the FIRST chunk has no head marker -- and still has a tail one =="
+ask first alphamarker
+ck "F4 SETUP: the alphamarker query lands on chunk #0 (the first one)" \
+   '[ "$(hit_ix "$LOG/first.out")" = "0" ]'
+ck "F5 CONTROL: the FIRST chunk carries NO head marker" \
+   '[ "$(nmark "$LOG/first.out" "$HEAD_MARK")" -eq 0 ]'
+ck "F6 ... but it DOES carry a tail marker (F5 is not 'markers never print')" \
+   '[ "$(nmark "$LOG/first.out" "$TAIL_MARK")" -eq 1 ]'
+
+echo "== C. the LAST chunk has no tail marker -- and still has a head one =="
+ask last gammamarker
+ck "F7 SETUP: the gammamarker query lands on chunk #2 (the last one)" \
+   '[ "$(hit_ix "$LOG/last.out")" = "2" ]'
+ck "F8 CONTROL: the LAST chunk carries NO tail marker" \
+   '[ "$(nmark "$LOG/last.out" "$TAIL_MARK")" -eq 0 ]'
+ck "F9 ... but it DOES carry a head marker (F8 is not 'markers never print')" \
+   '[ "$(nmark "$LOG/last.out" "$HEAD_MARK")" -eq 1 ]'
+
+echo "== D. a SINGLE-CHUNK document has NEITHER marker (the off-by-one case) =="
+ask solo soloparagraph
+ck "F10 SETUP: the single-chunk document returns a hit at all (F11/F12 are not vacuous)" \
+   '[ -s "$LOG/solo.out" ] && [ "$(hit_ix "$LOG/solo.out")" = "0" ]'
+ck "F11 a single-chunk document carries NO head marker" \
+   '[ "$(nmark "$LOG/solo.out" "$HEAD_MARK")" -eq 0 ]'
+ck "F12 a single-chunk document carries NO tail marker (chunk 0 IS the last chunk)" \
+   '[ "$(nmark "$LOG/solo.out" "$TAIL_MARK")" -eq 0 ]'
+
+echo "== E. the markers do not disturb the citation line, or FTS5's own elision =="
+# The header line is a CITATION: `<hash>#<ix>` is exactly what
+# /api/chunk?hash=&ix= takes, and test/m1.sh (G1-G6),
+# build/forum-e2e-probe.sh (C6) and build/model-uv-e2e-probe.sh (F11) all
+# parse it by position. Marking belongs on the excerpt line only.
+ck "F13 the header line is untouched: [N] rrf=X.XXXX  <64hex>#<ix>  <source>" \
+   'head -1 "$LOG/mid.out" | grep -qE "^\[1\] rrf=[0-9]+\.[0-9]{4}  [0-9a-f]{64}#1  \./docs/long\.md$"'
+# FTS5 writes ' ... ' where it dropped text from INSIDE this chunk. That
+# is intra-chunk elision, not fragmentation, and the two notations are
+# deliberately kept in disjoint alphabets -- dots for one, angle brackets
+# for the other -- so a reader cannot collapse them into a single vague
+# "something is missing". If a marker ever grows an ellipsis, F14 fails.
+ck "F14 no fragment marker contains an ellipsis (disjoint from FTS5's ' ... ')" \
+   '! grep -o "<<[^>]*>>" "$LOG/mid.out" | grep -q "\."'
+ck "F15 both notations appear on the same hit, once each -- no doubling up" \
+   'grep -q " \.\.\. " "$LOG/mid.out" \
+    && [ "$(nmark "$LOG/mid.out" "$HEAD_MARK")" -eq 1 ] \
+    && [ "$(nmark "$LOG/mid.out" "$TAIL_MARK")" -eq 1 ]'
+
+echo "== F. a truncated EXCERPT is a different fact from a fragmented CHUNK =="
+ask wide needlelongword
+ck "F16 an excerpt cut short by the display buffer says so" \
+   '[ "$(nmark "$LOG/wide.out" "$CUT_MARK")" -eq 1 ]'
+ck "F17 ... on a SINGLE-CHUNK document, so it carries no fragment marker (independent facts)" \
+   '[ "$(hit_ix "$LOG/wide.out")" = "0" ] \
+    && [ "$(nmark "$LOG/wide.out" "$HEAD_MARK")" -eq 0 ] \
+    && [ "$(nmark "$LOG/wide.out" "$TAIL_MARK")" -eq 0 ]'
+ck "F18 CONTROL: an excerpt that fits is NOT marked truncated" \
+   '[ "$(nmark "$LOG/solo.out" "$CUT_MARK")" -eq 0 ]'
+
+echo "== G. the VECTOR leg's excerpt is a truncated prefix, and says so =="
+# The vector leg has no snippet() -- there is no keyword match to build a
+# window around -- so it shows substr(chunk_text,1,140), a raw PREFIX.
+# That prefix is cut short on any chunk longer than 140 characters, which
+# is nearly all of them, and the cut deserves its own marker REGARDLESS of
+# chunk_ix. Reaching it needs a query the FTS leg cannot answer (otherwise
+# the FTS snippet wins the excerpt) and a model to answer it with.
+if [ -f "$MODEL/model.onnx" ] && [ -f "$MODEL/vocab.txt" ] && [ -f "$MODEL/viki-manifest.json" ]; then
+    ( cd "$DIR/vec" && VIKI_MODEL_DIR="$MODEL" "$VIKI" index . ) \
+        >"$LOG/vindex.out" 2>"$LOG/vindex.err" || true
+    # No token here occurs anywhere in the corpus, so the BM25 leg is
+    # empty and every hit -- and every excerpt -- comes from rung 2.
+    ( cd "$DIR/vec" && VIKI_MODEL_DIR="$MODEL" "$VIKI" ask "zzqxwv unrelatedtoken" --k 3 ) \
+        >"$LOG/v.out" 2>"$LOG/v.err" || true
+    # $DIR/vec holds ONE document, so `#<ix>  ` names one chunk. Extract
+    # the excerpt block by header, not by line offset: excerpts carry raw
+    # newlines, so "the line after the header" is not a block.
+    vblock(){ awk -v key="#$1  " '
+        /^\[[0-9]+\] rrf=/ { inb = (index($0, key) > 0); next }
+        inb && $0 == "" { inb = 0; next }
+        inb { print }' "$LOG/v.out"; }
+    ck "V1 SETUP: the vector leg answered a query the keyword leg cannot" \
+       'grep -q "hybrid mode" "$LOG/v.err" && [ "$(grep -cE "^\[[0-9]+\] rrf=" "$LOG/v.out")" -eq 3 ]'
+    ck "V2 the vector leg's 140-char prefix excerpt is marked truncated" \
+       '[ "$(vblock 1 | grep -o -- "$CUT_MARK" | wc -l)" -eq 1 ]'
+    ck "V3 ... and that same hit is still marked at both ends (chunk #1 of 3)" \
+       '[ "$(vblock 1 | grep -o -- "$HEAD_MARK" | wc -l)" -eq 1 ] \
+        && [ "$(vblock 1 | grep -o -- "$TAIL_MARK" | wc -l)" -eq 1 ]'
+    ck "V4 CONTROL: the FIRST chunk is truncated but has NO head marker" \
+       '[ "$(vblock 0 | grep -o -- "$CUT_MARK" | wc -l)" -eq 1 ] \
+        && [ "$(vblock 0 | grep -o -- "$HEAD_MARK" | wc -l)" -eq 0 ] \
+        && [ "$(vblock 0 | grep -o -- "$TAIL_MARK" | wc -l)" -eq 1 ]'
+    ck "V5 CONTROL: the LAST chunk is truncated but has NO tail marker" \
+       '[ "$(vblock 2 | grep -o -- "$CUT_MARK" | wc -l)" -eq 1 ] \
+        && [ "$(vblock 2 | grep -o -- "$HEAD_MARK" | wc -l)" -eq 1 ] \
+        && [ "$(vblock 2 | grep -o -- "$TAIL_MARK" | wc -l)" -eq 0 ]'
+else
+    for t in "V1 SETUP: the vector leg answered a query the keyword leg cannot" \
+             "V2 the vector leg's 140-char prefix excerpt is marked truncated" \
+             "V3 ... and that same hit is still marked at both ends (chunk #1 of 3)" \
+             "V4 CONTROL: the FIRST chunk is truncated but has NO head marker" \
+             "V5 CONTROL: the LAST chunk is truncated but has NO tail marker"
+    do
+        skip "$t" "no embedding model at $MODEL"
+    done
+fi
+
+echo "== H. viki serve: JSON booleans, an UNDECORATED snippet, and no innerHTML =="
+# PORT HYGIENE, and it is not paranoia -- it was a live bug in this file.
+# `viki serve` sets SO_REUSEADDR but not SO_REUSEPORT, so a second server
+# on a busy port fails to bind and exits, while curl happily talks to
+# whatever is ALREADY listening. Measured: an earlier draft leaked its
+# server (it backgrounded a subshell, so $! named the subshell and `kill`
+# left the real process orphaned), and the next run's JSON assertions
+# silently graded the leaked binary instead of the one under test -- a
+# probe that passes by testing the wrong program. Two fixes, both needed:
+# `exec` below, so $! IS the server, and this precondition, so a foreign
+# listener is a loud failure rather than a false pass.
+PORT_BUSY=0
+if command -v curl >/dev/null 2>&1; then
+    if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/api/health"; then PORT_BUSY=1; fi
+fi
+if [ "$PORT_BUSY" = 1 ]; then
+    FAIL=$((FAIL+1))
+    echo "  FAIL  S-1 SETUP: port $PORT already has a listener -- refusing to grade it"
+    echo "        (set VIKI_PROBE_PORT, or stop the stray server; the remaining S"
+    echo "         assertions are SKIPPED rather than measured against it)"
+    for t in "S0 SETUP: the JSON API answered both queries" \
+             "S1 a middle chunk reports fragment_head AND fragment_tail true" \
+             "S2 CONTROL: a single-chunk document reports BOTH false" \
+             "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
+             "S4 chunk_count reports the real extent (3 chunks, and 1)" \
+             "S5 the HTML page still contains no innerHTML anywhere" \
+             "S6 the page renders the SAME marker strings the CLI prints"
+    do
+        skip "$t" "port $PORT is not ours"
+    done
+elif command -v curl >/dev/null 2>&1; then
+    # `exec` matters: without it the subshell forks a child for viki and
+    # $! names the SUBSHELL, so the trap kills a wrapper and leaves the
+    # server running. With it, the subshell becomes the server.
+    (
+        cd "$DIR/bm25"
+        VIKI_MODEL_DIR="$DIR/nomodel"
+        export VIKI_MODEL_DIR
+        exec "$VIKI" serve --port "$PORT"
+    ) >"$LOG/serve.out" 2>"$LOG/serve.err" &
+    SERVE_PID=$!
+    i=0
+    while [ "$i" -lt 15 ]; do
+        if curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; then break; fi
+        i=$((i+1)); sleep 1
+    done
+    curl -s "http://127.0.0.1:$PORT/api/ask?q=betamarker&k=1" >"$LOG/api.mid.json" 2>/dev/null || true
+    curl -s "http://127.0.0.1:$PORT/api/ask?q=soloparagraph&k=1" >"$LOG/api.solo.json" 2>/dev/null || true
+    curl -s "http://127.0.0.1:$PORT/" >"$LOG/page.html" 2>/dev/null || true
+
+    ck "S0 SETUP: the JSON API answered both queries" \
+       'grep -q "\"hash\"" "$LOG/api.mid.json" && grep -q "\"hash\"" "$LOG/api.solo.json"'
+    ck "S1 a middle chunk reports fragment_head AND fragment_tail true" \
+       'grep -q "\"fragment_head\":true" "$LOG/api.mid.json" \
+        && grep -q "\"fragment_tail\":true" "$LOG/api.mid.json"'
+    ck "S2 CONTROL: a single-chunk document reports BOTH false" \
+       'grep -q "\"fragment_head\":false" "$LOG/api.solo.json" \
+        && grep -q "\"fragment_tail\":false" "$LOG/api.solo.json"'
+    # THE point of choosing booleans over decoration: a client that
+    # already parses `snippet` -- to quote it, diff it, feed it to a model
+    # -- must not silently start receiving marker words it cannot tell
+    # from indexed content. `<<` appears in no marker-free JSON body.
+    ck "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
+       '! grep -q "<<" "$LOG/api.mid.json"'
+    ck "S4 chunk_count reports the real extent (3 chunks, and 1)" \
+       'grep -q "\"chunk_count\":3" "$LOG/api.mid.json" \
+        && grep -q "\"chunk_count\":1" "$LOG/api.solo.json"'
+    # The page renders indexed content, which is untrusted markup. Adding
+    # markers must not have reached for innerHTML to do it.
+    ck "S5 the HTML page still contains no innerHTML anywhere" \
+       '[ -s "$LOG/page.html" ] && ! grep -q "innerHTML" "$LOG/page.html"'
+    ck "S6 the page renders the SAME marker strings the CLI prints" \
+       'grep -q -- "$HEAD_MARK" "$LOG/page.html" \
+        && grep -q -- "$TAIL_MARK" "$LOG/page.html" \
+        && grep -q -- "$CUT_MARK" "$LOG/page.html"'
+    kill "$SERVE_PID" 2>/dev/null || true
+    SERVE_PID=""
+else
+    for t in "S0 SETUP: the JSON API answered both queries" \
+             "S1 a middle chunk reports fragment_head AND fragment_tail true" \
+             "S2 CONTROL: a single-chunk document reports BOTH false" \
+             "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
+             "S4 chunk_count reports the real extent (3 chunks, and 1)" \
+             "S5 the HTML page still contains no innerHTML anywhere" \
+             "S6 the page renders the SAME marker strings the CLI prints"
+    do
+        skip "$t" "no curl on PATH"
+    done
+fi
+
+echo "== I. viki grep marks the same facts, with the same strings =="
+# `viki grep` prints substr(chunk_text,1,N) under the same citable
+# `<hash>#<ix>` header `viki ask` uses -- a possibly-middle chunk, cut
+# short -- so it is the same provenance defect and takes the same fix.
+# It shares the marker LITERALS with `viki ask` (viki_grep.c includes
+# viki_ask.h rather than retyping them), which is what R2/R6 are really
+# checking: not "some marker printed" but "the same string".
+#
+# `viki grep` is exact and unranked, so unlike `ask` these need no --k and
+# make no ranking assumption at all: each token below occurs in exactly
+# one chunk of the corpus.
+vgrep(){ _o=$1; shift
+    ( cd "$DIR/bm25" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" grep "$@" ) \
+        >"$LOG/$_o.out" 2>"$LOG/$_o.err" || true
+}
+# grep's header has no rrf= field: `[N] <hash>#<ix>  <source>`.
+gr_ix(){ grep -E '^\[1\] ' "$1" | head -1 | awk '{print $2}' | cut -d'#' -f2; }
+
+vgrep g.mid betamarker
+ck "R1 SETUP: grep finds the middle chunk of long.md, exactly once" \
+   '[ "$(grep -cE "^\[[0-9]+\] " "$LOG/g.mid.out")" -eq 1 ] \
+    && [ "$(gr_ix "$LOG/g.mid.out")" = "1" ]'
+ck "R2 grep marks that middle chunk at BOTH ends, with ask's own strings" \
+   '[ "$(nmark "$LOG/g.mid.out" "$HEAD_MARK")" -eq 1 ] \
+    && [ "$(nmark "$LOG/g.mid.out" "$TAIL_MARK")" -eq 1 ]'
+ck "R3 grep's header line is untouched: [N] <64hex>#<ix>  <source>" \
+   'head -1 "$LOG/g.mid.out" | grep -qE "^\[1\] [0-9a-f]{64}#1  \./docs/long\.md$"'
+
+vgrep g.solo soloparagraph
+ck "R4 SETUP: the single-chunk document is found (R5 is not vacuous)" \
+   '[ -s "$LOG/g.solo.out" ] && [ "$(gr_ix "$LOG/g.solo.out")" = "0" ]'
+ck "R5 CONTROL: a single-chunk document gets NEITHER fragment marker" \
+   '[ "$(nmark "$LOG/g.solo.out" "$HEAD_MARK")" -eq 0 ] \
+    && [ "$(nmark "$LOG/g.solo.out" "$TAIL_MARK")" -eq 0 ]'
+# Truncation is a property of the EXCERPT, fragmentation of the CHUNK, and
+# --chars moves one without moving the other: same hit, same chunk, two
+# different answers about whether the excerpt was cut.
+vgrep g.cut soloparagraph --chars 20
+ck "R6 an excerpt cut short by --chars says so" \
+   '[ "$(nmark "$LOG/g.cut.out" "$CUT_MARK")" -eq 1 ]'
+ck "R7 CONTROL: ... on that same single-chunk hit, still no fragment marker" \
+   '[ "$(nmark "$LOG/g.cut.out" "$HEAD_MARK")" -eq 0 ] \
+    && [ "$(nmark "$LOG/g.cut.out" "$TAIL_MARK")" -eq 0 ]'
+ck "R8 CONTROL: an excerpt that fits is NOT marked truncated" \
+   '[ "$(nmark "$LOG/g.solo.out" "$CUT_MARK")" -eq 0 ]'
+
+echo
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+[ "$FAIL" -eq 0 ]

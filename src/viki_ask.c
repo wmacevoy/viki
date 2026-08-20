@@ -85,6 +85,14 @@ static viki_ask_result *find_or_add(viki_ask_result *pool, int *n, const char *h
     return &pool[*n - 1];
 }
 
+/* How many characters of chunk_text the vector leg shows as an excerpt.
+** Unlike the FTS leg it has no snippet() to build a match-centred window
+** -- there is no match to centre on -- so it shows a raw PREFIX, and a
+** prefix of a chunk is cut short whenever the chunk is longer than this.
+** That cut is reported (VIKI_FRAG_CUT); it is not the same fact as the
+** chunk being a slice of a longer document. */
+#define VIKI_VEC_EXCERPT_CHARS 140
+
 /* Records one hit from retrieval leg `leg` and advances *pRank to the rank
 ** this hit occupies within that leg.
 **
@@ -121,9 +129,15 @@ static viki_ask_result *find_or_add(viki_ask_result *pool, int *n, const char *h
 **
 ** Both legs feed rows in their own best-first order (ORDER BY bm25() /
 ** cosine DESC), so the first row a leg reports for a chunk is also that
-** chunk's best rank in that leg -- which is the one that gets scored. */
+** chunk's best rank in that leg -- which is the one that gets scored.
+**
+** bTextIsPrefix says the caller's `text` is ALREADY a truncated prefix of
+** chunk_text (the vector leg's substr()). It is passed in rather than
+** guessed because SQL truncation is invisible from here: substr(x,1,140)
+** of a 140-character chunk and of a 4000-character one look identical. */
 static void leg_hit(viki_ask_result *pool, int *n, unsigned leg, int *pRank,
-                     const char *hash, int chunk_ix, const char *text){
+                     const char *hash, int chunk_ix, const char *text,
+                     int bTextIsPrefix){
     viki_ask_result *c = find_or_add(pool, n, hash, chunk_ix);
     if( c && (c->legs & leg) ) return;   /* duplicate row for an already-scored chunk */
     (*pRank)++;
@@ -133,7 +147,19 @@ static void leg_hit(viki_ask_result *pool, int *n, unsigned leg, int *pRank,
     if( !c ) return;
     c->legs |= leg;
     c->rrf += 1.0 / (VIKI_RRF_K + *pRank);
-    if( text && !c->snippet[0] ) strncpy(c->snippet, text, sizeof(c->snippet) - 1);
+    if( text && !c->snippet[0] ){
+        /* Two ways the string a surface will display is shorter than the
+        ** excerpt the SQL produced -- the caller's substr(), and this
+        ** fixed buffer -- and they are the same fact to a reader, so they
+        ** set the same bit. The flag is set HERE, beside the copy, because
+        ** it must describe the bytes actually stored: whichever leg
+        ** reaches a chunk first supplies the excerpt, and only that leg's
+        ** truncation is the one on show. */
+        if( bTextIsPrefix || strlen(text) > sizeof(c->snippet) - 1 ){
+            c->frag |= VIKI_FRAG_CUT;
+        }
+        strncpy(c->snippet, text, sizeof(c->snippet) - 1);
+    }
 }
 
 static int cmp_result(const void *a, const void *b){
@@ -147,6 +173,15 @@ static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, viki_ask_re
     sqlite3_stmt *st;
     int rank = 0;
 
+    /* The ' ... ' here is FTS5's own INTRA-CHUNK elision marker: it appears
+    ** where snippet() dropped text from inside this chunk to fit its 24-token
+    ** window. That is a different fact from the VIKI_FRAG_* fragment markers,
+    ** which say the CHUNK is a slice of a longer document -- one is about
+    ** what snippet() left out, the other about what `viki index` cut apart.
+    ** Both can be true of one hit and both are then shown, in disjoint
+    ** notations (see VIKI_MARK_HEAD in viki_ask.h); neither is ever
+    ** substituted for the other, and this leg never sets VIKI_FRAG_CUT for
+    ** elision snippet() has already marked itself. */
     if( sqlite3_prepare_v2(db,
             "SELECT content_hash, chunk_ix, snippet(chunk_fts, 0, '[', ']', ' ... ', 24) "
             "FROM chunk_fts WHERE chunk_fts MATCH ?1 ORDER BY bm25(chunk_fts) LIMIT ?2",
@@ -160,7 +195,7 @@ static void run_fts(sqlite3 *db, const char *ftsQuery, int poolSize, viki_ask_re
         const char *hash = (const char*)sqlite3_column_text(st, 0);
         int chunk_ix = sqlite3_column_int(st, 1);
         const char *snippet = (const char*)sqlite3_column_text(st, 2);
-        leg_hit(pool, n, VIKI_LEG_FTS, &rank, hash, chunk_ix, snippet);
+        leg_hit(pool, n, VIKI_LEG_FTS, &rank, hash, chunk_ix, snippet, 0);
         if( rank >= poolSize ) break; /* poolSize distinct chunks, not rows */
     }
     sqlite3_finalize(st);
@@ -171,8 +206,13 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
     sqlite3_stmt *st;
     int rank = 0;
 
+    /* Column 3 asks the db whether the substr() in column 2 actually threw
+    ** anything away, because the caller cannot tell afterwards. SQLite's
+    ** substr()/length() both count CHARACTERS on a TEXT value, so the two
+    ** are measured in the same unit and the comparison is exact rather than
+    ** a byte-length approximation. */
     if( sqlite3_prepare_v2(db,
-            "SELECT content_hash, chunk_ix, substr(chunk_text,1,140) "
+            "SELECT content_hash, chunk_ix, substr(chunk_text,1,?5), length(chunk_text) > ?5 "
             "FROM viki_chunk WHERE model_id=?1 AND embedding IS NOT NULL "
             "ORDER BY ndvss_cosine_similarity_f(?2, embedding, ?3) DESC LIMIT ?4",
             -1, &st, NULL) != SQLITE_OK ){
@@ -183,12 +223,14 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
     sqlite3_bind_blob(st, 2, qvec, (int)(sizeof(float) * (size_t)dim), SQLITE_STATIC);
     sqlite3_bind_int(st, 3, dim);
     sqlite3_bind_int(st, 4, poolSize);
+    sqlite3_bind_int(st, 5, VIKI_VEC_EXCERPT_CHARS);
 
     while( sqlite3_step(st) == SQLITE_ROW ){
         const char *hash = (const char*)sqlite3_column_text(st, 0);
         int chunk_ix = sqlite3_column_int(st, 1);
         const char *excerpt = (const char*)sqlite3_column_text(st, 2);
-        leg_hit(pool, n, VIKI_LEG_VEC, &rank, hash, chunk_ix, excerpt);
+        int bCut = sqlite3_column_int(st, 3);
+        leg_hit(pool, n, VIKI_LEG_VEC, &rank, hash, chunk_ix, excerpt, bCut);
     }
     sqlite3_finalize(st);
 }
@@ -208,6 +250,61 @@ static void fill_sources(sqlite3 *db, viki_ask_result *pool, int n){
             sqlite3_finalize(stPath);
         }
     }
+}
+
+/* Decides, for each candidate, whether it is a FRAGMENT of a longer
+** document, and records the document's chunk count. Display-side only:
+** nothing here writes, and chunk_text is untouched.
+**
+** The rule is positional. A chunk is a fragment at its HEAD when
+** chunk_ix > 0 -- that needs no query at all -- and at its TAIL when some
+** later chunk of the same content exists.
+**
+** WHY max() IS TAKEN OVER EVERY model_id RATHER THAN THE ASKER'S: a
+** viki_ask_result has no model_id to filter by, and must not acquire one.
+** The FTS leg deliberately does not filter by model_id (see leg_hit), so
+** a hit can come from a chunk that exists only under a peer's epoch. In
+** every cache anyone has built, the count is the same either way: chunk
+** boundaries are a function of the text, not of the model, so two epochs
+** of one content_hash hold the same chunk_ix set. It could only diverge
+** if the chunker itself changed -- which is an EPOCH BUMP by D-11, not a
+** local tweak -- and then max() over all epochs over-marks (claims text
+** follows when this epoch ended here) rather than under-marks. That is
+** the right way round to be wrong: a spurious "there is more" costs a
+** reader nothing, while a missing one is the provenance defect this whole
+** mechanism exists to fix. Same reasoning for an extent we cannot read at
+** all (a chunk_fts row whose viki_chunk row is gone, or a failed
+** prepare): report chunk_count 0 for "unknown" and mark the tail, because
+** "I could not prove this chunk ends the document" must never render as
+** "this chunk ends the document". */
+static void fill_fragment_flags(sqlite3 *db, viki_ask_result *pool, int n){
+    sqlite3_stmt *st = NULL;
+    int i;
+
+    if( sqlite3_prepare_v2(db, "SELECT max(chunk_ix) FROM viki_chunk WHERE content_hash=?1",
+                           -1, &st, NULL) != SQLITE_OK ){
+        st = NULL;
+    }
+    for( i = 0; i < n; i++ ){
+        int maxIx = -1;   /* -1 == extent unknown */
+        if( st ){
+            sqlite3_reset(st);
+            sqlite3_bind_text(st, 1, pool[i].hash, -1, SQLITE_STATIC);
+            if( sqlite3_step(st) == SQLITE_ROW
+             && sqlite3_column_type(st, 0) != SQLITE_NULL ){
+                maxIx = sqlite3_column_int(st, 0);
+            }
+        }
+        if( pool[i].chunk_ix > 0 ) pool[i].frag |= VIKI_FRAG_HEAD;
+        if( maxIx < 0 ){
+            pool[i].chunk_count = 0;
+            pool[i].frag |= VIKI_FRAG_TAIL;
+        }else{
+            pool[i].chunk_count = maxIx + 1;
+            if( pool[i].chunk_ix < maxIx ) pool[i].frag |= VIKI_FRAG_TAIL;
+        }
+    }
+    if( st ) sqlite3_finalize(st);
 }
 
 int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb,
@@ -235,12 +332,36 @@ int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb
     }
 
     fill_sources(db, pool, n);
+    fill_fragment_flags(db, pool, n);
     qsort(pool, (size_t)n, sizeof(viki_ask_result), cmp_result);
 
     nOut = n < maxResults ? n : maxResults;
     nOut = nOut < topK ? nOut : topK;
     if( nOut > 0 ) memcpy(results, pool, sizeof(viki_ask_result) * (size_t)nOut);
     return nOut;
+}
+
+/* Strips leading and trailing whitespace from an excerpt, in place, for
+** display only. Both ends acquire whitespace that means nothing here: a
+** chunk_text slice ends with the newline that ended its last line, and
+** FTS5's snippet() frames its elision marker with spaces (' ... '), so
+** the excerpt routinely arrives with a space at each end. Left alone,
+** the markers drift off the text they qualify -- the tail one onto a
+** line of its own, where it reads as a separate remark rather than as
+** "and the document goes on from here".
+**
+** Whitespace is the only thing this may ever remove, and only from a
+** rendering that already reflows the excerpt (raw newlines, only the
+** first line indented). Anyone who needs the chunk byte-for-byte asks
+** /api/chunk. It operates on viki_cmd_ask's own copy of the results, so
+** the cache is untouched and /api/ask still reports the excerpt exactly
+** as retrieved. */
+static void trim_excerpt(char *z){
+    size_t n = strlen(z);
+    size_t i = 0;
+    while( n > 0 && (unsigned char)z[n - 1] <= ' ' ) z[--n] = '\0';
+    while( z[i] && (unsigned char)z[i] <= ' ' ) i++;
+    if( i ) memmove(z, z + i, n - i + 1);
 }
 
 int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
@@ -270,10 +391,24 @@ int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb){
         ** parameters /api/chunk?hash=&ix= wants, so a hit named on the CLI can
         ** be fetched in full from `viki serve` without a translation step. The
         ** ragged, possibly-empty, possibly-space-containing source path goes
-        ** last so it cannot shift any field a script reads by position. */
-        printf("[%d] rrf=%.4f  %s#%d  %s\n    %s\n\n",
+        ** last so it cannot shift any field a script reads by position.
+        **
+        ** The FRAGMENT markers go on the EXCERPT line, never the header
+        ** line. The header is a citation -- `<hash>#<ix>` is exactly what
+        ** /api/chunk?hash=&ix= takes, and three test files parse the line
+        ** by position -- while the excerpt is the thing that misreads as a
+        ** complete text and therefore the thing that has to say otherwise.
+        ** Order after the excerpt is inner-to-outer: VIKI_MARK_CUT is
+        ** about this excerpt, VIKI_MARK_TAIL about the document around the
+        ** chunk. Both can appear; they are not alternatives. */
+        trim_excerpt(results[i].snippet);
+        printf("[%d] rrf=%.4f  %s#%d  %s\n    %s%s%s%s\n\n",
                i + 1, results[i].rrf, results[i].hash, results[i].chunk_ix,
-               results[i].source, results[i].snippet);
+               results[i].source,
+               (results[i].frag & VIKI_FRAG_HEAD) ? VIKI_MARK_HEAD " " : "",
+               results[i].snippet,
+               (results[i].frag & VIKI_FRAG_CUT)  ? " " VIKI_MARK_CUT  : "",
+               (results[i].frag & VIKI_FRAG_TAIL) ? " " VIKI_MARK_TAIL : "");
     }
     if( n == 0 ) fprintf(stderr, "(no matches)\n");
     return 0;

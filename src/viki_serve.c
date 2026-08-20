@@ -203,6 +203,29 @@ static int handle_ask(sbuf *body, sqlite3 *db, viki_embedder *emb, const char *q
         sbuf_puts(body, ",\"chunk_ix\":"); sbuf_int(body, results[i].chunk_ix);
         sbuf_puts(body, ",\"hash\":"); sbuf_json_string(body, results[i].hash);
         sbuf_puts(body, ",\"snippet\":"); sbuf_json_string(body, results[i].snippet);
+        /* FRAGMENT provenance as explicit booleans, and `snippet` left
+        ** exactly as retrieved.
+        **
+        ** The CLI decorates its excerpt with VIKI_MARK_* because its only
+        ** output channel is a line of text a human or an agent reads. This
+        ** is not that channel. A client already parsing `snippet` -- to
+        ** quote it, diff it, or feed it to a model -- would silently start
+        ** receiving marker words mixed into indexed content, with no way
+        ** to tell viki's decoration from a document that happens to
+        ** contain the same characters. Additive boolean fields cannot
+        ** break such a client, and they carry the fact in a form it can
+        ** branch on rather than one it must strip. A JSON client that
+        ** wants the printed form composes it from these flags and the
+        ** VIKI_MARK_* strings, which is exactly what the HTML page below
+        ** does. chunk_count is 0 when the extent could not be determined
+        ** (see fill_fragment_flags), never a guess. */
+        sbuf_puts(body, ",\"fragment_head\":");
+        sbuf_puts(body, (results[i].frag & VIKI_FRAG_HEAD) ? "true" : "false");
+        sbuf_puts(body, ",\"fragment_tail\":");
+        sbuf_puts(body, (results[i].frag & VIKI_FRAG_TAIL) ? "true" : "false");
+        sbuf_puts(body, ",\"snippet_truncated\":");
+        sbuf_puts(body, (results[i].frag & VIKI_FRAG_CUT) ? "true" : "false");
+        sbuf_puts(body, ",\"chunk_count\":"); sbuf_int(body, results[i].chunk_count);
         sbuf_puts(body, "}");
     }
     sbuf_puts(body, "]}");
@@ -261,7 +284,17 @@ static int handle_chunk(sbuf *body, sqlite3 *db, const char *query){
 ** it's free text pulled from indexed files/wiki/tickets/forum posts)
 ** via textContent, never innerHTML, so indexed content containing HTML/
 ** script-like text is displayed literally rather than executed. No
-** external requests (fonts, CDN scripts) -- fully self-contained. */
+** external requests (fonts, CDN scripts) -- fully self-contained.
+**
+** The fragment markers keep that property and sharpen it. Each one is its
+** own <span>, built by frag() with its own textContent, so the marker is
+** a separate DOM node from the excerpt rather than characters spliced
+** into it -- which is both why no innerHTML is needed and why a document
+** whose text literally contains "<<document continues below>>" cannot
+** pass itself off as viki's marker: that text lands in the excerpt node,
+** unstyled. The marker strings come from the VIKI_MARK_* macros by C
+** string concatenation rather than being retyped here, so this page and
+** `viki ask` cannot drift apart. */
 static const char *const VIKI_SERVE_HTML =
     "<!doctype html>\n"
     "<html><head>\n"
@@ -274,6 +307,7 @@ static const char *const VIKI_SERVE_HTML =
     "  .hit { border-top: 1px solid #ccc; padding: 0.6rem 0; }\n"
     "  .meta { color: #666; font-size: 0.85em; }\n"
     "  .snippet { white-space: pre-wrap; }\n"
+    "  .frag { color: #a33; font-style: italic; }\n"
     "</style>\n"
     "</head><body>\n"
     "<h1>viki</h1>\n"
@@ -299,6 +333,12 @@ static const char *const VIKI_SERVE_HTML =
     "    .then(renderResults)\n"
     "    .catch(function(err){ statusEl.textContent = 'error: ' + err; });\n"
     "});\n"
+    "function frag(t){\n"
+    "  var s = document.createElement('span');\n"
+    "  s.className = 'frag';\n"
+    "  s.textContent = t;\n"
+    "  return s;\n"
+    "}\n"
     "function renderResults(data){\n"
     "  if (data.error) { statusEl.textContent = 'error: ' + data.error; return; }\n"
     "  statusEl.textContent = data.mode + (data.model_id ? (' / ' + data.model_id) : '') +\n"
@@ -310,11 +350,15 @@ static const char *const VIKI_SERVE_HTML =
     "    var meta = document.createElement('div');\n"
     "    meta.className = 'meta';\n"
     "    meta.textContent = '#' + hit.rank + '  rrf=' + hit.rrf.toFixed(4) +\n"
-    "      '  ' + hit.source + ' (chunk ' + hit.chunk_ix + ')';\n"
+    "      '  ' + hit.source + ' (chunk ' + hit.chunk_ix +\n"
+    "      (hit.chunk_count ? ' of ' + hit.chunk_count : '') + ')';\n"
     "    div.appendChild(meta);\n"
     "    var snippet = document.createElement('div');\n"
     "    snippet.className = 'snippet';\n"
-    "    snippet.textContent = hit.snippet;\n"
+    "    if (hit.fragment_head) snippet.appendChild(frag('" VIKI_MARK_HEAD " '));\n"
+    "    snippet.appendChild(document.createTextNode(hit.snippet));\n"
+    "    if (hit.snippet_truncated) snippet.appendChild(frag(' " VIKI_MARK_CUT "'));\n"
+    "    if (hit.fragment_tail) snippet.appendChild(frag(' " VIKI_MARK_TAIL "'));\n"
     "    div.appendChild(snippet);\n"
     "    resultsEl.appendChild(div);\n"
     "  });\n"

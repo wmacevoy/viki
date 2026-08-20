@@ -1,4 +1,10 @@
 #include "viki_grep.h"
+/* For VIKI_MARK_* only. `viki grep` prints the same kind of excerpt
+** `viki ask` does -- a possibly-middle chunk, cut short -- under the same
+** citable `<hash>#<ix>` header, so it must mark the same facts with the
+** SAME strings. Including the header rather than retyping the literals is
+** what makes that a compile-time guarantee instead of a convention. */
+#include "viki_ask.h"
 #include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,24 +84,40 @@ int viki_grep_register(sqlite3 *db){
 int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
                   const char *zSourceLike, int nChars){
     sqlite3_stmt *st;
-    char zSql[512];
+    /* 1024, not 512. The expanded SQL below measures 393 bytes without
+    ** the two fragment columns and 513 with them (nChars=160), so the
+    ** 512-byte buffer this used to have would have had
+    ** sqlite3_snprintf() truncate it silently and prepare_v2() then fail
+    ** with a syntax error naming none of that. */
+    char zSql[1024];
     int n = 0, rc;
 
     if( nChars <= 0 ) nChars = 160;
 
     /* DISTINCT on (content_hash, chunk_ix): viki_source may hold several
     ** paths for one content_hash (two files with identical bytes share a
-    ** hash), and without this the same chunk prints once per path. */
+    ** hash), and without this the same chunk prints once per path.
+    **
+    ** Columns 4 and 5 are the FRAGMENT facts, computed exactly as
+    ** viki_ask.c does them and for the same reason (see VIKI_FRAG_* in
+    ** viki_ask.h): column 4 asks the db whether column 2's substr()
+    ** actually threw anything away -- substr()/length() both count
+    ** CHARACTERS on TEXT, so the comparison is exact, and the caller
+    ** cannot tell afterwards -- and column 5 is the document's last
+    ** chunk_ix, taken over EVERY model_id because a chunk here carries no
+    ** model_id and must not acquire one. */
     sqlite3_snprintf(sizeof(zSql), zSql,
         "SELECT c.content_hash, c.chunk_ix, substr(c.chunk_text,1,%d),"
-        "       (SELECT s.path FROM viki_source s WHERE s.content_hash=c.content_hash LIMIT 1)"
+        "       (SELECT s.path FROM viki_source s WHERE s.content_hash=c.content_hash LIMIT 1),"
+        "       length(c.chunk_text) > %d,"
+        "       (SELECT max(m.chunk_ix) FROM viki_chunk m WHERE m.content_hash=c.content_hash)"
         "  FROM viki_chunk c"
         " WHERE %s(?1, c.chunk_text)"
         "   AND (?2 IS NULL OR EXISTS(SELECT 1 FROM viki_source s2"
         "        WHERE s2.content_hash=c.content_hash AND s2.path LIKE ?2))"
         " GROUP BY c.content_hash, c.chunk_ix"
         " ORDER BY c.content_hash, c.chunk_ix",
-        nChars, bIgnoreCase ? "regexpi" : "regexp");
+        nChars, nChars, bIgnoreCase ? "regexpi" : "regexp");
 
     if( sqlite3_prepare_v2(db, zSql, -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki grep: prepare failed: %s\n", sqlite3_errmsg(db));
@@ -110,11 +132,44 @@ int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
         int ix = sqlite3_column_int(st, 1);
         const char *zText = (const char*)sqlite3_column_text(st, 2);
         const char *zSrc  = (const char*)sqlite3_column_text(st, 3);
+        int bCut  = sqlite3_column_int(st, 4);
+        /* NULL max(chunk_ix) means "extent unknown", not "chunk 0". Same
+        ** rule as fill_fragment_flags(): an extent we could not read marks
+        ** the TAIL anyway, because "I could not prove this chunk ends the
+        ** document" must never render as "this chunk ends the document". */
+        int maxIx = sqlite3_column_type(st, 5) == SQLITE_NULL
+                        ? -1 : sqlite3_column_int(st, 5);
+        const char *zShow = zText ? zText : "";
+        int nText = (int)strlen(zShow);
         n++;
+        /* Whitespace comes off BOTH ends for display only, and only from
+        ** this printf's view of a const string SQLite owns (a pointer and
+        ** a %.*s precision -- no copy, nothing mutated). It is the same
+        ** rule viki_ask.c's trim_excerpt() applies, deliberately, so the
+        ** two surfaces decorate the same text the same way.
+        **
+        ** Both ends acquire whitespace that means nothing here. A
+        ** chunk_text slice ends with the newline that ended its last line,
+        ** and a chunk that begins with a blank line starts with one too --
+        ** either way a marker lands on a line of ITS OWN, where it reads
+        ** as a separate remark rather than as "and the document goes on
+        ** from here". Whitespace is the only thing this may ever remove,
+        ** and only from a rendering that already reflows the excerpt (raw
+        ** newlines, only the first line indented by the printf below);
+        ** anyone who needs the chunk byte-for-byte asks /api/chunk. */
+        while( nText > 0 && (unsigned char)zShow[nText - 1] <= ' ' ) nText--;
+        while( nText > 0 && (unsigned char)zShow[0] <= ' ' ){ zShow++; nText--; }
         /* Same hit-line shape `viki ask` prints, minus the score, so one
-        ** parser handles both. */
-        printf("[%d] %s#%d  %s\n    %s\n\n", n, zHash ? zHash : "?", ix,
-               zSrc ? zSrc : "(source path unknown)", zText ? zText : "");
+        ** parser handles both -- markers included, and on the EXCERPT line
+        ** only. The header is a citation (`<hash>#<ix>` is what
+        ** /api/chunk?hash=&ix= takes) and build/grep-probe.sh's C6/C7
+        ** count it by position. */
+        printf("[%d] %s#%d  %s\n    %s%.*s%s%s\n\n", n, zHash ? zHash : "?", ix,
+               zSrc ? zSrc : "(source path unknown)",
+               (ix > 0)                  ? VIKI_MARK_HEAD " " : "",
+               nText, zShow,
+               bCut                      ? " " VIKI_MARK_CUT  : "",
+               (maxIx < 0 || ix < maxIx) ? " " VIKI_MARK_TAIL : "");
         if( nMax > 0 && n >= nMax ) break;
     }
     if( rc == SQLITE_ERROR ){

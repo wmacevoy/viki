@@ -16,18 +16,23 @@ types: checkout files, wiki pages, tickets, forum posts, **check-in
 comments, tech notes, ticket changes, attachments and unversioned
 files**. The last five landed together as the "cover all of fossil
 state" round; check-in comments are the important one, because the
-timeline is where a project records what was done and why. There is
-also a second query verb, **`viki muse`** -- undirected recall with no
-query at all, for the thing you do not know exists and therefore cannot
-ask for. See `FINDINGS.md` for what was actually verified and how --
+timeline is where a project records what was done and why. There are
+**three** query verbs now, not one: **`viki ask`** (hybrid ranked
+search), **`viki muse`** -- undirected recall with no query at all, for
+the thing you do not know exists and therefore cannot ask for -- and
+**`viki grep`**, exact unranked POSIX-ERE regex over every indexed
+artifact, for when you know the literal string rather than the idea.
+Which verb to reach for, and how to phrase an `ask` query so it actually
+finds things, is **"Querying viki"** below -- read it before you use this
+tool, not after. See `FINDINGS.md` for what was actually verified and how --
 forum extraction has now been round-tripped against real, live forum
 posts, which uncovered three real defects in it (escaped thread titles,
 superseded post versions indexed as current, and card lookup running off
 into the post body). All three are fixed in `src/viki_index.c` **and are
-now in `build/dist/viki`** -- the shipped binary is the 2026-08-13
-**19:48:15** build (`stat -f '%Sm %N' -t '%Y-%m-%d %H:%M:%S'
+now in `build/dist/viki`** -- the shipped binary is the 2026-08-20
+**01:22:39** build (`stat -f '%Sm %N' -t '%Y-%m-%d %H:%M:%S'
 build/dist/viki`), newer than every file in `src/` (newest is
-`src/viki.c` at 19:28:03), and `sh build/forum-e2e-probe.sh <empty-dir>`
+`src/viki_grep.c` at 01:22:14), and `sh build/forum-e2e-probe.sh <empty-dir>`
 is `PASS=26 FAIL=0` against it. Forum posts are nonetheless the **least**
 verified of the four types -- four artifact shapes exercised, not in CI,
 and not touched by `test/m1.sh`. See the forum bullet under "Verified
@@ -36,7 +41,7 @@ trust that leg.
 
 **The Milestone 1 definition-of-done test is `test/m1.sh`** -- 90
 assertions, `90 passed, 0 failed, 0 skipped`, exit 0, re-measured
-first-hand 2026-08-13 against that same 19:48:15 binary. Run it first
+first-hand 2026-08-20 against that same 01:22:39 binary. Run it first
 when you want to know whether this tree still works. It grew from 54 to
 90 when the three fixes below landed: sections 6/7/8 cover the citable
 `content_hash`, stale-content invalidation, and mixed-epoch scoring, and
@@ -91,13 +96,18 @@ src/            viki CLI source (C)
   viki_db.c/.h    local cache db: schema, ndvss static registration
   viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: on an ENCRYPTED repo each `fossil` invocation pays a SQLCipher KDF, so the per-artifact idiom is minutes where this is seconds. Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
   viki_muse.c/.h  `viki muse`: undirected recall, NO query. Picks a seed chunk and returns chunks from the calibrated MIDDLE of that seed's cosine band -- close enough to be about something, far enough that `ask` would never surface them. Vector-only (an unembedded cache is refused, not faked with BM25), but needs no model FILE: a cache pulled from a peer muses with no `model.onnx` on disk. Rejected scorers (|cos|, sum|xi*yi|, random subspace, anti-search) are recorded in `viki_muse.h` WITH the numbers that killed them, against a uniform-random control
-  viki_grep.c/.h  `viki grep "<regex>"`: POSIX regex over every indexed chunk, exact and UNRANKED -- the complement to `ask`, for when you know the literal string rather than the idea. Its reason to exist is the artifacts `rg` CANNOT reach: five of the nine indexed classes (check-in comments, tech notes, ticket changes, attachments, unversioned files) plus wiki/tickets/forum are not files on disk. Engine is libc POSIX regcomp/regexec -- no vendored library, no download, no submodule -- so the syntax is ERE, NOT PCRE (`[[:digit:]]`, not `\d`; no lookaround). Registers `regexp()`/`regexpi()` on the cache db, which also makes SQLite's infix `x REGEXP y` work for agents driving .viki/cache.db directly. Compiled patterns are cached via sqlite3_set_auxdata so a scan compiles once, not once per row.
+  viki_grep.c/.h  `viki grep "<regex>"`: POSIX regex over every indexed chunk, exact and UNRANKED -- the complement to `ask`, for when you know the literal string rather than the idea. Its reason to exist is the artifacts `rg` CANNOT reach: five of the nine indexed classes (check-in comments, tech notes, ticket changes, attachments, unversioned files) plus wiki/tickets/forum are not files on disk. Engine is libc POSIX regcomp/regexec -- no vendored library, no download, no submodule -- so the syntax is ERE, NOT PCRE (`[[:digit:]]`, not `\d`; no lookaround). Registers `regexp()`/`regexpi()` on the cache db, which also makes SQLite's infix `x REGEXP y` work for agents driving .viki/cache.db directly. Compiled patterns are cached via sqlite3_set_auxdata so a scan compiles once, not once per row. Its excerpt carries the same fragment markers `viki ask`'s does, from the same `VIKI_MARK_*` macros (it includes `viki_ask.h` rather than retyping them) -- same defect, same fix: a truncated prefix of a possibly-middle chunk under the same citable `<hash>#<ix>` header.
   viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
                   Each leg scores a given `(content_hash, chunk_ix)` at most once, at its best rank (`leg_hit()`), so a cache holding several `model_id` epochs of
                   the same content -- the normal steady state of D-11 sharing -- ranks identically to a single-epoch one instead of double-counting the BM25 leg (FINDINGS.md).
                   CLI hit lines are `[<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>` then the snippet indented 4 spaces; content_hash is the citable
                   identity (KICKOFF.md deliverable 2), the same value `/api/ask` returns as `hash` and what `/api/chunk?hash=&ix=` takes, and `<source>` is a
                   best-effort path hint that goes last because it can be `(source path unknown)` or contain spaces.
+                  Marks fragments at DISPLAY time only (`VIKI_FRAG_*`/`VIKI_MARK_*` in `viki_ask.h`): head when `chunk_ix > 0`, tail when a later chunk of the
+                  same content exists, plus a separate marker when the excerpt itself is a truncated prefix (the vector leg's `substr(chunk_text,1,140)`, or the
+                  512-byte excerpt buffer). Nothing is stored and no re-index is needed. `max(chunk_ix)` is taken over every `model_id`, because a hit carries
+                  none and must not acquire one -- the over-marking direction is the safe one. The markers deliberately contain no ellipsis: FTS5's `snippet()`
+                  already writes ` ... ` for INTRA-chunk elision, which is a different fact at a different scope. `build/fragment-probe.sh` is the proof.
   viki_serve.c/.h `viki serve`: single-threaded POSIX-sockets HTTP server (no external HTTP library). `/` = static HTML search page (renders results via textContent, never innerHTML -- indexed content isn't trusted markup). `/api/ask`, `/api/chunk`, `/api/health` = JSON, for agents. No static-file serving (every response is generated, not read off disk), so no path-traversal surface.
   viki_cache.c/.h `viki cache push|pull`: fossil uv wrappers (subprocess). BOTH halves of D-12 travel: the embedding cache as uv blob `viki-cache.db`,
                   and the pinned model as `viki-model/{model.onnx,vocab.txt,viki-manifest.json}` -- so a fresh clone gets hybrid retrieval from one
@@ -124,18 +134,72 @@ build/
                   provably able to fail. Its optional second argument (a viki binary) must be
                   an ABSOLUTE path; it cd's into the work dir.
                   NOT in CI -- run it by hand alongside test/m1.sh.
-  m1-e2e-probe.sh the earlier, pre-test/m1.sh proof-of-recipe (PASS=37). Also runs an ENCRYPTED
+  m1-e2e-probe.sh the earlier, pre-test/m1.sh proof-of-recipe. Also runs an ENCRYPTED
                   hub and the full D-11 loop -- it, not test/m1.sh, was the first proof of both.
                   Superseded for the M1 claim (hard-coded absolute paths, not in CI, and some
                   assertions are weaker -- its C7 has no non-empty guard). Prefer test/m1.sh.
                   Also writes into the developer's real ~/.config/fossil.db (FINDINGS.md) --
                   so run it as `FOSSIL_HOME=$(mktemp -d) sh build/m1-e2e-probe.sh <dir>`, which
-                  reproduces PASS=37 FAIL=0 with the real fossil.db provably untouched.
+                  leaves the real fossil.db provably untouched.
+                  PASS=36 FAIL=1 as of 2026-08-20, AND THE 1 IS THE PROBE'S FAULT, NOT THE
+                  BINARY'S. C11 asserts the `ticket:` artifact ranks 1 for "metallic knocking
+                  noise from the machinery" -- but since 4292a0a (2026-08-17) the same repo also
+                  indexes `tchg:`, the ticket-CHANGE artifact, whose text repeats the ticket's
+                  own title and comment under a header carrying a per-run timestamp. The two are
+                  near-duplicates and their RRF scores land within one rank of each other; in
+                  four of five runs they TIE exactly (rrf=0.0325 each) and `cmp_result` returns 0
+                  for a tie, so qsort's unstable order decides which is rank 1.
+                  CONSEQUENCE, AND IT IS THE OPERATIONAL POINT: this probe's EXIT STATUS is not
+                  a usable gate right now, because the outcome is decided by qsort and not by
+                  the binary. Read its count line and confirm the single failure is C11 by name;
+                  a second failure, or a failure with another id, is real. Exact ties are not
+                  exotic in this ranker -- `cmp_result` has no secondary key at all, so any two
+                  chunks with equal RRF order arbitrarily. test/m1.sh does not contain this tie
+                  and remains the gate.
+                  The stale
+                  PASS=37 in this file was measured 2026-08-13, before `tchg:` existed.
+                  Verified as pre-existing rather than assumed: a binary compiled from git HEAD's
+                  src/ fails the same assertion 3 runs out of 3, and all three binaries produce
+                  byte-identical output on the same pulled cache. Fixing it means either giving
+                  cmp_result a deterministic tiebreak or letting C11 accept either artifact --
+                  a decision, not a typo, so it is left for whoever owns ranking.
   model-uv-e2e-probe.sh  the D-12 MODEL-as-uv-blob proof, 43 checks over an encrypted hub/spoke
                   pair: publish, skip-if-unchanged, checksum verify, and a fresh clone running
                   HYBRID retrieval on the pulled model. Also NOT in CI, and it goes further than
                   test/m1.sh's M1-M9 do (those cover the happy path; this one also covers the
                   no-model hub, the unchanged-epoch skip, and a deliberately corrupted checksum).
+  grep-probe.sh   `viki grep`'s standing proof (13 checks): POSIX ERE really is ERE (a PCRE-only
+                  `\d` must NOT match), -i and its control, a bad pattern reported rather than
+                  crashed, no-match exiting ZERO, --k, --source, and a chunk two files share
+                  printing ONCE. Its C3 deliberately searches an artifact class with no file
+                  behind it, because a probe that only greps checkout files tests nothing this
+                  command exists for. `sh build/grep-probe.sh <empty-dir>`. NOT in CI.
+  muse-probe.sh   `viki muse`'s standing proof: undirected recall with no query at all.
+                  `sh build/muse-probe.sh <empty-dir>`. NOT in CI.
+  fragment-probe.sh  the standing proof of DISPLAY-SIDE fragment marking in `viki ask`,
+                  `viki serve` and `viki grep`. `viki index` slices documents into 40-line
+                  chunks and stores each slice raw, so a middle chunk reads as a complete
+                  text; now that every hit carries a citable content_hash, an agent can quote
+                  that dangling excerpt precisely, which makes it a PROVENANCE defect rather
+                  than a cosmetic one. 38 assertions: a middle chunk marked at both ends, a
+                  first chunk with no head marker (paired with the tail marker it must still
+                  have), a last chunk with no tail marker, a single-chunk document with
+                  neither, the header line untouched, FTS5's own ` ... ` elision coexisting
+                  with the fragment markers without doubling, `viki serve`'s JSON booleans +
+                  no-innerHTML property, and (R1-R8) `viki grep` marking the same facts with
+                  the SAME marker strings rather than lookalikes of its own.
+                  `sh build/fragment-probe.sh <empty-dir> [abs-path-to-viki]`. NOT in CI --
+                  run it alongside test/m1.sh. Its second argument must be an ABSOLUTE path.
+                  Non-vacuity, measured 2026-08-20 rather than assumed: PASS=22 FAIL=16
+                  against a binary compiled from git HEAD's src/, and PASS=36 FAIL=2 against
+                  one carrying the ask/serve half but not the grep half -- the 2 being exactly
+                  the two PRESENCE assertions for grep (R2, R6), which is what says the grep
+                  half is proved and not merely along for the ride.
+                  ON macOS, COPY THE DYLIBS TOO when you build such a comparison binary:
+                  build/dist/viki is linked with `-Wl,-rpath,@executable_path`, so a lone copy
+                  of it elsewhere dies at startup with `Library not loaded:
+                  @rpath/libonnxruntime.1.dylib` -- and a probe then grades EMPTY OUTPUT,
+                  which looks like a pile of real regressions. This bit this round.
 vendor/
   fossil-see/     git submodule -- NOT a build dependency of viki itself (see FINDINGS.md); kept only so a
                   fossil-see binary is available at runtime if $VIKI_FOSSIL_BIN/PATH don't already have one
@@ -214,9 +278,13 @@ export VIKI_MODEL_DIR=build/dist/model   # or wherever; unset/absent = BM25-only
 build/dist/viki index <dir>          # walk dir, populate .viki/cache.db (relative to cwd)
 build/dist/viki ask "<query>"        # hybrid top-5 (--k N to change); each hit prints
                                     #   [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>
-                                    # then the snippet indented 4 spaces
+                                    # then the snippet indented 4 spaces, with
+                                    #   <<document continues above/below>> where the chunk is a
+                                    #   fragment of a longer document and <<excerpt truncated>>
+                                    #   where the excerpt is a cut-short prefix of its chunk
 build/dist/viki grep "<regex>"      # POSIX-ERE regex over ALL indexed artifacts, not just files;
-                                    #   -i, --k N, --chars N, --source 'ckin:%' to scope by class
+                                    #   -i, --k N, --chars N, --source 'ckin:%' to scope by class.
+                                    #   Same hit-line shape as `ask` minus the score, same markers
 build/dist/viki cache push [db-path] [--no-model]
                                     # publish cache + pinned model as uv blobs (run from an open
                                     #   fossil-see checkout). --no-model = cache only; the model
@@ -252,6 +320,203 @@ failure -- pull refuses to install the epoch pin rather than hand unverified
 bytes to ONNX Runtime. `build/model-uv-e2e-probe.sh <empty-dir>` proves the
 whole loop (43 checks) against an encrypted hub/spoke pair.
 
+## Querying viki (agents read this; it is a calling convention, not a feature)
+
+**viki's primary caller is an AI agent working online.** A human at the CLI
+is the secondary case, and possibly an offline one. That is a statement
+about who this tool is FOR, and it is what makes this section part of the
+product rather than a usage tip.
+
+**Pick the verb first.** All three read the same index; they are not
+ranked-better/ranked-worse versions of each other:
+
+| you have | verb |
+|---|---|
+| a literal string -- identifier, flag, error text, uuid | `viki grep` (exact, unranked, ERE not PCRE) |
+| an idea, a question, a symptom | `viki ask` (hybrid, ranked) -- then read the rule below |
+| nothing; you do not know what you are looking for | `viki muse` (no query at all) |
+
+### The rule for `viki ask`
+
+**Do not send your question. Send the two or three sentences you expect the
+ANSWER to look like, and search for that.**
+
+That is the HyDE technique (hypothetical document embeddings). The
+hypothetical does not have to be right -- it only has to be written in the
+same vocabulary the answer is written in. viki has no LLM and never will
+(D-10/D-11 keep it a projection layer), so the LLM step lives in the caller.
+You are the LLM. Note what it costs: nothing. No epoch bump, no schema
+change, no re-index -- unlike the two retrieval fixes this file has been
+carrying as known-naive for rounds (chunking, tokenizer), which are both
+fleet-wide epoch bumps (D-11).
+
+**Why it works here specifically.** `test/retrieval-queries.tsv`'s worst
+class is `negative-trap`: a question phrased as a SYMPTOM whose answer was
+written in HINDSIGHT vocabulary. Nobody hits a bug and types `sweep_sources`
+or `strtok_r` -- they type "a ticket field came back empty". Both legs of
+`viki ask` fail on that gap for the *same* reason: BM25 has no terms in
+common, and a symptom sentence does not embed near a post-mortem sentence
+either, so fusion has nothing to fuse. A hypothetical *answer* is the one
+rewrite that moves both legs at once.
+
+`MEMORY_DESIGN.md`'s "Negative knowledge" section proposes fixing the same
+gap from the WRITE side (decision M-6: every `kind: negative` memory carries
+`symptom:` lines). These are complements, not alternatives -- and only this
+one works on the corpus that already exists.
+
+### Worked example, re-runnable -- but NOT to the same rank numbers
+
+The eval corpus is built from viki's own `FINDINGS.md`/`AGENTS.md`/etc., so
+you can run this yourself. Read this paragraph before you compare your output
+to anything written below it.
+
+**Which corpus you get is decided by your commit, not by this file.**
+`test/retrieval-corpus.sh` materializes each document with
+`git show HEAD:<doc>` -- from the commit, never from your working tree -- and
+it REUSES an existing `$VIKI_EVAL_DIR` as-is unless `VIKI_EVAL_REBUILD=1`. So
+the corpus is a function of `HEAD`, editing any of those docs (including this
+one) changes it, and an uncommitted edit changes nothing until it lands. Two
+consequences, and the second is the one that bites:
+
+- the corpus identity token is `test/retrieval-eval.sh`'s `corpus fp` line.
+  Anything below quoting a different `fp` than yours is a different
+  experiment, not a baseline you failed to reproduce;
+- **absolute ranks do not survive a corpus change; the direction does.**
+  Measured on both corpora below: the raw symptom misses the gold chunk
+  entirely either way, and dropping the hypothetical's last sentence costs
+  exactly one rank position either way -- but *which* rank the hypothetical
+  lands on differs. Do not treat a rank you read here as a target.
+
+```sh
+# from the viki repo root. Both absolute, because the next line cd's away --
+# and without VIKI_MODEL_DIR you silently get BM25-only, which is a
+# different experiment:
+VIKI=$PWD/build/dist/viki; export VIKI_MODEL_DIR=$PWD/build/dist/model
+bash test/retrieval-corpus.sh          # ~40 s, once -> /tmp/viki-retrieval-eval
+                                       # NB: reuses that dir if it already
+                                       # exists, whatever commit built it.
+                                       # VIKI_EVAL_REBUILD=1 to force HEAD's.
+cd /tmp/viki-retrieval-eval/co         # the indexed tree; .viki/cache.db is here
+
+# the gold chunk for query Q12, resolved the way test/retrieval-eval.py does:
+sqlite3 .viki/cache.db "SELECT DISTINCT substr(content_hash,1,8), chunk_ix \
+  FROM viki_chunk WHERE instr(chunk_text,'so a caller has no signal at all that it is stale')>0"
+
+# 1. the symptom, asked directly -- the gold chunk is NOT in the top 40:
+"$VIKI" ask "I removed a document and the tool still hands me its text as the top answer" --k 40
+
+# 2. the same knowledge written as the answer you expect to find -- top 2 on
+#    both corpora measured below, and the gold chunk is in ./FINDINGS.md:
+"$VIKI" ask "Removing or rewriting a document does not remove its old text from the index. The index keeps a row for every source it has ever seen and never retires the ones that have gone away, so the withdrawn document's chunks stay in both the keyword and the vector tables and keep coming back as the top-ranked answer, with nothing in the result to tell the caller the underlying source no longer exists. The fix is to invalidate sources that were not observed on this run and then delete chunks that no live source references any more." --k 40
+```
+
+Both queries are aiming at FINDINGS.md's `"Orphaned chunks are harmless, they
+just accumulate" was wrong` entry. Query 1 never reaches it; query 2 puts it
+in the top two. Measured 2026-08-20 against `build/dist/viki`, on the two
+corpora named by their own `corpus fp`, because one measurement of a
+corpus-dependent number is indistinguishable from a coincidence:
+
+| corpus fp | chunks | docs from | 1. raw symptom | 2. hypothetical | 2 minus its last sentence |
+|---|---|---|---|---|---|
+| `94b0908c4729bc2c` | 138 | `bd04683` | not in top 40 | **2** | 3 |
+| `b4b3d5fbcc9c0b35` | 150 | `6627d2c` | not in top 40 | **1** | 2 |
+
+Read the columns, not the cells. The miss in column 1 and the one-position
+cost in column 3 hold on both; the hypothetical's own rank does not, and
+`6627d2c` is not even the commit you will be on once this file is committed.
+The gold chunk's `<hash>#<ix>` moves too (`c1d9b4a4#9` on the first corpus,
+`b164f2e5#17` on the second) -- which is why the recipe above *resolves* it
+with a `sqlite3` query on an anchor string instead of hard-coding it. The
+ranks were the part that was hard-coded, and they rotted in one commit.
+
+Note the shape of the rewrite. It names **no repo identifier** -- no
+`viki_source`, no `sweep_sources`, no `gc_orphan_chunks` -- it just states
+the mechanism in ordinary words, in the register a post-mortem is written
+in. That is the whole move. Note also that it is exact: the string above is
+the one that was measured, and *dropping its last sentence costs one rank
+position* -- on both corpora -- which is a fair warning about how much
+precision any single observation here carries.
+
+**`--k` goes AFTER the query string.** `viki ask --k 40 "<query>"` silently
+searches for the literal string `--k` and ignores everything else -- see
+"Not yet built". Get this wrong while pasting a long hypothetical and you
+will conclude the technique does not work.
+
+### What was measured -- and what it does not promise
+
+Dated observation, not a standing property. Measured **2026-08-20**, all six
+`dev`-split `negative-trap` queries in `test/retrieval-queries.tsv`, against
+`test/retrieval-corpus.sh`'s corpus at `corpus fp 94b0908c4729bc2c` (138
+chunks, docs from `bd04683`). Rank of the gold chunk in a top-40 `viki ask`,
+each query written on ONE line, raw -> hypothetical:
+
+| query | symptom, raw | as a hypothetical answer |
+|---|---|---|
+| Q09 | 1 | 1 |
+| Q10 | 2 | 2 |
+| Q12 | not in top 40 | 2 |
+| Q13 | 25 | 18 |
+| Q15 | 34 | 4 |
+| Q16 | 14 | 1 |
+
+recall@5 went 2/6 to 5/6 on that corpus. Nothing got worse.
+
+**`94b0908c4729bc2c` is a historical corpus id and you cannot reproduce it
+from a later commit -- that is by construction, not by neglect.** The corpus
+is built from these docs at `git HEAD`, so every commit that touches one of
+them mints a new `fp`; `bd04683` is already two commits back
+(`git rev-list --count bd04683..HEAD`) and committing *this* edit moves it
+again. The table is kept because a dated measurement
+naming the corpus it was taken on is worth more than no measurement, and it
+is quoted with its `fp` so nobody can mistake it for a standing property. If
+you want a number you can compare against, do not try to re-derive this one:
+rebuild the corpus at your own `HEAD` (`VIKI_EVAL_REBUILD=1 bash
+test/retrieval-corpus.sh`), take your own `corpus fp` off
+`test/retrieval-eval.sh`'s header, and quote that.
+
+**Three honest caveats, all of which cut the same way:**
+
+1. **This is an UPPER BOUND, not an expected value.** Every hypothetical
+   above was written by someone who already knew this codebase.
+   Repo-specific vocabulary was deliberately kept out, but the *mechanisms*
+   were known -- and knowing that stale results are an invalidation problem
+   is most of the distance being credited to the technique. An agent that
+   genuinely does not know why its symptom happens will write a vaguer
+   hypothetical and should expect less.
+2. **Q13 is not the win the table makes it look like, in either column.**
+   Both the raw and the hypothetical query return, at rank 1, the
+   *continuation* chunk of the very FINDINGS.md entry that answers it
+   (`c1d9b4a4#6` in the `94b0908c4729bc2c` corpus -- like every `<hash>#<ix>`
+   in this section that identifier is corpus-local and does not exist in a
+   corpus built from any other commit's FINDINGS.md; `c1d9b4a4` *is*
+   FINDINGS.md's content_hash there).
+   The single-anchor ground truth scores that wrong; a reader would call it
+   right. This is the known "right document, wrong chunk" artifact
+   (FINDINGS.md: 21 of 43 answerable queries), not a HyDE result.
+3. **There is no harness for this.** `test/retrieval-eval.sh` scores the
+   raw query text in `test/retrieval-queries.tsv` and nothing else, so the
+   table above cannot be regenerated by running anything in this repo -- it
+   was produced by hand with the commands shown above. Treat it as six
+   observations, not as a baseline.
+
+### When NOT to do this
+
+- **You know the literal string -> `viki grep`.** Exact, unranked, and it
+  reaches the eight indexed classes that are not files on disk and that `rg`
+  therefore cannot see at all. Expanding a known identifier into a paragraph
+  can only add competing terms around it.
+- **A well-specified keyword query is already fine -- leave it alone.** Q09
+  and Q10 above were already at ranks 1 and 2; the hypothetical held them
+  there and could only have diluted them. When your query already shares
+  vocabulary with the answer, expansion has no upside and a real downside:
+  the BM25 leg is an OR-of-terms and *already* matches the entire corpus for
+  the median query (FINDINGS.md), so every extra sentence is more terms
+  pulling in more wrong documents.
+- **Keep it to one hypothetical, two or three sentences.** Concatenating
+  every phrasing you can think of is the dilution case above, at scale.
+- **There is no query to expand -> `viki muse`.** For the thing you do not
+  know exists, write no hypothetical; there is nothing to hypothesize about.
+
 ## Test
 
 ```sh
@@ -264,6 +529,9 @@ vendor/fossil-see/build/build.sh
 bash test/m1.sh                             # exit 0 AND "0 failed, 0 skipped"
 VIKI_TEST_KEEP=1 bash test/m1.sh            # keep the scratch tree for post-mortem
 sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh omits
+sh build/grep-probe.sh <empty-dir>          # `viki grep`
+sh build/muse-probe.sh <empty-dir>          # `viki muse`
+sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
 
 bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE
 bash test/retrieval-eval.sh --failures      # why each wrong query was wrong
@@ -306,11 +574,13 @@ this file -- against a binary missing three fixes that were sitting in
 
 - **The whole Milestone 1 definition of done, on an ENCRYPTED repo:
   `test/m1.sh`, `90 passed, 0 failed, 0 skipped`, exit 0** (re-run
-  first-hand 2026-08-13, not carried over from a report).
+  first-hand 2026-08-20, not carried over from a report).
   Be precise about what is new here, because this file previously
   overstated it in the other direction: the *encrypted* M1 loop was first
-  proven by `build/m1-e2e-probe.sh` (`PASS=37 FAIL=0`, last measured
-  2026-08-13 19:50), which was undocumented, while the hub/spoke
+  proven by `build/m1-e2e-probe.sh` (`PASS=37 FAIL=0` when it was written;
+  `PASS=36 FAIL=1` on 2026-08-20, on a rank-1 tie the probe itself creates
+  and not on anything `test/m1.sh` covers -- see its Layout entry),
+  which was undocumented, while the hub/spoke
   bullet at the bottom of this section described an older, weaker,
   **plaintext** `.fossil` loop. `FOSSIL_SEE_KEY` did not appear anywhere
   in AGENTS.md or CLAUDE.md until this pass. What `test/m1.sh` adds over
@@ -367,12 +637,28 @@ this file -- against a binary missing three fixes that were sitting in
   runs *hybrid* retrieval on the pulled model while its only sync peer is
   a local `file://` hub (`M9`) -- with `M8` (empty model dir -> degraded,
   no results) as the control. `build/model-uv-e2e-probe.sh` covers the
-  same loop in 43 checks including the failure paths (`0 failed`, last
-  measured 2026-08-13 19:50; not re-run since).
+  same loop in 43 checks including the failure paths (`43 passed, 0
+  failed`, last measured 2026-08-20).
 
+- **Every retrieval surface but one now says when an excerpt is a
+  FRAGMENT of a longer document**, proven by `build/fragment-probe.sh`
+  (`PASS=38 FAIL=0 SKIP=0`, 2026-08-20). The rule is positional and
+  display-side: head marker when `chunk_ix > 0`, tail marker when a later
+  chunk of the same `content_hash` exists, and a separate
+  `<<excerpt truncated>>` when the excerpt shown is a cut-short prefix of
+  its chunk. Nothing is stored, no epoch moved, no re-index was needed.
+  It is proved rather than asserted in the direction that matters -- each
+  ABSENCE is asserted next to a PRESENCE on the same hit, so "no head
+  marker on chunk 0" cannot pass by markers never printing at all -- and
+  the probe's non-vacuity is measured against two older binaries (see the
+  Layout entry). `viki ask`, `viki serve` (JSON booleans, undecorated
+  `snippet`) and `viki grep` are covered; **`viki muse` is not**, see
+  "Not yet built".
 - `build/build.sh` produces `build/dist/viki` cleanly (only benign
-  unused-variable warnings from sqlite-ndvss's own NEON kernels, not viki
-  code) -- including downloading, SHA256-verifying, and linking against
+  unused-variable warnings from sqlite-ndvss's own NEON kernels, plus one
+  pre-existing `-Wformat-invalid-specifier` on `src/viki.c:67`'s usage
+  string, which is a literal `%` inside help text, not a real format
+  argument) -- including downloading, SHA256-verifying, and linking against
   ONNX Runtime, and downloading + verifying the pinned embedding model.
 - `viki index` + `viki ask` on a scratch directory with planted content:
   correct chunk found, correctly ranked, snippet highlights the matched
@@ -522,6 +808,49 @@ this file -- against a binary missing three fixes that were sitting in
   content_hash is unchanged, so `gc_orphan_chunks()` removes nothing) and the
   retired counter is the only wrong output, but the source attribution wobbles
   for no real reason. Normalizing the walk root before keying would fix it.
+- **`viki ask --k N "<query>"` silently searches for the literal string
+  `--k`.** `viki ask` takes the FIRST positional argument as the query and
+  ignores every later one, so putting the flag first makes `--k` the query
+  and discards both `N` and the real query text. There is no warning, the
+  hybrid-mode banner prints as usual, and it exits 0 -- and `--k` is not
+  honoured either, so you get five hits for a query you never asked.
+  Measured 2026-08-20: `viki ask --k 3 "orphan chunks"`, `viki ask --k 2
+  "orphan chunks"` and `viki ask "--k"` all produce byte-identical
+  five-hit output against the eval corpus. `viki grep` gets this right --
+  the same mistake there fails loudly with `unknown option '3'`. The
+  documented form (`viki ask "<query>" --k N`) works. This is a bad trap
+  for the tool's primary caller: it is exactly the shape of an agent
+  pasting a long HyDE hypothetical (see "Querying viki"), and it fails
+  silently into plausible-looking results. Found 2026-08-20 while writing
+  that section; not fixed, and it is a one-place fix in `src/viki.c`'s
+  `ask` argument loop.
+- **`viki muse` prints unmarked fragments -- the one retrieval surface
+  the 2026-08-20 fragment-marking round did not reach.** `viki ask`,
+  `viki serve` and `viki grep` all say when an excerpt is a slice of a
+  longer document; `src/viki_muse.c` selects `substr(chunk_text,1,?5)`
+  and prints it under the same citable `<hash>#<ix>` header with no
+  marker, so a middle chunk still reads there as a complete text. It is
+  the same defect and takes the same patch shape as `viki_grep.c`'s
+  (two extra SELECT columns, the `VIKI_MARK_*` macros, no schema change
+  and no re-index). Left out deliberately: the round that fixed the
+  other three was scoped not to touch `viki_muse.c`.
+- **`viki ask` has no tiebreak: equal-RRF hits are ordered by an unstable
+  `qsort`.** `cmp_result()` (`src/viki_ask.c`) returns 0 when two
+  candidates score identically, so their printed order is whatever qsort
+  leaves behind -- reproducible for a given cache, but not a defined
+  function of the data. Exact ties are not exotic: two RRF sums collide
+  whenever two chunks swap ranks between the two legs, which is the normal
+  case for near-duplicate artifacts. It is what makes
+  `build/m1-e2e-probe.sh`'s C11 flaky (a `ticket:` and its own `tchg:`
+  change record tie at rrf=0.0325). Found 2026-08-20; a tiebreak on
+  `(content_hash, chunk_ix)` would make it total and deterministic, but it
+  changes published rank ordering, so it is a decision, not a cleanup.
+- **The 512-byte excerpt buffer can split a UTF-8 sequence.**
+  `leg_hit()`'s `strncpy` into `viki_ask_result.snippet` cuts at a byte
+  boundary, so the last character of a truncated excerpt may be a
+  partial sequence. Pre-existing; `<<excerpt truncated>>` now at least
+  announces that a cut happened, which is not the same as making the cut
+  safe.
 
 - **`viki-manifest` epoch *migration* mechanism -- deliberately POST-M1,
   not an M1 hole.** Judgment call made 2026-08-13; recorded here so it is
@@ -616,9 +945,14 @@ this file -- against a binary missing three fixes that were sitting in
   HUMAN surface cannot cite a source.** The CLI hit line and `/api/ask`'s
   `"hash"` both carry it (KICKOFF deliverable 2), but `viki_serve.c`'s
   embedded page renders `'#' + hit.rank + '  rrf=' + ... + hit.source +
-  ' (chunk ' + hit.chunk_ix + ')'` and nothing else -- the hash is in the
-  JSON the page already fetches, simply not displayed. Nothing in
-  `test/m1.sh` covers `viki serve` at all.
+  ' (chunk ' + hit.chunk_ix + ' of ' + hit.chunk_count + ')'` and the
+  fragment markers, and nothing else -- the hash is in the JSON the page
+  already fetches, simply not displayed. Note that the 2026-08-20 fragment
+  round touched this exact `renderResults` function and deliberately did
+  not close this, so it is a live gap, not an unnoticed one. Nothing in
+  `test/m1.sh` covers `viki serve` at all
+  (`build/fragment-probe.sh`'s S-series is the only automated coverage
+  `viki serve` has, and it only covers the fragment fields).
 - **`VIKI_FTS_EPOCH_SLACK = 4` (`src/viki_ask.c:16`) is a bounded
   heuristic.** The BM25 leg over-fetches `poolSize * 4` rows and stops at
   `poolSize` *distinct* chunks, which is what makes a multi-epoch cache
