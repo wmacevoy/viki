@@ -795,6 +795,85 @@ this file -- against a binary missing three fixes that were sitting in
   - Honest limit: **C11 skips** (and prints a SKIP line) when either the
     model or a stock `sqlite3` is missing; C10 and C16 do not.
 
+## Structuring captures -- the convention for agents
+
+`viki capture` records raw text offline. `viki structure` adds judgement
+online. viki has no LLM and never will, so THIS SECTION IS THE INTERFACE:
+without it the vocabulary gets reinvented incompatibly, one session inventing
+`todo` where the last one wrote `task`.
+
+### The loop
+
+```sh
+viki structure --pending          # untyped captures, id<TAB>ts<TAB>text
+viki structure <id> --type task --place "Monument Rocks" --state open
+viki index .                      # project the change; nothing is queryable until you do
+```
+
+Drain `--pending` to empty. A capture with no `@type` is invisible to every
+`--type` filter, so an unstructured note is effectively lost even though the
+text is safely on disk.
+
+### The `@type` vocabulary
+
+Seven values, derived from real captured notes rather than invented. The
+binary WARNS on anything outside the set and keeps it anyway -- a capture is
+never rejected for using a word nobody anticipated, and unfamiliar vocabulary
+is evidence about what this system is missing, not user error.
+
+| type | means | carries state |
+|---|---|---|
+| `task` | something to DO | yes -- `open` / `closed` |
+| `observation` | something NOTICED | no |
+| `rule` | a standing CONSTRAINT that should modify future action | no |
+| `schedule` | a RECURRENCE | no |
+| `alert` | time-bounded WARNING with an implied action | no |
+| `question` | the capturer ASKING; needs an answer, not a doer | no |
+| `note` | honest fallback: recorded, no action semantics claimed | no |
+
+Only `task` belongs in "what needs to be done". `viki ask` returning "new
+foal in rimi's band" under that question is the precise false positive this
+whole loop exists to prevent, and typing an observation as a task
+reintroduces it by hand.
+
+`question` matters more than it looks: two of the first sixteen real notes
+were questions ("what hotel are we staying at tonight?"). Typing one as a
+task puts it on somebody's chore list forever; typing it as a question makes
+it a thing to answer when back online.
+
+### Rules for the agent doing this
+
+**Resolve abbreviations into `--place`.** The capture may say `mr`; the place
+is `Monument Rocks`. Nothing in retrieval resolves that -- a measured miss,
+where the only note genuinely about Monument Rocks matched a query for it
+only by accident, on unrelated words. Expanding abbreviations at structure
+time is one of the highest-value things this pass does, because it is
+knowledge the corpus does not contain.
+
+**Never invent a field the text does not support.** A place, a person or a
+due date that was not captured is not yours to add. Leave it empty; an empty
+field is honest and a wrong one is unfalsifiable later.
+
+**Prefer a real type over `note`, but use `note` rather than guessing.**
+
+**Close with evidence, using `--closes`.** When a capture retires an earlier
+one -- "tire for utv fixed" against "utv tire is flat" -- structure the NEW
+note with `--closes <old-id>`. That marks the old note closed AND records
+which note closed it, so the history stays answerable rather than just the
+state. Do not close a note because it seems stale; close it because
+something says so.
+
+**State belongs to tasks.** Setting `--state` on an observation is
+meaningless and will read as a chore that can never be finished.
+
+### What this pass cannot do yet
+
+Recurrence (`thursdays and sundays, except labor day`) has no representation
+beyond `type=schedule` plus the raw text -- the exception in particular is
+not modelled. Relative deadlines (`by next friday`) must be resolved to an
+absolute `--due` by the agent, because nothing downstream knows what "next"
+meant at capture time.
+
 ## Where the forward work is written down
 
 `QUEUE.md` holds the measured-but-not-yet-done list -- retrieval experiments

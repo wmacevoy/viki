@@ -25,6 +25,51 @@ typedef struct {
 
 static void note_clear(viki_note *p){ memset(p, 0, sizeof(*p)); }
 
+/* The controlled @type vocabulary, derived from real captured notes rather
+** than invented -- see AGENTS.md's "Structuring captures" section for what
+** each one means and why the distinctions earn their keep.
+**
+** Checked but NOT enforced. An unknown type still projects and is still
+** queryable: a capture must never be rejected for using a word nobody
+** anticipated, and a person's own vocabulary is evidence about what this
+** system is missing. The warning exists so a fleet of agents converges on
+** one spelling instead of quietly inventing "todo", "task-item" and
+** "actionable" in three sessions -- which is the failure this file is
+** guarding against, not incorrect input. */
+static const char *VIKI_NOTE_TYPES[] = {
+    "task",        /* something to DO. The only type carrying open/closed state. */
+    "observation", /* something NOTICED. Never a chore -- `ask` returning "new foal
+                   ** in rimi's band" under "what needs to be done" is the exact
+                   ** false positive the capture loop exists to prevent. */
+    "rule",        /* a standing CONSTRAINT that should modify future action
+                   ** ("renee cannot lift heavy items"), not merely be retrievable. */
+    "schedule",    /* a RECURRENCE ("thursdays and sundays, except labor day"). */
+    "alert",       /* time-bounded WARNING with an implied action
+                   ** ("rain washout makes MR impassible -- warn all drivers"). */
+    "question",    /* the capturer ASKING. Two of sixteen real notes were questions;
+                   ** they need an answer, not a doer, and typing one as a task
+                   ** puts it on somebody's chore list forever. */
+    "note",        /* honest fallback: recorded, no action semantics claimed. Use it
+                   ** rather than guessing, but prefer a real type when the text
+                   ** supports one. */
+    NULL
+};
+
+static int type_is_known(const char *z){
+    int i;
+    if( !z || !z[0] ) return 1;   /* absent is "pending", not "wrong" */
+    for( i = 0; VIKI_NOTE_TYPES[i]; i++ ) if( strcmp(z, VIKI_NOTE_TYPES[i]) == 0 ) return 1;
+    return 0;
+}
+
+static void warn_unknown_type(const char *zType, const char *zWhere){
+    int i;
+    if( type_is_known(zType) ) return;
+    fprintf(stderr, "viki: note type '%s' (%s) is outside the known set:", zType, zWhere);
+    for( i = 0; VIKI_NOTE_TYPES[i]; i++ ) fprintf(stderr, " %s", VIKI_NOTE_TYPES[i]);
+    fprintf(stderr, "\n      Kept as-is -- see AGENTS.md \"Structuring captures\".\n");
+}
+
 /* ISO-8601 UTC with MICROSECONDS. Chosen over an epoch integer because a
 ** capture file is meant to be read and hand-edited by a person with no
 ** tooling, and because lexicographic comparison on this format is
@@ -111,7 +156,11 @@ int viki_cmd_capture(const char *zDir, const char *zText,
     f = fopen(path, "a");
     if( !f ){ perror("viki capture: open"); return 1; }
     fprintf(f, "@note %s\n@at %s\n", id, ts);
-    if( zType  && zType[0] )  fprintf(f, "@type %s\n", zType);
+    if( zType  && zType[0] ){
+        char nt[32]; normalize_key(zType, nt, sizeof(nt));
+        warn_unknown_type(nt, "viki capture --type");
+        fprintf(f, "@type %s\n", zType);
+    }
     if( zPlace && zPlace[0] ) fprintf(f, "@place %s\n", zPlace);
     if( zWho   && zWho[0] )   fprintf(f, "@who %s\n", zWho);
     if( zDue   && zDue[0] )   fprintf(f, "@due %s\n", zDue);
@@ -353,6 +402,10 @@ int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
     snprintf(path, sizeof(path), "%s", (const char*)sqlite3_column_text(st, 0));
     sqlite3_finalize(st);
 
+    if( zType && zType[0] ){
+        char nt[32]; normalize_key(zType, nt, sizeof(nt));
+        warn_unknown_type(nt, "viki structure --type");
+    }
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     in = fopen(path, "r");
     if( !in ){ perror("viki structure: open"); return 1; }

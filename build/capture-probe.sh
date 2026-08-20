@@ -27,6 +27,7 @@ DIR="${1:?usage: capture-probe.sh <scratch-dir> [viki-binary]}"
 VIKI="${2:-$(cd "$(dirname "$0")/.." && pwd)/build/dist/viki}"
 case "$VIKI" in /*) ;; *) echo "ERR: viki path must be ABSOLUTE"; exit 2 ;; esac
 PASS=0; FAIL=0
+LOGV="$DIR/.v1.err"; LOGV2="$DIR/.v2.err"
 ck(){ if eval "$2" >/dev/null 2>&1; then PASS=$((PASS+1)); echo "  PASS  $1"; else FAIL=$((FAIL+1)); echo "  FAIL  $1"; fi; }
 
 rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
@@ -99,6 +100,16 @@ FIX=$("$VIKI" structure --pending 2>/dev/null | grep "tire for utv fixed" | cut 
 ck "ST6 --closes retires the TARGET note"           '! "$VIKI" notes --state open 2>/dev/null | grep -q "tire is flat"'
 ck "ST6b ... and the link is recorded, not just the state"    '"$VIKI" notes --k 99 2>/dev/null >/dev/null; grep -q "^@closes $FLAT" captures/*.md'
 ck "ST6c CONTROL: an unrelated open note is untouched"    '"$VIKI" structure --pending 2>/dev/null | grep -q "camper" || "$VIKI" notes 2>/dev/null | grep -q "camper"'
+
+# ---- the @type vocabulary: warned, never enforced ----
+mkdir -p "$DIR/vocab" && cd "$DIR/vocab"
+"$VIKI" capture "invent a type" --type todo   2>"$LOGV" >/dev/null || true
+ck "V1 an unknown @type WARNS"                  'grep -q "outside the known set" "$LOGV"'
+ck "V1b ... and names the known set"            'grep -q "task observation rule schedule alert question note" "$LOGV"'
+"$VIKI" capture "a real task" --type task 2>"$LOGV2" >/dev/null || true
+ck "V2 CONTROL: a known @type does NOT warn"    '! grep -q "outside the known set" "$LOGV2"'
+"$VIKI" index . >/dev/null 2>&1
+ck "V3 an unknown type is KEPT, never rejected" '"$VIKI" notes --type todo 2>/dev/null | grep -q "invent a type"'
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

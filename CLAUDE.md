@@ -28,6 +28,19 @@ them. The ones that constrain code most:
   files (`fossil uv`), never as versioned artifacts.
 - **D-9** Fossil is pinned at 2.28 (SQLCipher baseline is SQLite 3.53.1).
 
+## Capturing and structuring notes
+
+`viki capture "..."` records raw text with no model, network or fossil
+needed. `viki structure --pending` is the work queue for adding judgement,
+and `viki structure <id> --type ... --place ...` writes it back.
+
+The `@type` vocabulary and the rules for applying it live in **AGENTS.md,
+"Structuring captures"** -- primary copy there, deliberately not duplicated
+here, because this repo has had the same claim rot in one of two files three
+times. Read it before draining `--pending`; the short version is that only
+`task` belongs in "what needs to be done", abbreviations get expanded into
+`--place` at structure time, and `--closes` is how one note retires another.
+
 ## Build and run
 
 There is no Makefile. `build/build.sh` is the whole build — self-contained, no
