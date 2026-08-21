@@ -250,17 +250,19 @@ jobs:
           # ---- platforms deliberately NOT covered (announce only) ----
           - label: linux-arm64
             skip_reason: >-
-              viki itself does not build here: vendor/sqlite-ndvss's
-              aarch64-Linux SVE2 dispatch references functions its own
-              compile-time gate leaves out, so build/build.sh dies with
-              "error: 'cosine_similarity_f_sve2' undeclared" and five
-              siblings (FINDINGS.md; re-confirmed 2026-08-13 in an arm64
-              debian:bookworm container, so this is current, not inherited).
-              That is also why the linux-arm64 leg of the `build` job is
-              experimental / continue-on-error. m1.sh cannot run against a
-              binary that does not exist. Fix sqlite-ndvss upstream first,
-              then delete this leg and add linux-arm64 to the real matrix
-              above.
+              NOT run here, and the reason that used to be given is now
+              STALE rather than merely old: viki did not build on
+              aarch64-Linux because vendor/sqlite-ndvss's SVE2 dispatch
+              referenced functions its own compile-time gate left out
+              ("error: 'cosine_similarity_f_sve2' undeclared" and five
+              siblings, FINDINGS.md). sqlite-vec replaced that engine on
+              2026-08-21 and the `build` job's linux-arm64 leg dropped its
+              experimental flag in the same commit. If that leg is green,
+              the blocker is gone and this announce-only leg should be
+              deleted and linux-arm64 added to the real matrix above --
+              which nobody has done yet, so m1 remains unproven on arm64
+              and this leg says so rather than letting a stale reason imply
+              a blocker that no longer exists.
           - label: windows-x86_64
             skip_reason: >-
               Not attempted, and NOT claimed to be impossible -- nobody has
@@ -333,15 +335,16 @@ jobs:
       # Same handling as the `build` job: container jobs bind-mount the
       # checkout from the host, so git's dubious-ownership check trips for
       # every step after actions/checkout's own internal git calls; and
-      # .gitmodules gives vendor/sqlite-ndvss an SSH URL that CI has no key
-      # for. (vendor/fossil-see and its own two nested submodules are all
-      # HTTPS already -- the rewrite is a no-op for them.)
-      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
+      # This step used to ALSO fetch vendor/sqlite-ndvss, whose .gitmodules
+      # URL was SSH and needed rewriting to HTTPS. That submodule is gone
+      # (sqlite-vec is a pinned download), so only the ownership fix is
+      # left -- and it must stay: later steps here run git themselves
+      # (`git rev-parse HEAD:vendor/fossil-see` for the cache key), and
+      # vendor/fossil-see is still fetched below.
+      - name: Allow git to operate on the mounted checkout
         if: ${{ !matrix.skip_reason }}
         run: |
           git config --global --add safe.directory '*'
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule update --init vendor/sqlite-ndvss
 
       # `|| 'true'` because the announce-only legs carry no deps: an empty
       # `run:` body is not worth finding out about the hard way, even
