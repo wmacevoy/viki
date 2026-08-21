@@ -2,10 +2,11 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Declared, not included via a header, because sqlite-ndvss ships no
-** public header -- sqlite3ext.h + SQLITE_EXTENSION_INIT1 is meant to be
-** the only contract a consumer needs (see vendor/sqlite-ndvss/CLAUDE.md). */
-extern int sqlite3_ndvss_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
+/* sqlite-vec's amalgamation ships sqlite-vec.h, but declaring the one
+** entry point by hand keeps this file compilable without the download
+** cache on the include path -- the same reason the sqlite-ndvss build this
+** replaced declared its init function here. */
+extern int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 
 static const char *SCHEMA_SQL =
     "CREATE TABLE IF NOT EXISTS viki_chunk("
@@ -77,13 +78,170 @@ static const char *SCHEMA_SQL =
     "  ts TEXT NOT NULL DEFAULT ''"
     ");";
 
-void viki_db_register_ndvss(void){
+void viki_db_register_vec(void){
     /* sqlite3_auto_extension runs the given entrypoint on every future
     ** sqlite3_open*() call in this process. Compiled with -DSQLITE_CORE
-    ** (see build/build.sh), sqlite3_ndvss_init binds directly against the
+    ** (see build/build.sh), sqlite3_vec_init binds directly against the
     ** real linked-in sqlite3 API instead of the loadable-extension shim
     ** table -- same static-link pattern SQLite's own FTS5/RTREE use. */
-    sqlite3_auto_extension((void(*)(void))sqlite3_ndvss_init);
+    sqlite3_auto_extension((void(*)(void))sqlite3_vec_init);
+}
+
+/* ---- the DERIVED vec0 index -----------------------------------------
+**
+** `viki_vec` is a LOCAL INDEX, never a source of truth. D-10 says vectors
+** are projections: rebuildable, disposable, never what travels between
+** peers. `viki_chunk.embedding` remains the artifact D-11 computes once
+** and D-12 ships as a fossil unversioned file; this table is derived from
+** it and can be dropped and rebuilt at any time without asking a peer for
+** anything. That is why swapping the vector ENGINE needs no epoch bump
+** and no coordination -- nothing about the shared artifact changed.
+**
+** model_id is a PARTITION KEY rather than a filtered column, and that is
+** correctness rather than tuning: vec0's KNN takes a global top-k, so
+** post-filtering by model would return the k nearest across ALL epochs
+** and then throw most of them away -- fewer than k rows, or none at all,
+** whenever a second epoch is present. A partition key makes k a per-model
+** k. (`VIKI_FTS_EPOCH_SLACK` in viki_ask.c is the BM25 leg's answer to the
+** same problem; this is the vector leg's, and it is exact where the slack
+** factor is a heuristic.)
+**
+** The dimension is read from the data rather than hardcoded to 384: vec0
+** fixes it at CREATE time, and a wrong guess fails at INSERT with a
+** dimension-mismatch that reads nothing like "your model changed". */
+static int vec_dim(sqlite3 *db){
+    sqlite3_stmt *st;
+    int dim = 0;
+    if( sqlite3_prepare_v2(db,
+            "SELECT length(embedding)/4 FROM viki_chunk "
+            "WHERE embedding IS NOT NULL LIMIT 1", -1, &st, NULL) != SQLITE_OK ){
+        return 0;
+    }
+    if( sqlite3_step(st) == SQLITE_ROW ) dim = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    return dim;
+}
+
+static sqlite3_int64 count_of(sqlite3 *db, const char *zSql){
+    sqlite3_stmt *st;
+    sqlite3_int64 n = -1;
+    if( sqlite3_prepare_v2(db, zSql, -1, &st, NULL) != SQLITE_OK ) return -1;
+    if( sqlite3_step(st) == SQLITE_ROW ) n = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return n;
+}
+
+/* Attaches the SEPARATE index database as `vecdb`, creating it if needed.
+**
+** IT IS A SEPARATE FILE, and that is not tidiness. `.viki/cache.db` is the
+** artifact D-11 computes once and D-12 ships between peers as a fossil
+** unversioned file, and test/m1.sh's C10 byte-compares the cache a fresh
+** clone PULLED against the one that was PUSHED, while C18 asserts the
+** clone never wrote to it at all. A derived index living inside cache.db
+** breaks both -- and would also push a local, rebuildable projection to
+** every peer, which is exactly what D-10 says not to do. `.viki/vec.db`
+** is local, disposable, and safe to delete at any time.
+**
+** Returns 0 when `vecdb` is usable. */
+static int vec_attach(sqlite3 *db){
+    sqlite3_stmt *st;
+    char zPath[2048];
+    char *zSql, *zErr = NULL;
+    const char *zMain = NULL;
+    size_t n;
+    int rc;
+
+    /* Already attached on this connection? */
+    if( sqlite3_prepare_v2(db, "SELECT 1 FROM pragma_database_list WHERE name='vecdb'",
+                           -1, &st, NULL) == SQLITE_OK ){
+        rc = (sqlite3_step(st) == SQLITE_ROW);
+        sqlite3_finalize(st);
+        if( rc ) return 0;
+    }
+
+    if( sqlite3_prepare_v2(db, "SELECT file FROM pragma_database_list WHERE name='main'",
+                           -1, &st, NULL) != SQLITE_OK ) return -1;
+    if( sqlite3_step(st) == SQLITE_ROW ) zMain = (const char*)sqlite3_column_text(st, 0);
+    if( !zMain || !zMain[0] ){ sqlite3_finalize(st); return -1; }  /* :memory: */
+    snprintf(zPath, sizeof(zPath), "%s", zMain);
+    sqlite3_finalize(st);
+
+    /* Sibling of cache.db, whatever it is called. */
+    n = strlen(zPath);
+    if( n > 8 && strcmp(zPath + n - 8, "cache.db") == 0 ){
+        snprintf(zPath + n - 8, sizeof(zPath) - (n - 8), "vec.db");
+    }else{
+        snprintf(zPath + n, sizeof(zPath) - n, ".vec");
+    }
+
+    zSql = sqlite3_mprintf("ATTACH DATABASE %Q AS vecdb", zPath);
+    if( !zSql ) return -1;
+    rc = sqlite3_exec(db, zSql, NULL, NULL, &zErr);
+    sqlite3_free(zSql);
+    if( rc != SQLITE_OK ){
+        fprintf(stderr, "viki: could not attach vec index at %s: %s\n",
+                zPath, zErr ? zErr : "(no message)");
+        sqlite3_free(zErr);
+        return -1;
+    }
+    return 0;
+}
+
+int viki_db_vec_sync(sqlite3 *db){
+    char zSql[512];
+    sqlite3_int64 nChunk, nVec;
+    int dim = vec_dim(db);
+    char *zErr = NULL;
+
+    /* No embeddings at all is not a failure: it is BM25-only mode, which
+    ** VIKI_DESIGN.md makes a required path. Say nothing and do nothing --
+    ** and in particular do not create an index file for a cache that has
+    ** nothing to index. */
+    if( dim <= 0 ) return 0;
+    if( vec_attach(db) != 0 ) return -1;
+
+    snprintf(zSql, sizeof(zSql),
+        "CREATE VIRTUAL TABLE IF NOT EXISTS vecdb.viki_vec USING vec0("
+        "  model_id TEXT PARTITION KEY,"
+        "  embedding FLOAT[%d] distance_metric=cosine"
+        ")", dim);
+    if( sqlite3_exec(db, zSql, NULL, NULL, &zErr) != SQLITE_OK ){
+        fprintf(stderr, "viki: could not create vec index: %s\n",
+                zErr ? zErr : "(no message)");
+        sqlite3_free(zErr);
+        return -1;
+    }
+
+    /* Cheap staleness test. A full compare would hash both sides; a count
+    ** compare catches every way this cache actually changes -- indexing
+    ** adds rows, `viki index`'s sweep deletes them, and `cache pull`
+    ** replaces the file wholesale. It does NOT catch an in-place edit of
+    ** an embedding at constant row count, which nothing in viki does:
+    ** embeddings are keyed by (content_hash, model_id, chunk_ix) and new
+    ** content means a new key. Rebuilding is cheap and disposable, so when
+    ** in doubt this errs toward rebuilding. */
+    nChunk = count_of(db, "SELECT count(*) FROM viki_chunk WHERE embedding IS NOT NULL");
+    nVec   = count_of(db, "SELECT count(*) FROM vecdb.viki_vec");
+    if( nChunk < 0 || nVec < 0 ) return -1;
+    if( nChunk == nVec ) return 0;
+
+    if( sqlite3_exec(db, "DELETE FROM vecdb.viki_vec", NULL, NULL, &zErr) != SQLITE_OK ){
+        fprintf(stderr, "viki: could not clear vec index: %s\n",
+                zErr ? zErr : "(no message)");
+        sqlite3_free(zErr);
+        return -1;
+    }
+    /* rowid is viki_chunk's rowid, which is what the retrieval join uses. */
+    if( sqlite3_exec(db,
+            "INSERT INTO vecdb.viki_vec(rowid, model_id, embedding) "
+            "SELECT rowid, model_id, embedding FROM viki_chunk "
+            "WHERE embedding IS NOT NULL", NULL, NULL, &zErr) != SQLITE_OK ){
+        fprintf(stderr, "viki: could not populate vec index: %s\n",
+                zErr ? zErr : "(no message)");
+        sqlite3_free(zErr);
+        return -1;
+    }
+    return 0;
 }
 
 int viki_db_open(const char *zPath, sqlite3 **out){

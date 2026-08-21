@@ -1,4 +1,5 @@
 #include "viki_ask.h"
+#include "viki_db.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,23 +218,39 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
     ** substr()/length() both count CHARACTERS on a TEXT value, so the two
     ** are measured in the same unit and the comparison is exact rather than
     ** a byte-length approximation. */
+    /* The DERIVED vec0 index must agree with viki_chunk before it is
+    ** queried -- a cache pulled from a peer (D-12) arrives with embeddings
+    ** and no index at all. Cheap when already in sync. */
+    if( viki_db_vec_sync(db) != 0 ) return;
+
     if( sqlite3_prepare_v2(db,
             /* Column 4 SELECTs the similarity the ORDER BY already computes.
             ** It was previously thrown away, which is why nothing downstream
-            ** could tell a strong match from the best of a bad lot. */
-            "SELECT content_hash, chunk_ix, substr(chunk_text,1,?5), length(chunk_text) > ?5, "
-            "       ndvss_cosine_similarity_f(?2, embedding, ?3) "
-            "FROM viki_chunk WHERE model_id=?1 AND embedding IS NOT NULL "
-            "ORDER BY 5 DESC LIMIT ?4",
+            ** could tell a strong match from the best of a bad lot.
+            **
+            ** vec0 with distance_metric=cosine reports COSINE DISTANCE,
+            ** which is 1 - cosine similarity. Everything downstream --
+            ** VIKI_MIN_COS_DEFAULT, viki_ask_info.bestCos, muse's band
+            ** edges -- is expressed in SIMILARITY, so the conversion
+            ** happens here, once, rather than in each consumer.
+            **
+            ** model_id is matched as a PARTITION KEY, not a filter: k is
+            ** then a per-model k. Post-filtering an unpartitioned KNN
+            ** would silently return fewer than k rows once a second epoch
+            ** exists. See viki_db.c. */
+            "SELECT c.content_hash, c.chunk_ix, substr(c.chunk_text,1,?4), "
+            "       length(c.chunk_text) > ?4, 1.0 - v.distance "
+            "FROM vecdb.viki_vec v JOIN viki_chunk c ON c.rowid = v.rowid "
+            "WHERE v.model_id = ?1 AND v.embedding MATCH ?2 AND k = ?3 "
+            "ORDER BY v.distance",
             -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki ask: vector query prepare failed: %s\n", sqlite3_errmsg(db));
         return;
     }
     sqlite3_bind_text(st, 1, modelId, -1, SQLITE_STATIC);
     sqlite3_bind_blob(st, 2, qvec, (int)(sizeof(float) * (size_t)dim), SQLITE_STATIC);
-    sqlite3_bind_int(st, 3, dim);
-    sqlite3_bind_int(st, 4, poolSize);
-    sqlite3_bind_int(st, 5, VIKI_VEC_EXCERPT_CHARS);
+    sqlite3_bind_int(st, 3, poolSize);
+    sqlite3_bind_int(st, 4, VIKI_VEC_EXCERPT_CHARS);
 
     while( sqlite3_step(st) == SQLITE_ROW ){
         const char *hash = (const char*)sqlite3_column_text(st, 0);
@@ -424,7 +441,7 @@ int viki_cmd_ask_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder *
     if( optsIn ) opts = *optsIn; else viki_ask_defaults(&opts);
 
     if( emb ){
-        fprintf(stderr, "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=%s)\n\n",
+        fprintf(stderr, "viki ask: hybrid mode (FTS5 BM25 + vec0 cosine, model_id=%s)\n\n",
                 viki_embedder_model_id(emb));
     }else{
         fprintf(stderr,

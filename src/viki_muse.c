@@ -6,6 +6,7 @@
 ** are the only reason to trust the new value over the old one.
 */
 #include "viki_muse.h"
+#include "viki_db.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -320,9 +321,10 @@ static int resolve_model(sqlite3 *db, viki_embedder *emb, const char *zWant,
 **
 ** Embeddings are L2-normalized by embed.c (mean-pool then normalize, the
 ** sentence-transformers recipe), so a plain dot product IS the cosine and
-** this agrees with the ndvss_cosine_similarity_f the band uses. If that
-** ever stops being true the floor and the band would silently be measured
-** on two different scales.
+** this agrees with the `1.0 - vec0.distance` the band uses (vec0 is
+** created with distance_metric=cosine). If either ever stops being true
+** the floor and the band would silently be measured on two different
+** scales.
 **
 ** Returns the median, or VIKI_MUSE_NO_FLOOR if it could not be computed.
 ** The caller must flag that case -- returning "no floor" silently is
@@ -625,10 +627,10 @@ int viki_muse_query(sqlite3 *db, const viki_muse_opts *opts, viki_embedder *emb,
     pInfo->nSkip = skip; pInfo->nWindow = win;
 
     /* Pull the seed's top (skip+win) neighbours. This reuses exactly the
-    ** ndvss ORDER BY that viki_ask.c's run_vector uses -- one brute-force
-    ** cosine scan, SQLite's own sorter bounding the memory. It is the same
-    ** cost as one `viki ask` vector leg with a larger LIMIT, which is why
-    ** musing needs no new index and no schema change.
+    ** vec0 KNN that viki_ask.c's run_vector uses, with a larger k -- so
+    ** musing rides on the same derived index and needs no schema of its
+    ** own. (Before the sqlite-vec swap this was a brute-force cosine scan
+    ** over every row, bounded by SQLite's sorter.)
     **
     ** substr() is bound to nChars, not to a constant: a fixed
     ** substr(chunk_text,1,500) silently capped `--chars 800` at 505 bytes
@@ -638,20 +640,31 @@ int viki_muse_query(sqlite3 *db, const viki_muse_opts *opts, viki_embedder *emb,
     band = malloc(sizeof(museCand) * (size_t)nCandCap);
     if( !cand || !band ){ free(seedVec); free(cand); free(band); return VIKI_MUSE_ERR_INTERNAL; }
 
+    /* Same derived-index contract as viki_ask.c's run_vector: bring vec0
+    ** into agreement with viki_chunk before querying it. */
+    if( viki_db_vec_sync(db) != 0 ){
+        free(seedVec); free(cand); free(band);
+        return VIKI_MUSE_ERR_INTERNAL;
+    }
+
+    /* vec0 reports cosine DISTANCE; the band edges below are expressed in
+    ** SIMILARITY, so convert here. Ordering by distance ascending is the
+    ** same order as similarity descending, so the rank semantics the band
+    ** walk depends on are unchanged. */
     if( sqlite3_prepare_v2(db,
-            "SELECT content_hash, chunk_ix, substr(chunk_text,1,?5), "
-            "       ndvss_cosine_similarity_f(?2, embedding, ?3) AS cs "
-            "FROM viki_chunk WHERE model_id=?1 AND embedding IS NOT NULL "
-            "ORDER BY cs DESC LIMIT ?4", -1, &st, NULL) != SQLITE_OK ){
+            "SELECT c.content_hash, c.chunk_ix, substr(c.chunk_text,1,?4), "
+            "       1.0 - v.distance AS cs "
+            "FROM vecdb.viki_vec v JOIN viki_chunk c ON c.rowid = v.rowid "
+            "WHERE v.model_id = ?1 AND v.embedding MATCH ?2 AND k = ?3 "
+            "ORDER BY v.distance", -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki muse: vector query prepare failed: %s\n", sqlite3_errmsg(db));
         free(seedVec); free(cand); free(band);
         return VIKI_MUSE_ERR_INTERNAL;
     }
     sqlite3_bind_text(st, 1, pInfo->modelId, -1, SQLITE_STATIC);
     sqlite3_bind_blob(st, 2, seedVec, (int)(sizeof(float) * (size_t)dim), SQLITE_STATIC);
-    sqlite3_bind_int(st, 3, dim);
-    sqlite3_bind_int(st, 4, nCandCap);
-    sqlite3_bind_int(st, 5, nChars + 1);
+    sqlite3_bind_int(st, 3, nCandCap);
+    sqlite3_bind_int(st, 4, nChars + 1);
     {
         int got = 0, rank = 0;
         while( sqlite3_step(st) == SQLITE_ROW && got < nCandCap ){

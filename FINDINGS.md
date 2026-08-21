@@ -16,6 +16,39 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+## Swapping the vector engine (sqlite-ndvss -> sqlite-vec) changed retrieval quality by exactly nothing
+
+Measured 2026-08-21, and the measurement is the point: an engine swap that
+moves the numbers is a bug, not an improvement, and the only way to know
+is a valid A/B.
+
+Both binaries against the **same** corpus (`corpus fp 94b0908c4729bc2c`),
+`VIKI_BIN` varied, corpus NOT rebuilt between runs:
+
+| build | recall@1 | recall@5 | recall@k | MRR |
+|---|---|---|---|---|
+| sqlite-ndvss (git HEAD) | 0.209 | 0.488 | 0.674 | 0.338 |
+| sqlite-vec 0.1.9        | 0.209 | 0.488 | 0.674 | 0.338 |
+
+**A TRAP THIS ALMOST WALKED INTO.** The first sqlite-vec run scored 0.209
+against a documented baseline of 0.256, which looks like a regression the
+swap caused. It is not: the eval corpus is built from *this repository's
+own docs*, and FINDINGS.md/CLAUDE.md/QUEUE.md/AGENTS.md had all been
+edited earlier the same day, so the corpus fingerprint had moved. The old
+engine scores 0.209 on that same corpus too. `test/retrieval-eval.sh`
+prints `corpus fp` and warns "COMPARING TWO BUILDS: keep the SAME --corpus
+directory and vary VIKI_BIN" for exactly this reason -- **quote the
+fingerprint with any number, and never compare across it.**
+
+The way to get the old binary is `git stash` the swap, build, copy the
+result INTO `build/dist/` (its rpath is `@executable_path`, so it cannot
+find `libonnxruntime` from anywhere else), then `git stash pop`.
+
+---
+
+
+
+
 ## `command -v sqlite3` is not a test that sqlite3 can do what you need, and it hid a red CI job for six commits
 
 `test/m1.sh` gated its database-corroboration assertions on

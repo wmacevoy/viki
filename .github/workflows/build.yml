@@ -27,7 +27,13 @@ jobs:
             os: ubuntu-24.04-arm
             container: debian:bookworm
             kind: unix
-            experimental: true # see FINDINGS.md -- sqlite-ndvss SVE2 dispatch bug, not viki's own code
+            # NO LONGER experimental. The flag was here for sqlite-ndvss's
+            # aarch64 SVE2 dispatch bug (FINDINGS.md) -- a bug in that
+            # project, which KICKOFF.md forbids forking, so the only way
+            # out was a different engine. sqlite-vec replaced it, and
+            # removing this line is how that claim gets TESTED rather than
+            # asserted: if linux-arm64 still breaks, this job goes red and
+            # says so instead of being quietly tolerated.
             deps: |
               apt-get update
               apt-get install -y --no-install-recommends \
@@ -70,22 +76,14 @@ jobs:
         with:
           submodules: false
 
-      # vendor/sqlite-ndvss is the only submodule the build needs (see
-      # FINDINGS.md: viki no longer depends on vendor/fossil-see at build
-      # time). Its .gitmodules URL is git@github.com:... (SSH) -- CI has
-      # no SSH key for that, so rewrite git@github.com: to https://
-      # first. vendor/fossil-see is deliberately left uninitialized here:
-      # nothing in this workflow needs it.
-      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
-        run: |
-          # Container jobs bind-mount the checkout from the host; the
-          # resulting UID mismatch trips git's dubious-ownership check for
-          # every step except actions/checkout's own internal git calls
-          # (which add this for themselves, but only for the duration of
-          # that action, not for later steps like this one).
-          git config --global --add safe.directory '*'
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule update --init vendor/sqlite-ndvss
+      # NO SUBMODULE FETCH, and that is now literally true rather than
+      # nearly true. The step that used to sit here initialised
+      # vendor/sqlite-ndvss (rewriting its SSH .gitmodules URL to HTTPS,
+      # since CI has no key). sqlite-vec replaced it and arrives as a
+      # pinned, SHA256-verified download like every other build input, so
+      # `build/build.sh` now needs no submodule at all -- it does not even
+      # invoke git. That is the standalone-build property FINDINGS.md
+      # records, in its strongest form yet.
 
       - name: Install dependencies
         if: ${{ matrix.kind == 'unix' }}

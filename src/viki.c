@@ -3,7 +3,7 @@
 **
 ** Milestone 1 (KICKOFF.md). Both retrieval rungs are real and working
 ** end to end: FTS5 BM25 ("rung 0") and ONNX sentence embeddings +
-** sqlite-ndvss cosine ("rung 2"), rank-fused by `viki ask`. When no
+** sqlite-vec cosine ("rung 2"), rank-fused by `viki ask`. When no
 ** model is present the rung-2 leg drops out and `viki ask` is honest
 ** about it (prints a degraded-mode notice) rather than faking hybrid
 ** retrieval -- VIKI_DESIGN.md's required standalone path, not a stub.
@@ -170,7 +170,7 @@ int main(int argc, char **argv){
         return 0;
     }
 
-    viki_db_register_ndvss();
+    viki_db_register_vec();
 
     if( strcmp(sub, "index") == 0 ){
         sqlite3 *db;
@@ -453,25 +453,89 @@ int main(int argc, char **argv){
         return viki_fossilsee_available() ? 0 : 1;
     }
 
-    if( strcmp(sub, "ndvss-selftest") == 0 ){
-        /* Debug/regression command, not in usage(): proves sqlite-ndvss is
+    if( strcmp(sub, "vec-selftest") == 0 ){
+        /* Debug/regression command, not in usage(): proves sqlite-vec is
         ** really statically linked and functional, independent of whether
-        ** any real vector data exists yet. See FINDINGS.md. */
+        ** any real vector data exists yet. The equivalent ndvss-selftest
+        ** only asked which SIMD path was live; this asks for an ANSWER,
+        ** because the property that matters is that a KNN over a vec0
+        ** table returns the right neighbour in the right order.
+        **
+        ** distance_metric=cosine, so the reported distance is
+        ** 1 - similarity -- the same conversion viki_ask.c applies. A
+        ** selftest that only checked "a row came back" would not notice
+        ** the two being swapped, which would invert every ranking. */
         sqlite3 *db;
         sqlite3_stmt *st;
+        float a[3] = { 1.0f, 0.0f, 0.0f };   /* the query */
+        float b[3] = { 0.0f, 1.0f, 0.0f };   /* orthogonal: distance 1 */
+        int rc = 1;
+
+        viki_db_register_vec();
         if( sqlite3_open(":memory:", &db) != SQLITE_OK ) return 1;
-        if( sqlite3_prepare_v2(db, "SELECT ndvss_instruction_set()", -1, &st, NULL) != SQLITE_OK ){
-            fprintf(stderr, "ndvss-selftest: ndvss_instruction_set() not registered: %s\n",
+        if( sqlite3_exec(db,
+                "CREATE VIRTUAL TABLE v USING vec0("
+                "  embedding FLOAT[3] distance_metric=cosine)",
+                NULL, NULL, NULL) != SQLITE_OK ){
+            fprintf(stderr, "vec-selftest: vec0 not registered: %s\n",
                     sqlite3_errmsg(db));
             sqlite3_close(db);
             return 1;
         }
+        if( sqlite3_prepare_v2(db, "INSERT INTO v(rowid, embedding) VALUES(?1, ?2)",
+                               -1, &st, NULL) != SQLITE_OK ){
+            sqlite3_close(db); return 1;
+        }
+        sqlite3_bind_int(st, 1, 1);
+        sqlite3_bind_blob(st, 2, a, (int)sizeof(a), SQLITE_STATIC);
+        sqlite3_step(st); sqlite3_reset(st);
+        sqlite3_bind_int(st, 1, 2);
+        sqlite3_bind_blob(st, 2, b, (int)sizeof(b), SQLITE_STATIC);
+        sqlite3_step(st);
+        sqlite3_finalize(st);
+
+        if( sqlite3_prepare_v2(db,
+                "SELECT rowid, distance FROM v "
+                "WHERE embedding MATCH ?1 AND k = 2 ORDER BY distance",
+                -1, &st, NULL) != SQLITE_OK ){
+            fprintf(stderr, "vec-selftest: KNN prepare failed: %s\n",
+                    sqlite3_errmsg(db));
+            sqlite3_close(db); return 1;
+        }
+        sqlite3_bind_blob(st, 1, a, (int)sizeof(a), SQLITE_STATIC);
+        {
+            /* Version via vec_version() rather than the header macro: this
+            ** file is compiled without sqlite-vec.h on its include path
+            ** (the amalgamation lives in the download cache), and asking
+            ** the LINKED extension is a better answer anyway. */
+            sqlite3_stmt *sv;
+            if( sqlite3_prepare_v2(db, "SELECT vec_version()", -1, &sv, NULL) == SQLITE_OK
+             && sqlite3_step(sv) == SQLITE_ROW ){
+                printf("sqlite-vec: %s\n", sqlite3_column_text(sv, 0));
+            }
+            sqlite3_finalize(sv);
+        }
         if( sqlite3_step(st) == SQLITE_ROW ){
-            printf("ndvss instruction set: %s\n", sqlite3_column_text(st, 0));
+            int id = sqlite3_column_int(st, 0);
+            double d = sqlite3_column_double(st, 1);
+            printf("nearest rowid=%d distance=%.4f (identical vector)\n", id, d);
+            /* The identical vector must come FIRST and at distance ~0. */
+            if( id == 1 && d < 1e-4 ){
+                if( sqlite3_step(st) == SQLITE_ROW ){
+                    double d2 = sqlite3_column_double(st, 1);
+                    printf("next    rowid=%d distance=%.4f (orthogonal)\n",
+                           sqlite3_column_int(st, 0), d2);
+                    /* Orthogonal vectors are cosine distance 1. If this
+                    ** came back ~0 the metric is not cosine, or distance
+                    ** and similarity are inverted. */
+                    if( d2 > 0.99 && d2 < 1.01 ) rc = 0;
+                }
+            }
         }
         sqlite3_finalize(st);
         sqlite3_close(db);
-        return 0;
+        printf("vec-selftest: %s\n", rc == 0 ? "PASS" : "FAIL");
+        return rc;
     }
 
     if( strcmp(sub, "embed-selftest") == 0 ){

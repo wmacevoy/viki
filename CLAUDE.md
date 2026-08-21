@@ -56,7 +56,8 @@ SQLite amalgamation, ONNX Runtime, and the pinned model (all pinned in
 ends with a smoke test.
 
 ```sh
-git submodule update --init vendor/sqlite-ndvss   # the only build-time submodule
+# No submodule needed: build/build.sh downloads and SHA256-verifies every
+# input, and does not invoke git at all.
 build/build.sh                                    # -> build/dist/viki
 
 export VIKI_MODEL_DIR=build/dist/model   # unset/absent => BM25-only, not an error
@@ -88,8 +89,9 @@ build/dist/viki cache push|pull [db-path] [--no-model]
 fossil-compatible binary is available at runtime. Leave it uninitialized unless
 you need it (CI does).
 
-`.gitmodules` gives `vendor/sqlite-ndvss` an SSH URL; CI rewrites it with
-`git config --global url."https://github.com/".insteadOf "git@github.com:"`.
+`.gitmodules` lists only `vendor/fossil-see`, which is a **runtime**
+convenience (a SQLCipher-capable fossil for the tests), never a build
+input. `build/build.sh` needs no submodule at all.
 
 ### Testing
 
@@ -145,7 +147,9 @@ sh build/fossilsee-probe.sh <empty-dir>     # in-process fossil SQL == subproces
                                             #   Needs a built libfossilsee; REFUSES the
                                             #   equivalence half without one rather than
                                             #   passing vacuously
-build/dist/viki ndvss-selftest              # proves sqlite-ndvss is really statically linked
+build/dist/viki vec-selftest                # proves sqlite-vec is really statically linked,
+                                            #   AND that its cosine DISTANCE is not silently
+                                            #   inverted into a similarity
 build/dist/viki embed-selftest [model-dir]  # semantic property check, not just "didn't crash"
 bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE (not pass/fail)
 ```
@@ -240,8 +244,12 @@ into one candidate pool and fuses them by reciprocal rank (RRF, k=60):
 
 - **Rung 0** — FTS5 BM25 over `chunk_fts`. Always available; free (FTS5 is
   compiled in).
-- **Rung 2** — `ndvss_cosine_similarity_f()` over `viki_chunk.embedding`,
-  filtered by `model_id`. Present only when a model loads.
+- **Rung 2** — a vec0 KNN over `vecdb.viki_vec`, joined back to
+  `viki_chunk` by rowid and partitioned by `model_id`. Present only when a
+  model loads. vec0 reports cosine **distance**; `viki_ask.c` converts to
+  similarity once (`1.0 - distance`) because every consumer — the
+  confidence floor, `viki_ask_info.bestCos`, muse's band edges — is
+  expressed in similarity.
 
 `viki_cmd_ask` (CLI printing) and `viki_serve.c`'s `/api/ask` are both thin
 wrappers around that same function — so the CLI and the HTTP API provably cannot
@@ -312,10 +320,27 @@ in-process track remains unfinished — before touching it, read
 `../fossil-sqlcipher-libressl/embed/README.md`, **not**
 `FFI_RISK.md`/`experiments/`, which are a frozen and now-outdated snapshot.
 
-**sqlite-ndvss is statically linked**, compiled with `-DSQLITE_CORE` and
-registered via `sqlite3_auto_extension(sqlite3_ndvss_init)` in
-`viki_db.c` — never loaded as a runtime `.so`. It ships no public header, so the
-entry point is `extern`-declared by hand.
+**sqlite-vec is statically linked**, compiled with `-DSQLITE_CORE` and
+registered via `sqlite3_auto_extension(sqlite3_vec_init)` in `viki_db.c` —
+never loaded as a runtime `.so`. Pinned and SHA256-verified in
+`build/versions.env` like every other download; the entry point is
+`extern`-declared by hand so `viki_db.c` compiles without the amalgamation
+on its include path.
+
+**The vec0 table is a DERIVED index and lives in its own file.**
+`.viki/vec.db`, attached as `vecdb`, rebuilt from `viki_chunk` by
+`viki_db_vec_sync()` whenever the row counts disagree. It is deliberately
+NOT inside `.viki/cache.db`: that file is what D-11 computes once and D-12
+ships between peers, `test/m1.sh`'s C10 byte-compares a pulled cache
+against the pushed one, and C18 asserts a fresh clone never writes to it.
+A derived index inside it breaks both and would push a local, rebuildable
+projection to every peer — precisely what D-10 forbids. Deleting
+`.viki/vec.db` at any time is safe.
+
+`model_id` is a vec0 **partition key**, not a filtered column, and that is
+correctness rather than tuning: vec0's KNN takes a global top-k, so
+post-filtering by model would return the k nearest across *all* epochs and
+then discard most of them — fewer than k rows, or none.
 
 **`viki serve`** is a single-threaded POSIX-sockets HTTP server with no external
 HTTP library and no static-file serving (every response is generated, so there
@@ -331,9 +356,11 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   no C99 declarations-after-statements in most files. Comments explain *why*,
   and cite `FINDINGS.md` when the reason was discovered empirically.
 - **`vendor/` is read-only upstream.** Vendor, don't edit — including
-  `vendor/sqlite-ndvss` (KICKOFF: do not fork it). Its aarch64-Linux build bug
-  is why CI's linux-arm64 job is `experimental: true`; that is a bug in that
-  project, not something to work around here.
+  the pinned downloads in `build/versions.env`. sqlite-ndvss **is gone**:
+  its aarch64-Linux SVE2 dispatch bug is what kept CI's linux-arm64 job
+  `experimental: true`, and KICKOFF forbids forking it, so the way out was
+  a different engine rather than a patch. The experimental flag came off in
+  the same commit — that is how the claim gets tested rather than asserted.
 - **Never `strtok_r` Fossil's TSV/line output** — it collapses empty fields and
   silently corrupts records (it truncated ticket content once). Use
   `split_preserve_empty()` in `viki_index.c`.
