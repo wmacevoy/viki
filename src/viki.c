@@ -65,7 +65,7 @@ static void usage(void){
         "                           Exact and UNRANKED, unlike 'ask'. Syntax is POSIX ERE,\n"
         "                           NOT PCRE: use [[:digit:]] not \\d, and there is no\n"
         "                           lookaround. -i is case-insensitive; --source filters by\n"
-        "                           SQL LIKE on the source path (e.g. --source 'ckin:%').\n"
+        "                           SQL LIKE on the source path (e.g. --source 'ckin:%%').\n"
         "  capture \"<text>\" [--place P] [--type T] [--who W] [--due D] [--state S]\n"
         "                           Append a note to captures/YYYY-MM.md. OFFLINE: no model, no\n"
         "                           network, no fossil needed. Structure is optional -- capture\n"

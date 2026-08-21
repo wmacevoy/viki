@@ -1,6 +1,7 @@
 #include "viki_serve.h"
 #include "viki_ask.h"
 #include "viki_note.h"
+#include "viki_link.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -162,10 +163,13 @@ static void send_json_error(int fd, int status, const char *statusText, const ch
 /* ---- route handlers: fill an sbuf, return the HTTP status to send ---- */
 
 static int handle_health(sbuf *body, viki_embedder *emb, const char *version){
+    const char *linkBase = viki_link_base();
     sbuf_puts(body, "{\"status\":\"ok\",\"version\":");
     sbuf_json_string(body, version);
     sbuf_puts(body, ",\"mode\":");
     sbuf_json_string(body, emb ? "hybrid" : "bm25");
+    sbuf_puts(body, ",\"fossil_url\":");
+    if( linkBase ) sbuf_json_string(body, linkBase); else sbuf_puts(body, "null");
     sbuf_puts(body, ",\"model_id\":");
     if( emb ) sbuf_json_string(body, viki_embedder_model_id(emb));
     else sbuf_puts(body, "null");
@@ -228,6 +232,21 @@ static int handle_ask(sbuf *body, sqlite3 *db, viki_embedder *emb, const char *q
         sbuf_puts(body, ",\"chunk_ix\":"); sbuf_int(body, results[i].chunk_ix);
         sbuf_puts(body, ",\"hash\":"); sbuf_json_string(body, results[i].hash);
         sbuf_puts(body, ",\"snippet\":"); sbuf_json_string(body, results[i].snippet);
+        {
+            /* A unified index deserves a unified responder: hand back a place
+            ** to GO, not a hex identifier. url is null when no
+            ** $VIKI_FOSSIL_URL is configured -- a wrong link is worse than
+            ** none, because it invites citing a page that does not exist. */
+            char lbl[256], url[1024];
+            const char *base = viki_link_base();
+            viki_link_label(results[i].source, lbl, sizeof(lbl));
+            sbuf_puts(body, ",\"label\":"); sbuf_json_string(body, lbl);
+            sbuf_puts(body, ",\"url\":");
+            if( viki_link_for(base, results[i].source, url, sizeof(url)) )
+                sbuf_json_string(body, url);
+            else
+                sbuf_puts(body, "null");
+        }
         /* FRAGMENT provenance as explicit booleans, and `snippet` left
         ** exactly as retrieved.
         **
@@ -374,9 +393,22 @@ static const char *const VIKI_SERVE_HTML =
     "    div.className = 'hit';\n"
     "    var meta = document.createElement('div');\n"
     "    meta.className = 'meta';\n"
-    "    meta.textContent = '#' + hit.rank + '  rrf=' + hit.rrf.toFixed(4) +\n"
-    "      '  ' + hit.source + ' (chunk ' + hit.chunk_ix +\n"
-    "      (hit.chunk_count ? ' of ' + hit.chunk_count : '') + ')';\n"
+    /* The source becomes a LINK into Fossil's web UI when one exists.
+    ** Built with createElement/textContent, never innerHTML: hit.label and
+    ** hit.url are derived from indexed content, which is untrusted markup.
+    ** href is only ever a URL this server composed from $VIKI_FOSSIL_URL and
+    ** a namespace it recognises -- never a string out of the corpus. */
+    "    meta.textContent = '#' + hit.rank + '  rrf=' + hit.rrf.toFixed(4) + '  ';\n"
+    "    if (hit.url) {\n"
+    "      var a = document.createElement('a');\n"
+    "      a.href = hit.url; a.rel = 'noreferrer';\n"
+    "      a.textContent = hit.label || hit.source;\n"
+    "      meta.appendChild(a);\n"
+    "    } else {\n"
+    "      meta.appendChild(document.createTextNode(hit.label || hit.source));\n"
+    "    }\n"
+    "    meta.appendChild(document.createTextNode(' (chunk ' + hit.chunk_ix +\n"
+    "      (hit.chunk_count ? ' of ' + hit.chunk_count : '') + ')'));\n"
     "    div.appendChild(meta);\n"
     "    var snippet = document.createElement('div');\n"
     "    snippet.className = 'snippet';\n"
