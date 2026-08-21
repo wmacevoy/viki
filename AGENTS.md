@@ -107,6 +107,7 @@ src/            viki CLI source (C)
   viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: on an ENCRYPTED repo each `fossil` invocation pays a SQLCipher KDF, so the per-artifact idiom is minutes where this is seconds. Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
   viki_muse.c/.h  `viki muse`: undirected recall, NO query. Picks a seed chunk and returns chunks from the calibrated MIDDLE of that seed's cosine band -- close enough to be about something, far enough that `ask` would never surface them. Vector-only (an unembedded cache is refused, not faked with BM25), but needs no model FILE: a cache pulled from a peer muses with no `model.onnx` on disk. Rejected scorers (|cos|, sum|xi*yi|, random subspace, anti-search) are recorded in `viki_muse.h` WITH the numbers that killed them, against a uniform-random control
   build/since-probe.sh   `viki index --since` coverage (14 checks). S5/S5b are the ones that matter: an incremental run must retire NOTHING even with a source deleted, and S5c is the control that a FULL pass still does, so "never retires" is a property of the incremental path rather than a broken sweep
+  viki_fossilsee.c/.h  OPTIONAL in-process fossil SQL, dlopen'd at RUNTIME -- never linked. `fossil_sql_framed()` tries it first and falls back to the `fossil sql` subprocess when the library is absent, damaged or ABI-mismatched, so the four-platform standalone build is untouched (probe assertion S1 pins that viki links no fossil library). The point is NOT speed: it is the AUTHORITY signal. `fossil sql` exits 0 whether a query returned no rows or failed to prepare, which is the ambiguity that once let sweep_sources() delete every forum: row; in-process a failed prepare is a real error. Repository discovered by reading `.fslckout`'s vvar.repository with plain sqlite3 (that file is UNENCRYPTED even for a .efossil repo), key via FOSSIL_SEE_KEY as usual. `viki fossilsee-status` (hidden) reports which path is live -- without it a two-path comparison passes trivially when both legs are the subprocess
   viki_link.c/.h  maps an indexed source back to its page in Fossil's web UI: `wiki:` -> /wiki?name=, `ticket:` -> /tktview/, `forum:` -> /forumpost/, `ckin:`/`note:`/`tchg:` -> /info/ (fossil's universal artifact page, safer than inventing a per-class viewer), `attach:` -> /artifact/, `uv:` -> /uv/, a file -> /file?name=&ci=tip. Shapes taken from the fossil binary's own href templates, not guessed. Base URL from $VIKI_FOSSIL_URL; with none set there are no links at all, and an unknown namespace never gets a guessed one
   viki_note.c/.h  `viki capture` / `viki notes`: the CAPTURE LOOP, and the answer to two questions similarity ranking cannot reach. "what needs to be done in monument rocks" needs a filtered LIST, not five ranked chunks -- `ask` returned an observation and a schedule among them. "who baited rimi site last" needs a temporal superlative -- `ask` APPEARED to answer it until an older note with richer wording took rank 1 from the actually-most-recent. Three stages, and `viki structure` is the seam between the first two: CAPTURE offline (`viki capture` appends a block to captures/YYYY-MM.md; no model, no network, no fossil, so it works on a phone at a gate), STRUCTURE online (`viki structure --pending` is the AGENT'S WORK QUEUE -- captures with no @type yet; `viki structure <id> --type ... --place ...` writes the judgement back. viki owns the write rather than telling an agent to hand-edit, because a malformed block silently becomes a different note, and capture files are TRUTH while the projection is disposable. Temp-file + rename, so an interrupted pass cannot truncate a capture. `--closes ID` is SUPERSESSION MADE EXPLICIT: it retires the target and records WHICH note retired it, so "tire for utv fixed" closing "utv tire is flat" is answerable later as history, not just as a state flag -- the same relation as a forum edit superseding its original, met here at a fourth layer. `viki notes --closes ID` is the READ side of that link and the reason "answerable" is literal: without it the link was write-only and the only way to ask what retired a note was to grep captures/*.md, i.e. to go around the projection this table exists to be. viki has no LLM, every caller is one -- same division as the HyDE convention), PROJECT locally (`viki index` REBUILDS viki_note from the files wholesale, so it can never carry a stale row; the files are truth, the table is disposable, D-10). Timestamps are ISO-8601 UTC with MICROSECONDS -- not decoration: at second resolution a burst of captures shared ids and the projection silently kept one of each group, losing 4 of 7 notes. build/capture-probe.sh R1 pins that with a 25-note burst
   viki_grep.c/.h  `viki grep "<regex>"`: POSIX regex over every indexed chunk, exact and UNRANKED -- the complement to `ask`, for when you know the literal string rather than the idea. Its reason to exist is the artifacts `rg` CANNOT reach: five of the nine indexed classes (check-in comments, tech notes, ticket changes, attachments, unversioned files) plus wiki/tickets/forum are not files on disk. Engine is libc POSIX regcomp/regexec -- no vendored library, no download, no submodule -- so the syntax is ERE, NOT PCRE (`[[:digit:]]`, not `\d`; no lookaround). Registers `regexp()`/`regexpi()` on the cache db, which also makes SQLite's infix `x REGEXP y` work for agents driving .viki/cache.db directly. Compiled patterns are cached via sqlite3_set_auxdata so a scan compiles once, not once per row. Its excerpt carries the same fragment markers `viki ask`'s does, from the same `VIKI_MARK_*` macros (it includes `viki_ask.h` rather than retyping them) -- same defect, same fix: a truncated prefix of a possibly-middle chunk under the same citable `<hash>#<ix>` header.
@@ -189,6 +190,21 @@ build/
                   command exists for. `sh build/grep-probe.sh <empty-dir>`. NOT in CI.
   muse-probe.sh   `viki muse`'s standing proof: undirected recall with no query at all.
                   `sh build/muse-probe.sh <empty-dir>`. NOT in CI.
+  fossilsee-probe.sh  proves the OPTIONAL in-process fossil path (libfossilsee via
+                  dlopen) is EQUIVALENT to the `fossil sql` subprocess it replaces: same
+                  source set, same content_hash/chunk_ix set, same AUTHORITY verdicts, same
+                  `viki ask` top hit, over an encrypted repo carrying all seven non-HTTP
+                  artifact classes. L1/L2 pin which path each leg actually took -- an
+                  equivalence probe passes trivially if both legs are secretly the
+                  subprocess, and libfossilsee is optional, so that is the live risk.
+                  F1-F3 are the degradation controls (unloadable library must fall back,
+                  not crash); S1 pins that viki still links no fossil library at build
+                  time. 19 assertions. `sh build/fossilsee-probe.sh <empty-dir>`. Needs a
+                  built libfossilsee ($VIKI_FOSSILSEE_LIB, else ../fossil-sqlcipher-libressl
+                  /build/dist/) and REFUSES to run the equivalence half without one rather
+                  than reporting a vacuous pass. IN CI, in the `m1` job (which already builds
+                  fossil-see) on linux-x86_64 and macos-arm64 -- so unlike the other probes
+                  this one does not depend on someone remembering to run it
   fragment-probe.sh  the standing proof of DISPLAY-SIDE fragment marking in `viki ask`,
                   `viki serve` and `viki grep`. `viki index` slices documents into 40-line
                   chunks and stores each slice raw, so a middle chunk reads as a complete
@@ -556,6 +572,7 @@ sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh omits
 sh build/grep-probe.sh <empty-dir>          # `viki grep`
 sh build/muse-probe.sh <empty-dir>          # `viki muse`
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
+sh build/fossilsee-probe.sh <empty-dir>     # in-process fossil == subprocess (needs libfossilsee)
 
 bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE
 bash test/retrieval-eval.sh --failures      # why each wrong query was wrong
@@ -817,6 +834,36 @@ this file -- against a binary missing three fixes that were sitting in
     nothing when no model is present.
   - Honest limit: **C11 skips** (and prints a SKIP line) when either the
     model or a stock `sqlite3` is missing; C10 and C16 do not.
+
+- **In-process fossil SQL (`libfossilsee`) is EQUIVALENT to the subprocess,
+  on an encrypted repo with every non-HTTP artifact class present**
+  (2026-08-21): `build/fossilsee-probe.sh`, `19 passed, 0 failed`. Both
+  legs index the same `.efossil` repo -- files, `ckin:`, `wiki:`,
+  `ticket:`, `note:`, `attach:`, `uv:` -- and are compared by BYTE
+  EQUALITY on the source set, on the `content_hash`/`chunk_ix` set (the
+  citation identity, so a divergence would be cross-peer cache
+  fragmentation, not cosmetics), on the authority verdicts, and on the
+  `viki ask` top hit. Which path each leg took is pinned by `viki
+  fossilsee-status`, not assumed.
+  What that check bought, immediately and on the first run: three
+  extractors (`ckin:`, `note:`, `attach:`) were SILENTLY producing nothing
+  in-process, because `db_open_repository()` does not register Fossil's
+  `content()` SQL function -- `fossil sql` registers it separately. No
+  crash, no error, just three extra namespaces in the "not authoritative"
+  line. See FINDINGS.md. Fixed by calling `add_content_sql_commands()`.
+  Forum IS covered, separately: `build/forum-e2e-probe.sh` scores
+  `PASS=26 FAIL=0` down BOTH paths against live posts (2026-08-21), and
+  the in-process leg was confirmed non-vacuous -- `viki fossilsee-status`
+  reports `libfossilsee loaded (ABI 1)` in that checkout and `forum:` is
+  absent from the run's "not authoritative" line, so the extractor really
+  ran in-process rather than falling back.
+  NOT verified: any platform other than macOS arm64 (CI does not build the
+  library at all), and any repo large enough for query execution rather
+  than process startup to dominate the timing.
+  Regression check: `test/m1.sh` still `90 passed, 0 failed, 0 skipped`,
+  and since/grep/fragment/muse/link/capture probes all unchanged at
+  14/35/38/59/14/72.
+
 
 ## Structuring captures -- the convention for agents
 

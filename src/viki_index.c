@@ -1,6 +1,7 @@
 #include "viki_index.h"
 #include "viki_note.h"
-#include "viki_cache.h" /* viki_fossil_binary/viki_fossil_user, shared subprocess config */
+#include "viki_cache.h"     /* viki_fossil_binary/viki_fossil_user, shared subprocess config */
+#include "viki_fossilsee.h" /* OPTIONAL in-process fossil SQL; absence is normal */
 #include "sha256.h"
 
 #include <dirent.h>
@@ -712,14 +713,46 @@ static int framed_next(FramedIter *p, FramedRec *pRec){
 ** then DELETES EVERY forum: ROW IN THE CACHE. Reproduced live on a repo
 ** that never had a forum post. */
 static char *fossil_sql_framed(const char *zSql, size_t *pnOut){
-    const char *zFossil = viki_fossil_binary();
-    char *argv[] = { (char*)zFossil, "sql", "--readonly", (char*)zSql, NULL };
+    const char *zFossil;
+    char *argv[5];
     char *zOut;
+    size_t nOut = 0;
     int rc = -1;
+    int bUsed = 0;
+
+    /* IN-PROCESS FIRST, when libfossilsee is loadable. It returns the same
+    ** byte stream `fossil sql` writes to stdout, so everything downstream
+    ** -- framed_next() and all seven extractors -- is unaware of which path
+    ** ran. See viki_fossilsee.h: this is about the AUTHORITY signal, not
+    ** speed. A failed query in-process is a real error, where the
+    ** subprocess reports rc == 0 and an empty capture, indistinguishable
+    ** from "this repo has no such artifacts" -- the ambiguity that made
+    ** sweep_sources() delete every forum: row in the cache (FINDINGS.md).
+    **
+    ** bUsed, not the return value, decides whether to fall back: NULL with
+    ** bUsed set is a genuine "not authoritative" and MUST NOT be retried
+    ** through the subprocess, which would launder the real failure back
+    ** into the ambiguous one this path exists to eliminate. */
+    zOut = viki_fossilsee_sql_framed(zSql, &nOut, &bUsed);
+    if( bUsed ){
+        if( pnOut ) *pnOut = zOut ? nOut : 0;
+        return zOut;
+    }
+
+    zFossil = viki_fossil_binary();
+    argv[0] = (char*)zFossil;
+    argv[1] = "sql";
+    argv[2] = "--readonly";
+    argv[3] = (char*)zSql;
+    argv[4] = NULL;
 
     zOut = run_capture(argv, &rc, pnOut);
     if( !zOut ) return NULL;
-    if( rc != 0 ){ free(zOut); *pnOut = 0; return NULL; }
+    /* pnOut is optional -- repo_probe() passes NULL -- and this branch used
+    ** to dereference it unconditionally, so any repository that could not
+    ** be opened (the one case `fossil sql` exits nonzero for) crashed
+    ** `viki index --since` instead of reporting. */
+    if( rc != 0 ){ free(zOut); if( pnOut ) *pnOut = 0; return NULL; }
     return zOut;
 }
 

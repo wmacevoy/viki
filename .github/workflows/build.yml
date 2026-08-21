@@ -362,12 +362,23 @@ jobs:
         id: fsee-cache
         uses: actions/cache@v4
         with:
-          path: vendor/fossil-see/build/dist/fossil-see
-          # Every input to that binary is in the key: the platform, and the
-          # fossil-see commit (which pins LibreSSL's tarball+SHA256, the
+          # libfossilsee rides in the SAME cache entry as the fossil binary
+          # because it is built from the same objects in the same tree: on a
+          # cache hit the submodule is never fetched, so a separately-cached
+          # library could be restored next to a fossil-see that was never
+          # built and the probe would fail confusingly. One entry, one
+          # decision. Only the SHARED library is cached; the .a is 8MB and
+          # nothing here links statically.
+          path: |
+            vendor/fossil-see/build/dist/fossil-see
+            vendor/fossil-see/build/dist/libfossilsee.so
+            vendor/fossil-see/build/dist/libfossilsee.dylib
+          # Every input to those binaries is in the key: the platform, and
+          # the fossil-see commit (which pins LibreSSL's tarball+SHA256, the
           # SQLCipher fork, and Fossil 2.28 inside its own tree). Bump the
           # trailing version by hand if the build recipe here changes.
-          key: fossil-see-${{ matrix.label }}-${{ steps.fsee.outputs.sha }}-v1
+          # v2: added libfossilsee to the cached path.
+          key: fossil-see-${{ matrix.label }}-${{ steps.fsee.outputs.sha }}-v2
 
       - name: Fetch vendor/fossil-see submodule (recursive)
         if: ${{ !matrix.skip_reason && steps.fsee-cache.outputs.cache-hit != 'true' }}
@@ -376,6 +387,13 @@ jobs:
       - name: Build fossil-see (Fossil 2.28 + SQLCipher + LibreSSL)
         if: ${{ !matrix.skip_reason && steps.fsee-cache.outputs.cache-hit != 'true' }}
         run: ./vendor/fossil-see/build/build.sh
+
+      # Must run in the same cache-miss window as the step above: it links
+      # the object files build.sh just left in vendor/fossil/bld/, which are
+      # not cached and do not exist on a cache hit.
+      - name: Build libfossilsee
+        if: ${{ !matrix.skip_reason && steps.fsee-cache.outputs.cache-hit != 'true' }}
+        run: ./vendor/fossil-see/embed/build-lib.sh
 
       # PREFLIGHT, and not a formality. m1.sh's E1 ("the hub repo is really
       # ciphertext") fails, and fclone() die()s, if this binary turns out to
@@ -450,6 +468,43 @@ jobs:
             grep -E '^test/m1\.sh: |^RESULT: ' "$TMPDIR/m1.out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # build/fossilsee-probe.sh -- the OPTIONAL in-process fossil path.
+      #
+      # Runs here rather than in `build` for the same reason m1 does: it
+      # needs a SQLCipher fossil, and `build` exists to prove viki compiles
+      # and releases with no fossil-see present at all. Assertion S1 inside
+      # the probe re-checks that from the other direction (viki must still
+      # link no fossil library), so the standalone property is asserted in
+      # both jobs.
+      #
+      # VIKI_FOSSILSEE_LIB is set EXPLICITLY. The probe's own fallback
+      # search looks for a sibling ../fossil-sqlcipher-libressl checkout,
+      # which does not exist in CI -- and if the library is not found the
+      # probe refuses to run its equivalence half rather than passing
+      # vacuously, so a wrong path here shows up as a failure, not a
+      # silently reduced test.
+      - name: Run build/fossilsee-probe.sh (in-process fossil == subprocess)
+        if: ${{ !matrix.skip_reason }}
+        run: |
+          set -eo pipefail
+          export VIKI_FOSSIL_BIN="$PWD/vendor/fossil-see/build/dist/fossil-see"
+          if [ -f vendor/fossil-see/build/dist/libfossilsee.dylib ]; then
+            export VIKI_FOSSILSEE_LIB="$PWD/vendor/fossil-see/build/dist/libfossilsee.dylib"
+          else
+            export VIKI_FOSSILSEE_LIB="$PWD/vendor/fossil-see/build/dist/libfossilsee.so"
+          fi
+          sh build/fossilsee-probe.sh "$PWD/fossilsee-scratch" 2>&1 | tee fossilsee.out
+
+          # The probe exits nonzero on any failure and pipefail keeps tee
+          # from masking it. This also catches the other shape of a useless
+          # run: no tally line at all, which is what a probe that died
+          # during setup looks like.
+          grep -qE '^[0-9]+ passed, 0 failed$' fossilsee.out || {
+            echo "::error title=fossilsee probe did not report a clean tally::in-process fossil equivalence was not proven"
+            exit 1
+          }
 
       - name: Upload m1 scratch logs (failure only)
         if: ${{ failure() && !matrix.skip_reason }}

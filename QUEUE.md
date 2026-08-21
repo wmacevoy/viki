@@ -736,3 +736,49 @@ ACTIONS THIS UNBLOCKS OR CHANGES:
   UNENCRYPTED cache and never open the repo, so they pay no KDF. `viki serve` already holds
   the model and cache open. Its gap is COVERAGE (no /api/grep, no /api/muse), not architecture.
   Finishing the serve API is a day; the library is not.
+
+## 32. libfossilsee v0 SHIPPED -- and it did NOT ship for the reason §31 predicted
+     (built 2026-08-21, Warren asked for it directly: "i think libfossilsee is a foundation")
+
+WHAT SHIPPED. In ../fossil-sqlcipher-libressl: `embed/fossilsee.{h,c}`, `embed/build-lib.sh`,
+`embed/test-fossilsee.c` (16 assertions). In viki: `src/viki_fossilsee.{c,h}` (dlopen shim),
+`fossil_sql_framed()` wired to prefer it, `viki fossilsee-status` (hidden),
+`build/fossilsee-probe.sh` (19 assertions). Scope is READ-ONLY SQL only, enforced by an
+sqlite3 authorizer -- not documented-only, because the embed README is explicit that raw SQL
+writes to ticket/tktchng desync Fossil's hash-chained history from its SQL view.
+
+§31 SAID re-measure before building on latency grounds, and that was right: the honest number
+is ~45ms saved per `viki index` run (7 queries x ~6.5ms). NOT why it is worth having.
+The reason is the AUTHORITY signal -- `fossil sql` exits 0 for a failed query, the ambiguity
+that let sweep_sources() delete every forum: row. In-process, a failed prepare is a real error.
+If this had been built for speed it would have been a bad trade; it is a correctness fix that
+happens to also be faster.
+
+WHAT IT COST TO GET RIGHT (all found by the probes, none by inspection):
+- `db_open_repository()` does not register `content()`; three extractors silently produced
+  nothing. FINDINGS.md. The equivalence probe's E3 (authority verdicts) caught it.
+- Fossil caches the encryption key in a process-global (`zSavedKey`), so a second open
+  IGNORES the key it is handed -- a deliberately wrong key SUCCEEDED. Fixed in the library's
+  close path; it is the third such function-static found in that codebase.
+- `g.nameOfExe` must be primed or `db_open_repository()` segfaults.
+- viki's own `fossil_sql_framed()` had a NULL deref on the `--since` path, shipped in HEAD.
+
+STILL OPEN, IN PRIORITY ORDER:
+- ~~Forum unverified in-process~~ -- DONE the same day. `build/forum-e2e-probe.sh` is
+  `PASS=26 FAIL=0` down both paths against live posts, and the in-process leg was checked to
+  be non-vacuous (`fossilsee-status` reports the library loaded in that checkout, and `forum:`
+  is absent from the "not authoritative" line, so the extractor genuinely ran in-process).
+  Worth having done: forum is where this project's bugs historically hide.
+- **macOS arm64 only.** No Linux/Windows build of the library, and CI does not build it.
+  The dlopen shim itself is platform-guarded but untested off Darwin.
+- The ABI declarations in `viki_fossilsee.c` are a hand-copy of `embed/fossilsee.h`. Deliberate
+  (viki must compile with no copy of that project) and guarded by `fossilsee_abi()`, but the
+  guard is the ONLY thing between a skew and undefined behaviour. Do not add entry points
+  without bumping the ABI.
+- The library's prologue MIRRORS `fossil_main()`'s rather than sharing it. A future Fossil that
+  adds an init step compiles clean and fails at runtime. Durable fix is a
+  `fossil_embed_open_repository()` patched into main.c; see that repo's README.
+- The wider slices (wiki/sync/ticket argv shim) still need output capture, still unsolved.
+- §31's LAST bullet still stands and is still probably the better next move for agent IPC:
+  `viki serve` has no /api/grep and no /api/muse. That is a day's work and helps every agent;
+  this library helps a long-lived host process, which viki does not yet have.

@@ -15,6 +15,7 @@
 #include "viki_grep.h"
 #include "viki_note.h"
 #include "viki_cache.h"
+#include "viki_fossilsee.h"
 #include "viki_serve.h"
 #include "embed.h"
 
@@ -148,6 +149,14 @@ static int ensure_viki_dir(void){
 int main(int argc, char **argv){
     const char *sub;
     int rc = 0;
+
+    /* Closes libfossilsee's repository if one was ever opened. atexit()
+    ** rather than a call on each path because main() returns from a dozen
+    ** places and the one that gets forgotten is the one that leaks the
+    ** encryption key -- libfossilsee's close is what zeroes Fossil's
+    ** process-global saved key. A no-op when the library never loaded,
+    ** which is the common case. */
+    atexit(viki_fossilsee_shutdown);
 
     if( argc < 2 ){ usage(); return 1; }
     sub = argv[1];
@@ -431,6 +440,17 @@ int main(int argc, char **argv){
         if( strcmp(argv[2], "pull") == 0 ) return viki_cmd_cache_pull_opts(dbPath, mFlags);
         fprintf(stderr, "viki cache: unknown action '%s' (want push|pull)\n", argv[2]);
         return 1;
+    }
+
+    if( strcmp(sub, "fossilsee-status") == 0 ){
+        /* Debug/regression command, not in usage(): reports whether the
+        ** OPTIONAL in-process fossil path (libfossilsee) loaded, and if
+        ** not, why. build/fossilsee-probe.sh needs this to tell a genuine
+        ** in-process run from a silent fall back to the subprocess --
+        ** without it a probe comparing the two paths passes trivially
+        ** when BOTH legs are actually the subprocess. */
+        printf("%s\n", viki_fossilsee_status());
+        return viki_fossilsee_available() ? 0 : 1;
     }
 
     if( strcmp(sub, "ndvss-selftest") == 0 ){

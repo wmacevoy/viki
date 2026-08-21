@@ -16,6 +16,73 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+## `db_open_repository()` does not register `content()`, so in-process SQL is NOT equivalent to `fossil sql`
+
+Found 2026-08-21 while wiring `libfossilsee` into `fossil_sql_framed()`.
+
+Fossil's `content()`, `compress()`, `decompress()` and
+`gather_artifact_stats()` SQL functions are registered by
+`add_content_sql_commands()` in `sqlcmd.c`, which the **`fossil sql`
+command** calls -- not `db_open_repository()`. An embedder that opens a
+repository directly gets a connection where `content()` does not exist.
+
+Three of viki's seven extractors (`ckin:`, `note:`, `attach:`) call
+`content()`. Through the in-process path they all failed with
+`no such function: content`, which viki correctly read as "not
+authoritative" -- so the run reported
+
+```
+viki index: not authoritative this run for ticket: forum: note: tchg: attach: uv:
+```
+
+where the subprocess path reported only `ticket: forum: uv:`. **Nothing
+crashed and no error reached the user**; the extractors simply, silently,
+stopped extracting, and the only visible symptom was three extra
+namespaces in a line most readers skim.
+
+Repro: open a repo with `db_open_repository()` and run
+`SELECT content(uuid) FROM blob LIMIT 1;` -- `no such function: content`.
+Fix: call `add_content_sql_commands(g.db)` after opening.
+
+**The general claim, which is the part worth keeping:** "it opened the
+same database" is not the same as "it is the same interface". Fossil
+installs per-command SQL functions, and an embedding inherits none of
+them by default. `build/fossilsee-probe.sh`'s E3 assertion (authority
+verdicts identical down both paths) is what caught this, and it is the
+assertion to keep if any others are ever dropped.
+
+---
+
+## `fossil_sql_framed()` dereferenced an optional out-param, crashing `viki index --since` outside a checkout
+
+Found 2026-08-21 by inspection while adding the in-process path; present
+in git `HEAD` at `src/viki_index.c:722`:
+
+```c
+if( rc != 0 ){ free(zOut); *pnOut = 0; return NULL; }
+```
+
+`pnOut` is optional and `repo_probe()` passes NULL (line 804). `rc != 0`
+is reachable: `fossil sql` exits nonzero when the **repository cannot be
+opened**, which is exactly what happens outside a checkout --
+
+```
+$ cd /tmp/empty && fossil-see sql --readonly "SELECT 1;" ; echo $?
+1
+```
+
+-- and `run_capture()` returns a non-NULL empty buffer there, so the
+earlier `if( !zOut ) return NULL;` does not save it. `viki index --since
+auto` in any non-checkout directory therefore dereferenced NULL.
+
+Fixed by guarding the store. Worth noting how it survived: the crash needs
+the `--since` path AND a directory with no repository, and every test in
+the tree runs `--since` inside a checkout it just created.
+
+---
+
+
+
 
 ## A raw 256-bit key makes an encrypted repo 52x cheaper to open, and needs no patch anywhere
 
