@@ -866,3 +866,176 @@ FIXED IN BOTH HALVES, because either alone is unsatisfying:
 THE GENERAL LESSON, which is the part worth keeping: `command -v X` tests that a binary
 EXISTS, not that it can do the thing you need. Every capability gate in this tree deserves
 the same suspicion.
+
+## 34. DEFECT: the universal model is distributed PER-REPO, so N repos carry N copies
+     (Warren, 2026-08-21: "there is no reason that a todo list carries 23mb for fun")
+
+D-11 pins ONE rung-2 model, universal across peers -- that universality is exactly what
+makes an embedding a deterministic function of (content_hash, model_id, chunk_params).
+D-12 then distributes that model as `fossil uv` files INSIDE EACH REPO:
+
+    viki-model/model.onnx          ~23 MB
+    viki-model/vocab.txt
+    viki-model/viki-manifest.json
+
+Both decisions are sound alone and compose badly at N > 1. Five repos = five copies of a
+singleton. This is a DEFECT, not a future refinement: it is D-11 and D-12 disagreeing.
+
+BE PRECISE ABOUT THE COST -- surfaced by `viki muse` against the docs, and it narrows the
+claim. FINDINGS.md ("fossil uv add re-deflates...") records that viki_cache.c ALREADY
+skips all three model blobs when the published manifest matches the local one, and that
+fossil compares hashes before shipping content, so a repeat push of an unchanged model
+costs 586 wire bytes. So:
+
+  - REPEATED-PUSH BANDWIDTH: already solved. Not a reason to change anything.
+  - FIRST-PUSH BANDWIDTH: real -- each repo uploads ~23MB once.
+  - STORAGE AT REST: real, and this is the actual defect. Every repo's uv table holds its
+    own copy, on the hub AND in every clone of it. A device holding five repos holds five
+    models. That is the "todo list carries 23mb" case.
+
+Do not justify this work on bandwidth; justify it on at-rest duplication and on D-11/D-12
+coherence.
+
+MOST OF THE FIX ALREADY EXISTS:
+- $VIKI_MODEL_DIR is a single global pointer, so at RUNTIME the model is already shared
+  across every repo on a machine. Only distribution duplicates it.
+- viki_chunk.model_id already NAMES the model rather than embedding it, so a cache
+  already refers to a model it does not contain.
+- `viki cache push --no-model` already exists (viki_cache.h explains the current polarity).
+
+WHAT TO CHANGE: the default and the bootstrap, not the mechanism.
+- The model becomes a MACHINE-LEVEL artifact in its own repo, exactly as me.viki is its
+  own repo. Fetched once per device.
+- Per-repo pushes carry model_id only; --no-model's polarity flips (opt IN for the
+  bootstrap case rather than opt OUT).
+- Epoch handling gets cleaner as a side effect: one place to pin, verify and roll
+  forward, instead of N manifests that can disagree with each other.
+
+CAREFUL: test/m1.sh's D-12 group (M1-M9) asserts the CURRENT behaviour -- that a fresh
+clone gets hybrid retrieval from the hub alone, model included. That property must be
+PRESERVED, not deleted: it is the `required` (offline phone) case in VIKIVERSE.md. The
+change is where the model comes from, not whether a fresh clone can get one. Expect to
+rewrite M1-M9 rather than drop them, and keep a control proving a fresh device with no
+model can still bootstrap.
+
+See VIKIVERSE.md, "The model factors out -- and today it does not".
+
+## 35. SECURITY: `viki cache push` publishes the PLAINTEXT corpus to any account with Fossil `Read`
+     (found 2026-08-21 by a threat-model roleplay of VIKIVERSE.md; verified against src/)
+
+`viki cache push` runs `fossil uv add <cache> --as viki-cache.db` (viki_cache.c). The file
+pushed is `.viki/cache.db` VERBATIM -- a plain SQLite database whose viki_chunk.chunk_text
+holds raw text. Fossil serves `/uv/FILE` behind exactly one check, `g.perm.Read`, and
+`/uvlist` enumerates uv names and sizes behind the same one. SERVER_SETUP.md offers
+anonymous read-only browse as a supported configuration.
+
+CONSEQUENCE: on a repo with public browse enabled, the whole plaintext corpus is one
+unauthenticated HTTPS GET. Encryption at rest is irrelevant -- the server decrypts and
+serves. Any Read-capable account (a browse-only collaborator, a revoked-but-not-removed
+agent token) gets the same.
+
+LIMITS TODAY, worth stating but NOT worth relying on: plain `fossil clone` does not carry
+unversioned content (viki_cache.c says so explicitly), and uv is latest-wins with no
+history, so an old cache is not retained.
+
+FIX, in order of cost:
+- Document it loudly: pushing a cache makes the corpus readable by every Read account.
+- Make `viki cache push` refuse, or demand an explicit flag, when the target repo grants
+  Read to anonymous/nobody.
+- Longer term: encrypt the cache blob independently before `uv add`, with a key held only
+  by readers, so the Fossil ACL is not the sole control.
+
+RELATED, same root cause -- the cache is plaintext and key-free:
+- `.viki/cache.db` is created 0644 under a 0755 `.viki` (viki.c). On any multi-user host
+  every local account can read the entire corpus. Should be 0600/0700.
+- There is no `.fossil-settings/ignore-glob` in this project. `.gitignore` covers `.viki/`
+  but does NOT stop fossil: a `fossil addremove` in a checkout commits cache.db as a
+  VERSIONED artifact -- permanent, synced to every peer, removable only by shunning.
+- ENCRYPTION.md's threat model has a row for plaintext CHECKOUT FILES and none for the
+  cache -- which for wiki/ticket/tchg/forum/ckin/note/attach/uv content is the ONLY
+  plaintext copy on disk anywhere. Add that row.
+
+## 36. FIELD: three gaps that break the offline story, none of which need networking
+     (found 2026-08-21 by role-playing the phone-in-a-truck case; all reproduced)
+
+1. CAPTURES NEVER BECOME SEARCHABLE WITHOUT A SHELL. `/api/capture` returns
+   `reindex_required`; `/api/reindex` calls viki_note_reindex() only, which is
+   `DELETE FROM viki_note` + re-parse. Its own comment: "Chunk re-indexing stays a
+   deliberate `viki index` from a shell." No route runs a corpus index. On a phone there
+   is no shell, so `viki ask` can never reach today's captures. `viki notes` can.
+   THIS IS US-3, THE KILLER STORY, BROKEN ON THE TARGET DEVICE. Fix: a route (or an
+   opt-in mode) that runs the chunk index, with the cost made visible.
+
+2. `viki cache pull` IS ONLINE-ONLY EVEN WHEN THE BYTES ARE LOCAL. It runs
+   `fossil uv sync` unconditionally and returns nonzero on failure, before ever trying
+   `uv export` -- which reads the LOCAL repo. So recovery fails in the field even when
+   nothing is actually missing. ~5-line fix: try export first, sync only if it fails.
+
+3. EVERY FAILURE LOOKS THE SAME. An absent cache is silently created empty
+   (SQLITE_OPEN_CREATE); zero results prints `(no matches)`. "Cache never arrived",
+   "sync is a week stale" and "I never wrote that down" are byte-identical. This is the
+   SINGLE-REPO form of the completeness problem VIKIVERSE.md raises for multiple repos,
+   and it is likelier on a new device. Fix alongside repo-coverage reporting.
+
+ALSO REPRODUCED, lower priority:
+- Rapid captures vanish from `ask` while still listed by `notes`: chunking is gated by
+  whole-second mtime while viki_note_reindex is an unconditional rebuild, so two surfaces
+  disagree about whether a note exists. `captures/YYYY-MM.md` is append-only, which makes
+  this the NORMAL path rather than an edge case.
+- `viki ask --k 3 "query"` silently searches for the literal `--k` (AGENTS.md documents
+  this and calls it a one-place fix in viki.c). Fails to SILENCE, which is
+  indistinguishable from gap 3 above. `viki grep` gets the same case right and fails loudly.
+- A month of captures becomes one growing 40-line-chunk file: ~10 unrelated notes share a
+  chunk by month end, and every capture re-embeds the whole file.
+
+M1-M9 DO NOT COVER ANY OF THIS. They prove D-12 blob integrity on one machine with the hub
+always reachable -- see VIKIVERSE.md, which no longer claims otherwise.
+
+## 37. The hub as scripted is PLAINTEXT, and ENCRYPTION.md's deltas were never folded in
+     (found 2026-08-21 by an operations roleplay of VIKIVERSE.md; verified in server/)
+
+`server/setup-hub.sh` installs apt `fossil` (not fossil-see), creates `pm.fossil` (not
+`.efossil`), and sets no FOSSIL_SEE_KEY anywhere. A stock fossil cannot open a SQLCipher
+repo at all, and by m1's own control E2 a `.fossil` name means plaintext even with the
+right binary and key.
+
+ENCRYPTION.md already lists the deltas ("use fossil-see", "name repos *.efossil", "key via
+LoadCredential") under a heading that says to fold them into setup-hub.sh. They have not
+been. So ENCRYPTION.md's claim that VPS disk theft is covered is FALSE for the hub these
+scripts build.
+
+FIX: fold the deltas in, and add a startup assertion that refuses to create a repo whose
+name does not end in .efossil when a key is configured -- so the failure is loud rather
+than a plaintext repo with a reassuring name.
+
+## 38. Vikiverse items found by roleplay that are NOT yet fixed
+     (2026-08-21; the fixed ones are QUEUE 35/36 and the cache-probe.sh work)
+
+- MULTI-WRITER IS LAST-MTIME-WINS. fossil's unversioned_status() resolves a hash
+  difference by later mtime, ties by strcmp of hashes; every write is REPLACE INTO. viki
+  passes no --mtime, so the stamp is unsynchronised wall clock. Two peers pushing
+  different subsets silently clobber each other on the hub; a device with a skewed clock
+  either never wins or wins forever. MERGE-ON-PULL (now implemented) makes the DOWNWARD
+  direction safe and commutative, which retires most of this -- but the hub still holds
+  whichever push landed last. Consider merge-on-push, or --mtime from a monotonic source.
+- NOTHING SUPERVISES A LOCAL `viki serve`, which VIKIVERSE.md makes the default transaction
+  path. No launchd plist, no `systemd --user` unit. The remote unit has Restart=on-failure
+  with no RestartSec and no StartLimitBurst, so a held port burns five restarts in under a
+  second and the unit fails permanently.
+- `/api/health` RETURNS OK UNCONDITIONALLY. It never touches the db, so it is green on an
+  empty, stale or unreadable cache -- and nothing polls it anyway. Give it row count,
+  newest viki_source.ts, model_id and cache mtime, and 503 when the cache will not open.
+- NO SOCKET TIMEOUTS in viki_serve. Single-threaded accept loop, blocking recv, no
+  SO_RCVTIMEO. One half-open connection wedges the server indefinitely -- and because the
+  process stays alive, Restart=on-failure never fires and health stays "ok".
+- TAILSCALE HAS REAL OPS COST that "zero viki code" hides: auth-key expiry (the mitigation
+  is a manual per-device toggle, and the motivating scenario is a device that cannot
+  complete an interactive login), ACLs as a second policy file that must agree with the
+  Fossil capability table, and a third party in the availability path for a design whose
+  premise is offline tolerance. Add an "ops cost" column to VIKIVERSE.md's table and keep
+  a documented non-Tailscale path.
+- §34's MIGRATION NEEDS A VERIFIED SCRIPT. uv blobs are NOT versioned history (their own
+  table, REPLACE on write, `uv rm` leaves a delete marker), so the 23MB is reclaimable --
+  but nothing shrinks automatically (no auto_vacuum in fossil; needs `rebuild --vacuum`),
+  `uv rm` needs the same `y` capability, and clones that never sync again keep their copy
+  forever.

@@ -139,7 +139,14 @@ static viki_embedder *open_embedder_if_available(void){
 static int ensure_viki_dir(void){
     struct stat st;
     if( stat(".viki", &st) == 0 ) return S_ISDIR(st.st_mode) ? 0 : 1;
-    if( mkdir(".viki", 0755) != 0 ){
+    /* 0700, not 0755. `.viki/cache.db` is UNENCRYPTED by design (D-10) and
+    ** holds chunk_text verbatim -- and for the artifact classes that never
+    ** exist as checkout files (wiki:, ticket:, tchg:, forum:, ckin:, note:,
+    ** attach:, uv:) it is the ONLY plaintext copy on disk anywhere. It also
+    ** needs no key to read: FOSSIL_SEE_KEY is never consulted on the read
+    ** path. On a shared host, world-readable meant every local account
+    ** could read the entire corpus. See QUEUE 35. */
+    if( mkdir(".viki", 0700) != 0 ){
         perror("viki: mkdir .viki");
         return 1;
     }

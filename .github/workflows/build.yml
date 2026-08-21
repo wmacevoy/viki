@@ -525,6 +525,22 @@ jobs:
             exit 1
           }
 
+      # The distribution path, over real HTTP with a capability-limited
+      # user. m1.sh cannot catch this class: every one of its push/pull
+      # assertions runs over file:// as an admin, which is exactly why
+      # `viki cache push` silently published nothing until an operations
+      # review reproduced it by hand.
+      - name: Run build/cache-probe.sh (push/pull over HTTP)
+        if: ${{ !matrix.skip_reason }}
+        run: |
+          set -eo pipefail
+          export VIKI_FOSSIL_BIN="$PWD/vendor/fossil-see/build/dist/fossil-see"
+          sh build/cache-probe.sh "$PWD/cache-scratch" 2>&1 | tee cache.out
+          grep -qE '^[0-9]+ passed, 0 failed$' cache.out || {
+            echo "::error title=cache probe failed::the push/pull distribution path is broken"
+            exit 1
+          }
+
       - name: Upload m1 scratch logs (failure only)
         if: ${{ failure() && !matrix.skip_reason }}
         uses: actions/upload-artifact@v4

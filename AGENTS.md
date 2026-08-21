@@ -190,6 +190,19 @@ build/
                   command exists for. `sh build/grep-probe.sh <empty-dir>`. NOT in CI.
   muse-probe.sh   `viki muse`'s standing proof: undirected recall with no query at all.
                   `sh build/muse-probe.sh <empty-dir>`. NOT in CI.
+  cache-probe.sh  the DISTRIBUTION path (`viki cache push`/`pull`), and the only test in
+                  the tree that runs over real HTTP against a capability-limited user.
+                  m1.sh's C/M groups all run over file:// as an admin, and three real
+                  defects lived under that blind spot: push exited 0 with the hub empty
+                  (uploading uv content needs the fossil `y` capability, and fossil's own
+                  sync_unversioned() discards the error), pull OVERWROTE the local cache
+                  and destroyed unpushed local indexing, and push published the bare .db
+                  while WAL held newer content. 17 assertions, each paired with a control.
+                  NON-VACUITY MEASURED: 14 passed / 3 failed against a pre-fix binary.
+                  `sh build/cache-probe.sh <empty-dir>`; VIKI_PROBE_PORT overrides 8765.
+                  Honest limit: the G4 (stale-WAL) leg does not discriminate -- it passes
+                  against the pre-fix binary too, because reproducing the hazard needs a
+                  reader holding the WAL open ACROSS the push
   fossilsee-probe.sh  proves the OPTIONAL in-process fossil path (libfossilsee via
                   dlopen) is EQUIVALENT to the `fossil sql` subprocess it replaces: same
                   source set, same content_hash/chunk_ix set, same AUTHORITY verdicts, same

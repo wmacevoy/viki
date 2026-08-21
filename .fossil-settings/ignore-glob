@@ -1,0 +1,11 @@
+# viki's derived cache is UNENCRYPTED, key-free, and a complete plaintext
+# copy of the corpus (D-10 makes it a disposable projection; QUEUE 35 covers
+# the exposure). .gitignore already excludes it, but that does not stop
+# fossil: a `fossil addremove` in a checkout would commit it as a VERSIONED
+# artifact -- permanent, synced to every peer, and removable only by
+# shunning. This file is what stops that.
+#
+# Note the deliberate asymmetry: `viki cache push` puts the cache in the
+# repo ON PURPOSE, as an unversioned (uv) file, which IS replaceable and is
+# not history. Versioned is the accident; unversioned is the design.
+.viki/*

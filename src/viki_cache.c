@@ -1,5 +1,6 @@
 #include "viki_cache.h"
 #include "sha256.h"
+#include <sqlite3.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -364,18 +365,175 @@ static int push_model(const char *zFossil){
     return rc;
 }
 
+/* Runs argv and captures stdout+stderr into a malloc'd buffer (caller
+** frees). Returns the child's exit code, or -1. Needed because
+** `fossil uv sync` reports the failure this project cares about most in its
+** OUTPUT rather than its exit status -- see uv_sync_checked(). */
+static char *run_capture_text(char *const argv[], int *pExit){
+    int pipefd[2];
+    pid_t pid;
+    char *buf;
+    size_t cap = 65536, len = 0;
+
+    if( pExit ) *pExit = -1;
+    if( pipe(pipefd) != 0 ) return NULL;
+    pid = fork();
+    if( pid < 0 ){ close(pipefd[0]); close(pipefd[1]); return NULL; }
+    if( pid == 0 ){
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    buf = malloc(cap);
+    if( !buf ){ close(pipefd[0]); waitpid(pid, NULL, 0); return NULL; }
+    for(;;){
+        ssize_t n;
+        if( len + 4096 + 1 > cap ){
+            char *bufNew = realloc(buf, cap * 2);
+            if( !bufNew ) break;
+            buf = bufNew; cap *= 2;
+        }
+        n = read(pipefd[0], buf + len, 4096);
+        if( n <= 0 ) break;
+        len += (size_t)n;
+    }
+    buf[len] = 0;
+    close(pipefd[0]);
+    {
+        int status;
+        if( waitpid(pid, &status, 0) >= 0 && WIFEXITED(status) ){
+            if( pExit ) *pExit = WEXITSTATUS(status);
+        }
+    }
+    return buf;
+}
+
+/* Runs `fossil uv sync` and FAILS when the server refused the upload.
+**
+** THIS IS THE THIRD TIME THIS PROJECT HAS BEEN BITTEN BY THE SAME SHAPE.
+** `fossil sql` exits 0 on a failed query (FINDINGS.md; it is what let
+** sweep_sources() delete every forum: row). `command -v sqlite3` tested
+** presence rather than fts5 capability (QUEUE 33). And here: uploading
+** unversioned content requires the Fossil `y` capability, the server
+** rejects the push with "Write permissions for unversioned files missing",
+** and fossil's own sync_unversioned() DISCARDS the return value -- so
+** `fossil uv sync` prints a warning and exits 0 with the hub empty.
+**
+** Reproduced against a live HTTP hub using exactly the capabilities
+** server/SERVER_SETUP.md recommends for an agent: push exit 0, hub uv rows
+** 0, spoke uv rows 1. The operator then debugs the phone, three days later
+** and a thousand miles from the laptop where the push silently did nothing.
+**
+** So the exit status is not the authority; the output is. A push that did
+** not land must not report success. */
+static int uv_sync_checked(const char *zFossil, const char *zWhat){
+    char *argvSync[] = { (char*)zFossil, "uv", "sync", NULL };
+    int rc = -1;
+    char *zOut = run_capture_text(argvSync, &rc);
+    int bRefused = 0;
+
+    if( !zOut ){
+        fprintf(stderr, "viki cache %s: could not run 'fossil uv sync'\n", zWhat);
+        return 1;
+    }
+    fputs(zOut, stderr);
+    if( strstr(zOut, "uv-pull-only")
+     || strstr(zOut, "not authorized")
+     || strstr(zOut, "Write permissions for unversioned files missing") ){
+        bRefused = 1;
+    }
+    free(zOut);
+
+    if( rc != 0 ){
+        fprintf(stderr, "viki cache %s: 'fossil uv sync' failed (exit %d)\n", zWhat, rc);
+        return 1;
+    }
+    if( bRefused ){
+        fprintf(stderr,
+            "viki cache %s: the SERVER REFUSED the unversioned upload, and fossil still\n"
+            "viki cache %s:   exited 0. Nothing was published.\n"
+            "viki cache %s:   Uploading unversioned content needs the Fossil 'y'\n"
+            "viki cache %s:   capability; a user with 'c i o r w' cannot push a cache.\n"
+            "viki cache %s:   Fix: fossil user capabilities <user> +y  (on the hub).\n",
+            zWhat, zWhat, zWhat, zWhat, zWhat);
+        return 1;
+    }
+    return 0;
+}
+
+/* Publishes a CONSISTENT SNAPSHOT of the cache rather than the live file.
+**
+** viki_db.c opens the cache with journal_mode=WAL, and `fossil uv add`
+** reads only the main database file. So with a long-lived reader holding
+** the WAL open -- which is exactly the topology VIKIVERSE.md recommends as
+** the default, a local `viki serve` -- the bare .db lags the live database
+** and the push publishes a VALID BUT STALE cache. Measured: 53KB of WAL
+** holding content that the pushed file did not contain.
+**
+** That is the silent-partial-corpus hazard this project has already proven
+** it cannot detect after the fact: peers pull a cache missing recent work
+** and no confidence threshold distinguishes it (FINDINGS.md).
+**
+** VACUUM INTO produces a defined, checkpointed, single-file snapshot, and
+** as a side effect removes the torn-read risk from a concurrent
+** `viki index`. Returns 0 and fills zSnap on success. */
+static int cache_snapshot(const char *zCacheDbPath, char *zSnap, size_t nSnap){
+    sqlite3 *db = NULL;
+    sqlite3_stmt *st = NULL;
+    int rc;
+
+    snprintf(zSnap, nSnap, "%s.push-snapshot", zCacheDbPath);
+    unlink(zSnap);
+
+    if( sqlite3_open_v2(zCacheDbPath, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK ){
+        fprintf(stderr, "viki cache push: cannot open cache '%s': %s\n",
+                zCacheDbPath, db ? sqlite3_errmsg(db) : "(no handle)");
+        sqlite3_close(db);
+        return 1;
+    }
+    rc = sqlite3_prepare_v2(db, "VACUUM INTO ?1", -1, &st, NULL);
+    if( rc == SQLITE_OK ){
+        sqlite3_bind_text(st, 1, zSnap, -1, SQLITE_STATIC);
+        rc = sqlite3_step(st) == SQLITE_DONE ? SQLITE_OK : SQLITE_ERROR;
+    }
+    if( rc != SQLITE_OK ){
+        fprintf(stderr, "viki cache push: VACUUM INTO failed: %s\n", sqlite3_errmsg(db));
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return rc == SQLITE_OK ? 0 : 1;
+}
+
 int viki_cmd_cache_push_opts(const char *zCacheDbPath, unsigned mFlags){
     const char *fossil = viki_fossil_binary();
-    char *argvAdd[] = { (char*)fossil, "uv", "add", (char*)zCacheDbPath, "--as", VIKI_UV_NAME, NULL };
-    char *argvSync[] = { (char*)fossil, "uv", "sync", NULL };
+    char zSnap[2048];
+    char *argvAdd[7];
     int rc, rcModel = 0;
 
-    fprintf(stderr, "viki cache push: %s uv add %s --as %s\n", fossil, zCacheDbPath, VIKI_UV_NAME);
+    /* Snapshot first -- never publish the live WAL-backed file. See
+    ** cache_snapshot(). */
+    if( cache_snapshot(zCacheDbPath, zSnap, sizeof(zSnap)) != 0 ) return 1;
+
+    argvAdd[0] = (char*)fossil;
+    argvAdd[1] = "uv";
+    argvAdd[2] = "add";
+    argvAdd[3] = zSnap;
+    argvAdd[4] = "--as";
+    argvAdd[5] = (char*)VIKI_UV_NAME;
+    argvAdd[6] = NULL;
+
+    fprintf(stderr, "viki cache push: %s uv add %s --as %s\n", fossil, zSnap, VIKI_UV_NAME);
     rc = run(argvAdd);
     if( rc != 0 ){
         fprintf(stderr, "viki cache push: 'fossil uv add' failed (exit %d)\n", rc);
+        unlink(zSnap);
         return 1;
     }
+    unlink(zSnap);
 
     if( mFlags & VIKI_CACHE_NO_MODEL ){
         fprintf(stderr,
@@ -389,11 +547,7 @@ int viki_cmd_cache_push_opts(const char *zCacheDbPath, unsigned mFlags){
     }
 
     fprintf(stderr, "viki cache push: %s uv sync\n", fossil);
-    rc = run(argvSync);
-    if( rc != 0 ){
-        fprintf(stderr, "viki cache push: 'fossil uv sync' failed (exit %d)\n", rc);
-        return 1;
-    }
+    if( uv_sync_checked(fossil, "push") != 0 ) return 1;
     return rcModel;
 }
 
@@ -531,10 +685,135 @@ static int pull_model(const char *zFossil){
     return 0;
 }
 
+/* Merges a pulled cache INTO the local one instead of overwriting it.
+**
+** `fossil uv export` is a plain blob_write_to_file() -- no atomic rename,
+** no existence check, no backup. Pointed straight at the live cache, as
+** pull used to do, it DESTROYS whatever the local device had indexed and
+** not yet pushed. Reproduced: a chunk present locally before the pull was
+** gone after it, exit 0, no warning.
+**
+** That directly contradicts D-11, whose whole premise is "computed once by
+** whoever sees the content first, THEN SHARED" -- a union, not a
+** whole-file replacement in whichever direction ran last. It also retires
+** the multi-writer race: two peers pushing different subsets can no longer
+** clobber each other on the way back down, because the merge is by
+** content-addressed key and therefore commutative.
+**
+** ON A FRESH CLONE (no local cache, or one with no chunks) this instead
+** moves the pulled file into place verbatim. That keeps the pulled artifact
+** byte-identical to the pushed one, which is what test/m1.sh C10 asserts,
+** and it is the correct behaviour anyway: there is nothing to merge with.
+**
+** Local rows always win. INSERT OR IGNORE on viki_chunk's primary key
+** (content_hash, model_id, chunk_ix) is safe precisely because a chunk is
+** a deterministic function of that key -- two peers cannot disagree about
+** the bytes without also disagreeing about the hash. viki_source is merged
+** the same way rather than replaced, so a peer's paths and mtimes never
+** overwrite this device's own staleness state.
+**
+** Returns 0 on success. */
+static int cache_merge_in(const char *zCacheDbPath, const char *zIncoming){
+    sqlite3 *db = NULL;
+    char *zErr = NULL;
+    char *zSql = NULL;
+    struct stat st;
+    int rc = 1;
+    sqlite3_int64 nBefore = 0, nAfter = 0;
+    sqlite3_stmt *pStmt = NULL;
+
+    /* No local cache at all -> take the incoming file verbatim. */
+    if( stat(zCacheDbPath, &st) != 0 || st.st_size == 0 ){
+        if( rename(zIncoming, zCacheDbPath) != 0 ){
+            fprintf(stderr, "viki cache pull: cannot install cache at %s: %s\n",
+                    zCacheDbPath, strerror(errno));
+            return 1;
+        }
+        (void)chmod(zCacheDbPath, 0600);
+        return 0;
+    }
+
+    if( sqlite3_open(zCacheDbPath, &db) != SQLITE_OK ){
+        fprintf(stderr, "viki cache pull: cannot open local cache: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return 1;
+    }
+
+    /* An empty local cache is also "nothing to merge with", but we already
+    ** hold it open, so finish through the merge path rather than racing a
+    ** rename against our own handle. */
+    if( sqlite3_prepare_v2(db, "SELECT count(*) FROM viki_chunk", -1, &pStmt, NULL)==SQLITE_OK
+     && sqlite3_step(pStmt)==SQLITE_ROW ){
+        nBefore = sqlite3_column_int64(pStmt, 0);
+    }
+    sqlite3_finalize(pStmt);
+    pStmt = NULL;
+
+    zSql = sqlite3_mprintf("ATTACH DATABASE %Q AS inc", zIncoming);
+    if( !zSql ){ sqlite3_close(db); return 1; }
+    rc = sqlite3_exec(db, zSql, NULL, NULL, &zErr);
+    sqlite3_free(zSql);
+    if( rc != SQLITE_OK ){
+        fprintf(stderr, "viki cache pull: cannot read pulled cache: %s\n",
+                zErr ? zErr : "(no message)");
+        sqlite3_free(zErr);
+        sqlite3_close(db);
+        return 1;
+    }
+
+    rc = sqlite3_exec(db,
+        "BEGIN;"
+        "INSERT OR IGNORE INTO viki_chunk(content_hash,model_id,chunk_ix,chunk_text,embedding)"
+        "  SELECT content_hash,model_id,chunk_ix,chunk_text,embedding FROM inc.viki_chunk;"
+        /* chunk_fts is a PLAIN fts5 table with no unique constraint, so
+        ** OR IGNORE cannot help -- the anti-join is what stops duplicate
+        ** rows, which would otherwise inflate BM25 for the duplicated
+        ** chunk. */
+        "INSERT INTO chunk_fts(chunk_text,content_hash,model_id,chunk_ix)"
+        "  SELECT i.chunk_text,i.content_hash,i.model_id,i.chunk_ix FROM inc.chunk_fts i"
+        "  WHERE NOT EXISTS (SELECT 1 FROM chunk_fts c"
+        "                     WHERE c.content_hash=i.content_hash"
+        "                       AND c.model_id=i.model_id"
+        "                       AND c.chunk_ix=i.chunk_ix);"
+        "COMMIT;", NULL, NULL, &zErr);
+    if( rc != SQLITE_OK ){
+        fprintf(stderr, "viki cache pull: merge failed: %s\n", zErr ? zErr : "(no message)");
+        sqlite3_free(zErr);
+        sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+        sqlite3_exec(db, "DETACH DATABASE inc", NULL, NULL, NULL);
+        sqlite3_close(db);
+        return 1;
+    }
+
+    /* viki_source is merged separately and tolerantly: older caches may not
+    ** have every column this build knows about, so a failure here is not
+    ** fatal -- the chunks are what matter and they are already in. */
+    sqlite3_exec(db,
+        "INSERT OR IGNORE INTO viki_source(path,mtime,content_hash)"
+        "  SELECT path,mtime,content_hash FROM inc.viki_source;", NULL, NULL, NULL);
+
+    if( sqlite3_prepare_v2(db, "SELECT count(*) FROM viki_chunk", -1, &pStmt, NULL)==SQLITE_OK
+     && sqlite3_step(pStmt)==SQLITE_ROW ){
+        nAfter = sqlite3_column_int64(pStmt, 0);
+    }
+    sqlite3_finalize(pStmt);
+
+    sqlite3_exec(db, "DETACH DATABASE inc", NULL, NULL, NULL);
+    sqlite3_close(db);
+    unlink(zIncoming);
+
+    fprintf(stderr,
+        "viki cache pull: merged -- %lld chunk(s) local before, %lld after (+%lld new).\n"
+        "viki cache pull:   local work was NOT overwritten.\n",
+        (long long)nBefore, (long long)nAfter, (long long)(nAfter - nBefore));
+    return 0;
+}
+
 int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags){
     const char *fossil = viki_fossil_binary();
     char *argvSync[] = { (char*)fossil, "uv", "sync", NULL };
-    char *argvExport[] = { (char*)fossil, "uv", "export", VIKI_UV_NAME, (char*)zCacheDbPath, NULL };
+    char *argvExport[] = { (char*)fossil, "uv", "export", (char*)VIKI_UV_NAME, NULL, NULL };
+    char zTmp[2048];
     int rc;
 
     fprintf(stderr, "viki cache pull: %s uv sync\n", fossil);
@@ -544,12 +823,23 @@ int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags){
         return 1;
     }
 
-    fprintf(stderr, "viki cache pull: %s uv export %s %s\n", fossil, VIKI_UV_NAME, zCacheDbPath);
+    /* Export BESIDE the live cache, never onto it: `fossil uv export` is an
+    ** unconditional overwrite (see cache_merge_in). */
+    snprintf(zTmp, sizeof(zTmp), "%s.pull-incoming", zCacheDbPath);
+    unlink(zTmp);
+    argvExport[4] = zTmp;   /* index 4 is the DESTINATION; index 3 is the uv name */
+
+    fprintf(stderr, "viki cache pull: %s uv export %s %s\n", fossil, VIKI_UV_NAME, zTmp);
     rc = run(argvExport);
     if( rc != 0 ){
         fprintf(stderr,
             "viki cache pull: 'fossil uv export' failed (exit %d) -- "
             "if this is a fresh clone with nothing pushed yet, that's expected\n", rc);
+        unlink(zTmp);
+        return 1;
+    }
+    if( cache_merge_in(zCacheDbPath, zTmp) != 0 ){
+        unlink(zTmp);
         return 1;
     }
 

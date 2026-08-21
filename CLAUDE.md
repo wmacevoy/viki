@@ -141,6 +141,12 @@ sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliber
 sh build/grep-probe.sh <empty-dir>          # `viki grep`: ERE really ERE, -i, --k, --source
 sh build/muse-probe.sh <empty-dir>          # `viki muse`: undirected recall, no query
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
+sh build/cache-probe.sh <empty-dir>         # the DISTRIBUTION path: push/pull. The only
+                                            #   test that runs over real HTTP with a
+                                            #   capability-limited user -- which is how
+                                            #   `viki cache push` silently published
+                                            #   nothing for so long (needs the fossil `y`
+                                            #   capability; see QUEUE 35)
 sh build/fossilsee-probe.sh <empty-dir>     # in-process fossil SQL == subprocess.
                                             #   Needs a built libfossilsee; REFUSES the
                                             #   equivalence half without one rather than

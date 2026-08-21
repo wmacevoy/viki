@@ -43,11 +43,11 @@ Create in the web UI (Admin → Users), per repo:
 |---------|--------------|-------|
 | warren  | s (setup)    | you |
 | humans  | e.g. `chi o r w` + wiki/ticket caps as needed | per-person, revocable |
-| claude  | `c h i o r w` — commit, hyperlinks, check-out, read, write; **no** a/s | password = the token you hand to an agent session; rotate/revoke freely |
+| claude  | `c h i o r w y` — commit, hyperlinks, check-out, read, write; **no** a/s | password = the token you hand to an agent session; rotate/revoke freely |
 | anonymous / nobody | none (or read-only `h o r` if you want public browse) | default-deny |
 
 Agent onboarding is then literally:
-`fossil clone https://claude:TOKEN@fossil.<domain>/pm pm.fossil`
+`fossil clone --save-http-password https://claude:TOKEN@fossil.<domain>/pm pm.fossil`
 
 ## Distribution-version note
 

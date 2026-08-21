@@ -1,6 +1,7 @@
 #include "viki_db.h"
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* Declared, not included via a header, because sqlite-ndvss ships no
 ** public header -- sqlite3ext.h + SQLITE_EXTENSION_INIT1 is meant to be
@@ -97,6 +98,13 @@ int viki_db_open(const char *zPath, sqlite3 **out){
         fprintf(stderr, "viki: cannot open cache db '%s': %s\n", zPath, sqlite3_errmsg(db));
         return rc;
     }
+    /* Owner-only. SQLite creates the db 0644 minus umask, and this file is
+    ** plaintext, key-free, and a complete copy of the corpus (QUEUE 35).
+    ** chmod() after open rather than a umask dance so it applies to a db
+    ** created by any earlier version too. Best-effort: a cache on a
+    ** filesystem with no permission model is not a reason to refuse to
+    ** run, and the WAL/journal siblings inherit from the directory. */
+    (void)chmod(zPath, 0600);
 
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
 
