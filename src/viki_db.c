@@ -110,8 +110,27 @@ int viki_db_open(const char *zPath, sqlite3 **out){
         ** which matters even pre-alpha, because a stale cache that silently
         ** answers "nothing found" is worse than one that refuses to open.
         ** Any genuinely new column belongs in BOTH places, here and above. */
-        sqlite3_exec(db, "ALTER TABLE viki_source ADD COLUMN ts TEXT NOT NULL DEFAULT ''",
-                     NULL, NULL, NULL);
+        /* EVERY column added after a table first shipped belongs in this
+        ** list, not just the newest one. I fixed viki_source.ts here and
+        ** missed viki_note.closes on the same day, and the second one
+        ** surfaced as `viki notes: no such column: closes` on a cache that
+        ** predated the --closes work. Adding a column is a two-place edit:
+        ** the CREATE above (for fresh caches) and here (for existing ones). */
+        static const char *azMigrate[] = {
+            "ALTER TABLE viki_source ADD COLUMN ts TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE viki_note ADD COLUMN closes TEXT",
+            NULL
+        };
+        int iMig;
+        for( iMig = 0; azMigrate[iMig]; iMig++ ){
+            /* Duplicate-column is the expected outcome on an up-to-date cache,
+            ** so the error is discarded by design. Any OTHER failure is also
+            ** discarded, which is the deliberate trade: a migration that
+            ** cannot run must not stop viki from opening a cache it can still
+            ** mostly use, and the query naming the column will say so
+            ** precisely when it is actually needed. */
+            sqlite3_exec(db, azMigrate[iMig], NULL, NULL, NULL);
+        }
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS viki_source_ts ON viki_source(ts DESC)",
                      NULL, NULL, NULL);
     }

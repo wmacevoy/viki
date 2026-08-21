@@ -111,6 +111,23 @@ ck "V2 CONTROL: a known @type does NOT warn"    '! grep -q "outside the known se
 "$VIKI" index . >/dev/null 2>&1
 ck "V3 an unknown type is KEPT, never rejected" '"$VIKI" notes --type todo 2>/dev/null | grep -q "invent a type"'
 
+# ---- schema migration: a cache predating a column must MIGRATE, not fail ----
+# CREATE TABLE IF NOT EXISTS does nothing to an existing table, so a column
+# added later is absent from every older cache -- and the symptom is a query
+# error that reads like a corrupt database. This bit twice in one day
+# (viki_source.ts, then viki_note.closes), so it gets a standing assertion.
+mkdir -p "$DIR/mig" && cd "$DIR/mig"
+"$VIKI" capture "a note from before the column existed" --type task >/dev/null
+"$VIKI" index . >/dev/null 2>&1
+sqlite3 .viki/cache.db "ALTER TABLE viki_note RENAME TO n_old;
+  CREATE TABLE viki_note(note_id TEXT PRIMARY KEY, ts TEXT NOT NULL, type TEXT, place TEXT,
+    who TEXT, due TEXT, state TEXT, text TEXT NOT NULL, source_path TEXT);
+  INSERT INTO viki_note SELECT note_id,ts,type,place,who,due,state,text,source_path FROM n_old;
+  DROP TABLE n_old;" 2>/dev/null
+ck "M1 a cache with no 'closes' column MIGRATES" '"$VIKI" notes --k 9 2>/dev/null | grep -q "before the column"'
+ck "M1b ... and the column is really there afterwards" \
+   '[ "$(sqlite3 .viki/cache.db "select count(*) from pragma_table_info(\"viki_note\") where name=\"closes\"")" -eq 1 ]'
+
 # ---- HTTP: the capture loop over the API, and the UI page ----
 # Server lifecycle uses the lesson fragment-probe paid for: `exec` INSIDE the
 # subshell so $! names the server and not a wrapper, plus a precondition that
