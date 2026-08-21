@@ -54,6 +54,10 @@ static const char *SCHEMA_SQL =
     "  due         TEXT,"
     "  state       TEXT,"
     "  closes      TEXT,"   /* note_id this one supersedes -- see viki_note.h */
+    "  claimed     TEXT,"   /* ISO when --who was set */
+    "  lease       TEXT,"   /* ISO when the holder's declared availability lapses */
+    "  challenge   TEXT,"   /* "<who> <ISO>" -- an unanswered are-you-still-on-this */
+    "  stolen_from TEXT,"   /* prior holder; a steal is a supersession, not an overwrite */
     "  text        TEXT NOT NULL,"
     "  source_path TEXT"
     ");"
@@ -119,6 +123,10 @@ int viki_db_open(const char *zPath, sqlite3 **out){
         static const char *azMigrate[] = {
             "ALTER TABLE viki_source ADD COLUMN ts TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE viki_note ADD COLUMN closes TEXT",
+            "ALTER TABLE viki_note ADD COLUMN claimed TEXT",
+            "ALTER TABLE viki_note ADD COLUMN lease TEXT",
+            "ALTER TABLE viki_note ADD COLUMN challenge TEXT",
+            "ALTER TABLE viki_note ADD COLUMN stolen_from TEXT",
             NULL
         };
         int iMig;

@@ -11,11 +11,37 @@ There is no scheduler and no lock server. The work queue is `captures/`,
 projected into `viki_note`, and an agent coordinates by writing to it:
 
 ```sh
-viki index .                                   # project the queue
-viki notes --type task --state open            # what is unclaimed
-viki structure <id> --who <your-name>          # CLAIM it (then push immediately)
+git pull --rebase origin roleplay              # BEFORE you look AND before you push
+viki index .                                   # a pulled claim is invisible until you do this
+viki notes --type task --state open --unclaimed   # what is ACTUALLY free
+viki structure <id> --who <you> --lease 5m     # CLAIM, declaring your responsiveness
+git commit && git push origin roleplay         # a claim is not a claim until it is pushed
+viki structure <id> --heartbeat --lease 5m     # renew while you work
 viki structure <id> --state closed             # when done
 ```
+
+**`--unclaimed` is not optional.** `--state open` lists claimed work: claiming
+sets `~who` and never touches state. All three agents in the first run
+discovered this independently, and each avoided a collision only by reading a
+`~who` marker with their own eyes.
+
+**Declare a lease you can keep.** It is a promise about how fast you can
+answer, and it is the only thing that distinguishes "offline in the field"
+from "dead". Say `--lease 2d` if you are going to the north pasture.
+
+## If a claim looks abandoned
+
+Stealing is allowed, and it is explicit. You may not simply take it:
+
+```sh
+viki structure <id> --challenge <you>          # refused while their lease is live
+# ... wait out the grace period ...
+viki structure <id> --steal <you> --grace 1m --lease 5m
+```
+
+The record keeps `@stolen-from`, so the history says who held it, who asked,
+and that nobody answered. `viki structure --who` will REFUSE to overwrite
+another agent's claim; the challenge path is the only sanctioned way in.
 
 A claim is a commit. **Push the claim before doing the work** -- that is the
 whole protocol. If your push is rejected, someone claimed something while you

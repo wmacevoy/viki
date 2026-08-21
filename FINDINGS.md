@@ -15,6 +15,68 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+
+## Three agents on one branch: the work queue could not answer "what is free to take?"
+
+**Date:** 2026-08-21. Three agents (alice, bob, carol) worked the `roleplay`
+branch concurrently as separate clones sharing one remote, coordinating only
+through the repository, with viki's own capture loop as the queue.
+
+**What held.** Claim-by-push genuinely serialises: bob's first claim was
+rejected, he pulled, re-read the queue, confirmed his task was still free, and
+pushed -- the rejection arrived *before* he had done any work. Git's
+non-fast-forward check is the lock, and there is no lock server. All three
+wrote `captures/2026-08.md` concurrently with **zero conflicts**, because
+`viki capture` appends and `viki structure` rewrites one `@key` line in place,
+so edits to different notes are disjoint line ranges. Hand-editing would have
+reflowed the file and conflicted -- the format is conflict-resistant by
+accident rather than design, and two agents claiming the SAME note would still
+conflict, which is the correct outcome.
+
+**What did not.** All three independently found the same defect:
+
+> `viki notes --state open` lists CLAIMED work. Claiming sets `~who` and never
+> touches state, and `--who ""` cannot express "unclaimed" because an empty
+> filter means "no filter on that field". **The one question a work queue must
+> answer was the one it could not ask.**
+
+Each avoided collision only by reading a `~who` marker by eye. Carol put it
+best: an agent that trusted the documented command literally, took the top
+result and started work would have collided with alice.
+
+Three more gaps, each found by one agent and confirmed by the others' reports:
+
+- **A claim carried no timestamp**, so an abandoned claim and a live one were
+  indistinguishable, forever. No heartbeat, no expiry.
+- **`git pull` does not refresh the queue.** The projection is derived, so a
+  pulled claim stays invisible until `viki index` is re-run -- an agent can
+  hold, unread, someone else's pushed claim on the task it is about to take.
+- **`git pull --rebase` refuses while you have uncommitted work**, which is the
+  entire duration of doing a task. "Pull before you look" is mechanically
+  unavailable exactly when you most want to know what moved.
+
+**What got built from it** (this commit): `--unclaimed` and `--stale`
+filters; compare-and-set so `--who` REFUSES to overwrite another holder; and
+a lease protocol in which the claimer declares its own responsiveness
+(`--lease 1m` online, `--lease 2d` going to the north pasture) because viki
+exists for peers that go offline and a fixed global timeout cannot tell
+"offline" from "dead". A challenge is refused while a lease is live -- that
+refusal *is* the niceness, enforced rather than hoped for -- and a steal
+requires a lapsed lease plus an unanswered challenge aged past its grace, and
+records `@stolen-from`. **A steal is a supersession, not an overwrite**: the
+same spine as `--closes`, the `fprev` fix, and the 54-vs-90 contradiction.
+
+**The behaviour I would most want to keep.** Alice, writing the probe for
+`--bias old`, found a real bug in it -- `--from` pins the seed so the age
+counters are never filled, and the reporting line claimed a selection that
+never happened. She did *not* ship it as a red assertion. She filed it as a
+capture task with the one-line fix and left the probe green, on the grounds
+that "a probe that is red for a reason nobody can act on stops being read."
+Carol, needing a modified binary, built into a scratch output directory rather
+than running `build/build.sh`, which would have swapped `build/dist/viki` out
+from under the other two mid-run. Neither hazard is written down anywhere;
+both agents reasoned to them.
+
 ## A/B trial: viki vs grep on the same corpus -- a wash on cost, and the corpus mattered more than either tool
 
 **Date:** 2026-08-20. Two agents, same 82-document corpus (`me.viki`: every

@@ -978,10 +978,23 @@ int viki_cmd_muse(sqlite3 *db, const viki_muse_opts *opts, viki_embedder *emb){
                     info.nAgeUsable, info.nAgeTotal, info.nAgeDistinct);
         fprintf(stderr, "\n");
     }
-    if( opts->bias == VIKI_MUSE_BIAS_OLD && !(info.degraded & VIKI_MUSE_DEGRADED_NOBIAS) ){
+    /* --from PINS the seed, so the age-biased selection never runs and the
+    ** age counters are never filled. Reporting the bias anyway printed
+    ** "drew from the oldest third of the 0 of 0 chunk(s) ... (0 distinct
+    ** value(s))" on a corpus where every chunk carries an mtime -- a
+    ** confident sentence about a selection that did not happen, on the one
+    ** line a reader trusts to describe the run.
+    **
+    ** Found by the roleplay agent that was writing the probe FOR this flag,
+    ** who filed it rather than shipping a red assertion nobody could act on. */
+    if( opts->bias == VIKI_MUSE_BIAS_OLD && !opts->zSeedHash
+        && !(info.degraded & VIKI_MUSE_DEGRADED_NOBIAS) ){
         fprintf(stderr, "  --bias old: drew from the oldest third of the %d of %d chunk(s) "
                         "carrying a nonzero mtime (%d distinct value(s))\n",
                 info.nAgeUsable, info.nAgeTotal, info.nAgeDistinct);
+    }else if( opts->bias == VIKI_MUSE_BIAS_OLD && opts->zSeedHash ){
+        fprintf(stderr, "  --bias old: not applied -- --from pins the seed, "
+                        "so there was no selection to bias\n");
     }
     fprintf(stderr, "\n");
 

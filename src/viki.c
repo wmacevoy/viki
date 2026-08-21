@@ -75,7 +75,9 @@ static void usage(void){
         "                           state to open.\n"
         "  structure --pending [--k N]\n"
         "  structure <note-id> [--type T] [--place P] [--who W] [--due D] [--state S]\n"
-        "            [--closes ID]\n"
+        "            [--closes ID] [--lease D] [--heartbeat] [--challenge W] [--steal W]\n"
+        "            [--grace D]\n"
+        "            [--force]\n"
         "                           The ONLINE half of the capture loop. --pending lists\n"
         "                           captures with no @type yet -- the agent's work queue.\n"
         "                           Applying rewrites the block in its capture file (temp +\n"
@@ -83,6 +85,7 @@ static void usage(void){
         "                           --closes marks the TARGET note closed and records the\n"
         "                           link, which is how \"tire fixed\" retires \"tire is flat\".\n"
         "  notes [--place P] [--type T] [--state S] [--who W] [--since ISO]\n"
+        "        [--unclaimed] [--stale]\n"
         "        [--grep RE] [--closes ID] [--last] [--k N]\n"
         "                           Query captured notes by FIELD, not by similarity: filter,\n"
         "                           aggregate, and order by time. Answers what `ask` cannot --\n"
@@ -209,6 +212,8 @@ int main(int argc, char **argv){
         sqlite3 *db;
         const char *zId=NULL,*zType=NULL,*zPlace=NULL,*zWho=NULL,*zDue=NULL,*zState=NULL,*zCloses=NULL;
         int bPending = 0, nMax = 0, i;
+        viki_structure_opts sopts;
+        viki_structure_defaults(&sopts);
         for( i = 2; i < argc; i++ ){
             if( strcmp(argv[i], "--pending") == 0 ) bPending = 1;
             else if( strcmp(argv[i], "--k") == 0 && i+1 < argc ) nMax = atoi(argv[++i]);
@@ -218,6 +223,12 @@ int main(int argc, char **argv){
             else if( strcmp(argv[i], "--due") == 0 && i+1 < argc ) zDue = argv[++i];
             else if( strcmp(argv[i], "--state") == 0 && i+1 < argc ) zState = argv[++i];
             else if( strcmp(argv[i], "--closes") == 0 && i+1 < argc ) zCloses = argv[++i];
+            else if( strcmp(argv[i], "--lease") == 0 && i+1 < argc ) sopts.zLease = argv[++i];
+            else if( strcmp(argv[i], "--challenge") == 0 && i+1 < argc ) sopts.zChallenge = argv[++i];
+            else if( strcmp(argv[i], "--steal") == 0 && i+1 < argc ) sopts.zSteal = argv[++i];
+            else if( strcmp(argv[i], "--grace") == 0 && i+1 < argc ) sopts.zGrace = argv[++i];
+            else if( strcmp(argv[i], "--heartbeat") == 0 ) sopts.bHeartbeat = 1;
+            else if( strcmp(argv[i], "--force") == 0 ) sopts.bForce = 1;
             else if( argv[i][0] != '-' && !zId ) zId = argv[i];
             else { fprintf(stderr, "viki structure: unknown option '%s'\n", argv[i]); return 1; }
         }
@@ -229,8 +240,10 @@ int main(int argc, char **argv){
         }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        sopts.zType=zType; sopts.zPlace=zPlace; sopts.zWho=zWho;
+        sopts.zDue=zDue; sopts.zState=zState; sopts.zCloses=zCloses;
         rc = bPending ? viki_cmd_structure_pending(db, nMax)
-                      : viki_cmd_structure_apply(db, zId, zType, zPlace, zWho, zDue, zState, zCloses);
+                      : viki_cmd_structure_opts(db, zId, &sopts);
         sqlite3_close(db);
         return rc;
     }
@@ -239,7 +252,7 @@ int main(int argc, char **argv){
         sqlite3 *db;
         const char *zPlace=NULL,*zType=NULL,*zState=NULL,*zWho=NULL,*zSince=NULL,*zGrep=NULL;
         const char *zCloses=NULL;
-        int bLast = 0, nMax = 0, i;
+        int bLast = 0, nMax = 0, i, bUnclaimed = 0, bStale = 0;
         for( i = 2; i < argc; i++ ){
             if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
             else if( strcmp(argv[i], "--type") == 0 && i+1 < argc ) zType = argv[++i];
@@ -249,12 +262,25 @@ int main(int argc, char **argv){
             else if( strcmp(argv[i], "--grep") == 0 && i+1 < argc ) zGrep = argv[++i];
             else if( strcmp(argv[i], "--closes") == 0 && i+1 < argc ) zCloses = argv[++i];
             else if( strcmp(argv[i], "--last") == 0 ) bLast = 1;
+            else if( strcmp(argv[i], "--unclaimed") == 0 ) bUnclaimed = 1;
+            else if( strcmp(argv[i], "--stale") == 0 ) bStale = 1;
             else if( strcmp(argv[i], "--k") == 0 && i+1 < argc ) nMax = atoi(argv[++i]);
             else { fprintf(stderr, "viki notes: unknown option '%s'\n", argv[i]); return 1; }
         }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
-        rc = viki_cmd_notes(db, zPlace, zType, zState, zWho, zSince, zGrep, zCloses, bLast, nMax);
+        {
+            /* Filter-struct form: carol's --closes and these two arrived on the
+            ** same branch, and a positional signature is how a new predicate
+            ** gets parsed, ignored, and shipped as a silent no-op. */
+            viki_note_filter nf;
+            memset(&nf, 0, sizeof(nf));
+            nf.place=zPlace; nf.type=zType; nf.state=zState; nf.who=zWho;
+            nf.since=zSince; nf.grep=zGrep; nf.closes=zCloses;
+            nf.bLast=bLast; nf.nMax=nMax;
+            nf.bUnclaimed=bUnclaimed; nf.bStale=bStale;
+            rc = viki_cmd_notes_filter(db, &nf);
+        }
         sqlite3_close(db);
         return rc;
     }

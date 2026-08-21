@@ -140,6 +140,65 @@ ck "M1 a cache with no 'closes' column MIGRATES" '"$VIKI" notes --k 9 2>/dev/nul
 ck "M1b ... and the column is really there afterwards" \
    '[ "$(sqlite3 .viki/cache.db "select count(*) from pragma_table_info(\"viki_note\") where name=\"closes\"")" -eq 1 ]'
 
+# ---- claims, leases and stealing ----
+# Every assertion here answers something three roleplay agents found by
+# colliding (or nearly colliding) on a shared branch. L1/L1b are THE gap: all
+# three independently discovered that `--state open` lists CLAIMED work,
+# because claiming sets who and never touches state -- and that `--who ""`
+# cannot express "unclaimed", since an empty filter means "no filter".
+mkdir -p "$DIR/claim" && cd "$DIR/claim"
+"$VIKI" capture "repair the west gate" --type task --state open >/dev/null
+"$VIKI" capture "haul water north"     --type task --state open >/dev/null
+"$VIKI" index . >/dev/null 2>&1
+# notes orders NEWEST first, so name the task explicitly rather than taking
+# the head and assuming which one it is.
+CID=$("$VIKI" notes --type task --k 9 2>/dev/null | grep -B0 -A1 "^[0-9]" | grep -A1 "^[0-9]" | paste - - | grep "west gate" | cut -d" " -f1)
+[ -n "$CID" ] || CID=$("$VIKI" notes --type task --k 9 2>/dev/null | grep "^[0-9]" | tail -1 | cut -d" " -f1)
+"$VIKI" structure "$CID" --who alice --lease 1m >/dev/null 2>&1
+"$VIKI" index . >/dev/null 2>&1
+
+ck "L1 --state open still lists the CLAIMED one (the trap)" \
+   '[ "$("$VIKI" notes --type task --state open --k 9 2>/dev/null | grep -c "^[0-9]")" -eq 2 ]'
+ck "L1b --unclaimed excludes it -- the query agents actually need" \
+   '[ "$("$VIKI" notes --type task --state open --unclaimed --k 9 2>/dev/null | grep -c "^[0-9]")" -eq 1 ]'
+ck "L2 CAS: another agent cannot silently take a held task" \
+   '! "$VIKI" structure "$CID" --who bob >/dev/null 2>&1'
+ck "L2b ... and the refusal names the holder and the way in" \
+   '"$VIKI" structure "$CID" --who bob 2>&1 | grep -q "already held by alice"'
+ck "L2c CONTROL: --force still overrides, for a holder correcting itself" \
+   '"$VIKI" structure "$CID" --who alice --lease 1m --force >/dev/null 2>&1'
+ck "L3 a challenge is REFUSED while the lease is live (the niceness)" \
+   '! "$VIKI" structure "$CID" --challenge bob >/dev/null 2>&1'
+ck "L4 stealing is refused while the lease is live" \
+   '! "$VIKI" structure "$CID" --steal bob --grace 1s >/dev/null 2>&1'
+
+# now let the lease lapse
+"$VIKI" structure "$CID" --who alice --lease 1s --force >/dev/null 2>&1
+"$VIKI" index . >/dev/null 2>&1; sleep 2
+ck "L5 --stale finds the lapsed claim"  '"$VIKI" notes --stale --k 9 2>/dev/null | grep -q "west gate"'
+ck "L6 a challenge is allowed once the lease lapses" \
+   '"$VIKI" structure "$CID" --challenge bob >/dev/null 2>&1'
+"$VIKI" index . >/dev/null 2>&1
+ck "L7 stealing STILL refused before the grace elapses" \
+   '! "$VIKI" structure "$CID" --steal bob --grace 5m >/dev/null 2>&1'
+ck "L8 the holder can answer: --heartbeat renews and clears the challenge" \
+   '"$VIKI" structure "$CID" --heartbeat --lease 1m >/dev/null 2>&1; "$VIKI" index . >/dev/null 2>&1; ! "$VIKI" notes --k 9 2>/dev/null | grep -q CHALLENGED'
+
+# lapse again, challenge, wait out the grace, steal
+"$VIKI" structure "$CID" --who alice --lease 1s --force >/dev/null 2>&1
+"$VIKI" index . >/dev/null 2>&1; sleep 2
+"$VIKI" structure "$CID" --challenge bob >/dev/null 2>&1; "$VIKI" index . >/dev/null 2>&1; sleep 2
+ck "L9 an unanswered challenge past its grace permits the steal" \
+   '"$VIKI" structure "$CID" --steal bob --grace 1s --lease 1m >/dev/null 2>&1'
+"$VIKI" index . >/dev/null 2>&1
+ck "L9b the steal is RECORDED as a supersession, not an overwrite" \
+   '"$VIKI" notes --k 9 2>/dev/null | grep -q "stolen-from:alice"'
+ck "L9c ... and the new holder is in force"  '"$VIKI" notes --who bob --k 9 2>/dev/null | grep -q "west gate"'
+ck "L10 GUARD: stealing an UNCLAIMED task is refused, not silently allowed" \
+   'UID2=$("$VIKI" notes --unclaimed --k 9 2>/dev/null | grep "^[0-9]" | head -1 | cut -d" " -f1); ! "$VIKI" structure "$UID2" --steal carol >/dev/null 2>&1'
+ck "L11 GUARD: an unparseable --lease is refused, not treated as expired" \
+   '! "$VIKI" structure "$CID" --who dave --force --lease "soon" >/dev/null 2>&1'
+
 # ---- HTTP: the capture loop over the API, and the UI page ----
 # Server lifecycle uses the lesson fragment-probe paid for: `exec` INSIDE the
 # subshell so $! names the server and not a wrapper, plus a precondition that

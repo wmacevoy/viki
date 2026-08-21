@@ -20,6 +20,10 @@ typedef struct {
     char due[32];
     char state[16];
     char closes[40];
+    char claimed[32];
+    char lease[32];
+    char challenge[96];
+    char stolen[64];
     char text[1024];
 } viki_note;
 
@@ -124,6 +128,10 @@ static void set_field(viki_note *p, const char *key, const char *val){
     else if( strcmp(key, "due") == 0 ) strncpy(p->due, val, sizeof(p->due)-1);
     else if( strcmp(key, "state") == 0 ) normalize_key(val, p->state, sizeof(p->state));
     else if( strcmp(key, "closes") == 0 ) strncpy(p->closes, val, sizeof(p->closes)-1);
+    else if( strcmp(key, "claimed") == 0 ) strncpy(p->claimed, val, sizeof(p->claimed)-1);
+    else if( strcmp(key, "lease") == 0 ) strncpy(p->lease, val, sizeof(p->lease)-1);
+    else if( strcmp(key, "challenge") == 0 ) strncpy(p->challenge, val, sizeof(p->challenge)-1);
+    else if( strcmp(key, "stolen-from") == 0 ) strncpy(p->stolen, val, sizeof(p->stolen)-1);
 }
 
 int viki_cmd_capture(const char *zDir, const char *zText,
@@ -210,6 +218,10 @@ static void note_flush(sqlite3_stmt *ins, viki_note *p, const char *zPath, int *
     sqlite3_bind_text(ins, 8, p->text, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(ins, 9, zPath, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(ins, 10, p->closes, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 11, p->claimed, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 12, p->lease, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 13, p->challenge, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 14, p->stolen, -1, SQLITE_TRANSIENT);
     if( sqlite3_step(ins) == SQLITE_DONE ) (*pN)++;
     note_clear(p);
 }
@@ -261,8 +273,9 @@ int viki_note_reindex(sqlite3 *db, const char *zDir){
 
     if( sqlite3_prepare_v2(db,
             "INSERT OR REPLACE INTO viki_note"
-            "(note_id,ts,type,place,who,due,state,text,source_path,closes)"
-            " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", -1, &ins, NULL) != SQLITE_OK ){
+            "(note_id,ts,type,place,who,due,state,text,source_path,closes,"
+            " claimed,lease,challenge,stolen_from)"
+            " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)", -1, &ins, NULL) != SQLITE_OK ){
         closedir(d);
         return -1;
     }
@@ -291,7 +304,18 @@ static void print_note_row(void *pCtx, const viki_note_row *r){
     if( r->who   && r->who[0] )   printf("  ~%s", r->who);
     if( r->due   && r->due[0] )   printf("  due:%s", r->due);
     if( r->closes&& r->closes[0] )printf("  closes:%s", r->closes);
+    if( r->lease  && r->lease[0] )  printf("  lease:%s", r->lease);
+    if( r->challenge && r->challenge[0] ) printf("  CHALLENGED:%s", r->challenge);
+    if( r->stolen && r->stolen[0] ) printf("  stolen-from:%s", r->stolen);
     printf("\n    %s\n", r->text ? r->text : "");
+}
+
+int viki_cmd_notes_filter(sqlite3 *db, const viki_note_filter *f){
+    int n = viki_note_query(db, f, print_note_row, NULL);
+    if( n < 0 ) return 1;
+    if( n == 0 ) fprintf(stderr, "(no notes match)\n");
+    else fprintf(stderr, "viki notes: %d note(s)\n", n);
+    return 0;
 }
 
 int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
@@ -311,6 +335,62 @@ int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
 }
 
 
+
+/* ---- claims, leases, stealing ---- */
+
+/* "30s" / "5m" / "2h" / "3d" -> seconds. 0 means unparseable, which callers
+** treat as "no lease", never as "expires immediately": a malformed duration
+** must not silently make a claim stealable. */
+static long parse_duration(const char *z){
+    char *end;
+    long n;
+    if( !z || !z[0] ) return 0;
+    n = strtol(z, &end, 10);
+    if( end == z || n <= 0 ) return 0;
+    switch( *end ){
+        case 's': case '\0': return n;
+        case 'm': return n * 60;
+        case 'h': return n * 3600;
+        case 'd': return n * 86400;
+        default:  return 0;
+    }
+}
+
+static void iso_plus(long secs, char *out, size_t n){
+    struct timeval tv;
+    struct tm g;
+    time_t t;
+    gettimeofday(&tv, NULL);
+    t = tv.tv_sec + secs;
+#ifdef _WIN32
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    strftime(out, n, "%Y-%m-%dT%H:%M:%SZ", &g);
+}
+
+/* Reads the current holder and lease straight from the PROJECTION, which is
+** the same view the agent read when it decided to act. */
+static int claim_state(sqlite3 *db, const char *zId, char *who, size_t nWho,
+                       char *lease, size_t nLease, char *chal, size_t nChal){
+    sqlite3_stmt *st;
+    int found = 0;
+    who[0] = lease[0] = chal[0] = '\0';
+    if( sqlite3_prepare_v2(db, "SELECT coalesce(who,''), coalesce(lease,''),"
+                               " coalesce(challenge,'') FROM viki_note WHERE note_id=?1",
+                           -1, &st, NULL) != SQLITE_OK ) return 0;
+    sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) == SQLITE_ROW ){
+        snprintf(who,   nWho,   "%s", (const char*)sqlite3_column_text(st, 0));
+        snprintf(lease, nLease, "%s", (const char*)sqlite3_column_text(st, 1));
+        snprintf(chal,  nChal,  "%s", (const char*)sqlite3_column_text(st, 2));
+        found = 1;
+    }
+    sqlite3_finalize(st);
+    return found;
+}
+
 /* ---- structure: find the work, then apply it safely ---- */
 
 int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, void *pCtx){
@@ -329,13 +409,17 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
     ** separate predicate rather than type='' so that "untyped" stays one
     ** concept in one place. */
     sqlite3_snprintf(sizeof(sql), sql,
-        "SELECT note_id, ts, type, place, who, due, state, text, closes FROM viki_note"
+        "SELECT note_id, ts, type, place, who, due, state, text, closes,"
+        "       claimed, lease, challenge, stolen_from FROM viki_note"
         " WHERE (?1='' OR place=?1) AND (?2='' OR type=?2)"
         "   AND (?3='' OR state=?3) AND (?4='' OR who=?4)"
         "   AND (?5='' OR ts >= ?5) AND (?6='' OR regexp(?6, text))"
+        "   AND (%d=0 OR who IS NULL OR who='')"
+        "   AND (%d=0 OR (who IS NOT NULL AND who<>'' AND (lease='' OR lease < ?9)))"
         "   AND (?8='' OR closes=?8)"
         "   AND (%d=0 OR type IS NULL OR type='')"
         " ORDER BY ts %s LIMIT ?7",
+        f->bUnclaimed ? 1 : 0, f->bStale ? 1 : 0,
         f->bPending ? 1 : 0, f->bPending ? "ASC" : "DESC");
 
     if( viki_grep_register(db) != SQLITE_OK ) return -1;
@@ -350,6 +434,13 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
     sqlite3_bind_text(st, 5, f->since ? f->since : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 6, f->grep ? f->grep : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(st, 7, f->bLast ? 1 : (f->nMax > 0 ? f->nMax : 50));
+    {
+        /* "now", for the lease comparison. Text, so the comparison is the
+        ** same lexicographic one used everywhere else in this file. */
+        char zNow[32];
+        iso_now(zNow, sizeof(zNow));
+        sqlite3_bind_text(st, 9, zNow, -1, SQLITE_TRANSIENT);
+    }
     sqlite3_bind_text(st, 8, f->closes ? f->closes : "", -1, SQLITE_TRANSIENT);
 
     while( sqlite3_step(st) == SQLITE_ROW ){
@@ -363,6 +454,10 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
         r.state = (const char*)sqlite3_column_text(st, 6);
         r.text  = (const char*)sqlite3_column_text(st, 7);
         r.closes= (const char*)sqlite3_column_text(st, 8);
+        r.claimed  = (const char*)sqlite3_column_text(st, 9);
+        r.lease    = (const char*)sqlite3_column_text(st, 10);
+        r.challenge= (const char*)sqlite3_column_text(st, 11);
+        r.stolen   = (const char*)sqlite3_column_text(st, 12);
         n++;
         if( cb ) cb(pCtx, &r);
     }
@@ -397,15 +492,18 @@ static int emit_field(FILE *out, const char *key, const char *zNew, const char *
     return 1;
 }
 
-int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
-                             const char *zPlace, const char *zWho, const char *zDue,
-                             const char *zState, const char *zCloses){
+static int structure_write(sqlite3 *db, const char *zId, const char *zType,
+                           const char *zPlace, const char *zWho, const char *zDue,
+                           const char *zState, const char *zCloses,
+                           const char *zClaimed, const char *zLease,
+                           const char *zChallenge, const char *zStolen){
     sqlite3_stmt *st;
     char path[1200], tmp[1300];
     FILE *in, *out;
     char line[2048];
     int inBlock = 0, wroteFields = 0, found = 0;
     char oT[64]={0}, oP[64]={0}, oW[64]={0}, oD[32]={0}, oS[16]={0}, oC[40]={0};
+    char oCl[32]={0}, oL[32]={0}, oCh[96]={0}, oSt[64]={0};
 
     if( sqlite3_prepare_v2(db, "SELECT source_path FROM viki_note WHERE note_id=?1",
                            -1, &st, NULL) != SQLITE_OK ) return 1;
@@ -458,6 +556,10 @@ int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
                 else if( strcmp(key, "due")   == 0 ) snprintf(oD, sizeof(oD), "%s", val);
                 else if( strcmp(key, "state") == 0 ) snprintf(oS, sizeof(oS), "%s", val);
                 else if( strcmp(key, "closes")== 0 ) snprintf(oC, sizeof(oC), "%s", val);
+                else if( strcmp(key, "claimed")== 0 ) snprintf(oCl, sizeof(oCl), "%s", val);
+                else if( strcmp(key, "lease")== 0 ) snprintf(oL, sizeof(oL), "%s", val);
+                else if( strcmp(key, "challenge")== 0 ) snprintf(oCh, sizeof(oCh), "%s", val);
+                else if( strcmp(key, "stolen-from")== 0 ) snprintf(oSt, sizeof(oSt), "%s", val);
                 else fputs(line, out);
                 continue;
             }
@@ -471,6 +573,10 @@ int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
             emit_field(out, "due",   zDue,   oD);
             emit_field(out, "state", zState, oS);
             emit_field(out, "closes", zCloses, oC);
+            emit_field(out, "claimed", zClaimed, oCl);
+            emit_field(out, "lease", zLease, oL);
+            emit_field(out, "challenge", zChallenge, oCh);
+            emit_field(out, "stolen-from", zStolen, oSt);
             wroteFields = 1;
         }
         fputs(line, out);
@@ -493,7 +599,8 @@ int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
 
     /* --closes marks the TARGET closed, in its own file, by recursing. */
     if( zCloses && zCloses[0] ){
-        if( viki_cmd_structure_apply(db, zCloses, NULL, NULL, NULL, NULL, "closed", NULL) != 0 ){
+        if( structure_write(db, zCloses, NULL, NULL, NULL, NULL, "closed", NULL,
+                            NULL, NULL, NULL, NULL) != 0 ){
             fprintf(stderr, "viki structure: WARNING %s recorded as closing %s, "
                             "but %s could not be marked closed\n", zId, zCloses, zCloses);
         }
@@ -501,4 +608,160 @@ int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
     printf("%s updated in %s\n", zId, path);
     fprintf(stderr, "viki structure: re-run `viki index` to project the change\n");
     return 0;
+}
+
+
+void viki_structure_defaults(viki_structure_opts *o){
+    memset(o, 0, sizeof(*o));
+}
+
+int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
+                             const char *zPlace, const char *zWho, const char *zDue,
+                             const char *zState, const char *zCloses){
+    viki_structure_opts o;
+    viki_structure_defaults(&o);
+    o.zType = zType; o.zPlace = zPlace; o.zWho = zWho;
+    o.zDue = zDue; o.zState = zState; o.zCloses = zCloses;
+    return viki_cmd_structure_opts(db, zId, &o);
+}
+
+int viki_cmd_structure_opts(sqlite3 *db, const char *zId, const viki_structure_opts *opts){
+    char who[64], lease[32], chal[96];
+    char nowBuf[32], leaseBuf[32], chalBuf[128], stolenBuf[64];
+    const char *zClaimed = NULL, *zLease = NULL, *zChallenge = NULL, *zStolen = NULL;
+    const char *zWho = opts->zWho;
+    const char *zState = opts->zState;
+
+    if( !claim_state(db, zId, who, sizeof(who), lease, sizeof(lease), chal, sizeof(chal)) ){
+        fprintf(stderr, "viki structure: no note %s (run `viki index` first?)\n", zId);
+        return 1;
+    }
+    iso_now(nowBuf, sizeof(nowBuf));
+
+    /* HEARTBEAT: the holder renews its own lease. Refuses for anyone else --
+    ** a heartbeat from a non-holder would be a claim in disguise. */
+    if( opts->bHeartbeat ){
+        long secs;
+        if( !who[0] ){
+            fprintf(stderr, "viki structure: %s has no holder to heart-beat\n", zId);
+            return 1;
+        }
+        secs = parse_duration(opts->zLease ? opts->zLease : "");
+        if( secs <= 0 ){
+            fprintf(stderr, "viki structure: --heartbeat needs --lease <duration> "
+                            "(30s, 5m, 2h, 3d) -- a renewal must say for how long\n");
+            return 1;
+        }
+        iso_plus(secs, leaseBuf, sizeof(leaseBuf));
+        zClaimed = nowBuf; zLease = leaseBuf; zChallenge = "";   /* answering clears it */
+        return structure_write(db, zId, NULL, NULL, NULL, NULL, NULL, NULL,
+                               zClaimed, zLease, zChallenge, NULL);
+    }
+
+    /* CHALLENGE: refused while the lease is live. That refusal IS the
+    ** niceness -- a peer who promised to be reachable until T gets to be
+    ** left alone until T. */
+    if( opts->zChallenge && opts->zChallenge[0] ){
+        if( !who[0] ){
+            fprintf(stderr, "viki structure: %s is unclaimed -- take it, do not challenge it\n", zId);
+            return 1;
+        }
+        if( lease[0] && strcmp(nowBuf, lease) < 0 ){
+            fprintf(stderr, "viki structure: %s is held by %s under a live lease until %s "
+                            "-- challenge refused\n", zId, who, lease);
+            return 1;
+        }
+        snprintf(chalBuf, sizeof(chalBuf), "%s %s", opts->zChallenge, nowBuf);
+        fprintf(stderr, "viki structure: challenged %s's claim on %s -- "
+                        "they may answer with --heartbeat\n", who, zId);
+        return structure_write(db, zId, NULL, NULL, NULL, NULL, NULL, NULL,
+                               NULL, NULL, chalBuf, NULL);
+    }
+
+    /* STEAL: lapsed lease AND an unanswered challenge that has aged. */
+    if( opts->zSteal && opts->zSteal[0] ){
+        char cWho[64] = "", cWhen[32] = "";
+        long grace = parse_duration(opts->zGrace ? opts->zGrace : "60s");
+        if( grace <= 0 ) grace = 60;
+        char graceEdge[32];
+        if( !who[0] ){
+            fprintf(stderr, "viki structure: %s is unclaimed -- take it with --who\n", zId);
+            return 1;
+        }
+        if( lease[0] && strcmp(nowBuf, lease) < 0 ){
+            fprintf(stderr, "viki structure: %s holds %s under a live lease until %s "
+                            "-- refusing to steal\n", who, zId, lease);
+            return 1;
+        }
+        if( !chal[0] ){
+            fprintf(stderr, "viki structure: no challenge on record for %s. Ask first:\n"
+                            "  viki structure %s --challenge %s\n", zId, zId, opts->zSteal);
+            return 1;
+        }
+        sscanf(chal, "%63s %31s", cWho, cWhen);
+        /* Clock skew is unarbitrable across peers, so a challenge stamped in
+        ** the future means the two machines disagree. Refuse rather than
+        ** guess: failing toward leaving work alone is the safe direction. */
+        if( strcmp(cWhen, nowBuf) > 0 ){
+            fprintf(stderr, "viki structure: challenge on %s is stamped in the future (%s) "
+                            "-- clocks disagree, refusing to adjudicate\n", zId, cWhen);
+            return 1;
+        }
+        iso_plus(-grace, graceEdge, sizeof(graceEdge));
+        if( strcmp(cWhen, graceEdge) > 0 ){
+            fprintf(stderr, "viki structure: challenge on %s was only just made (%s); "
+                            "give %s the grace period to answer\n", zId, cWhen, who);
+            return 1;
+        }
+        snprintf(stolenBuf, sizeof(stolenBuf), "%s", who);
+        fprintf(stderr, "viki structure: %s takes %s from %s "
+                        "(lease lapsed %s, challenged %s, unanswered)\n",
+                opts->zSteal, zId, who, lease[0] ? lease : "(none declared)", cWhen);
+        zWho = opts->zSteal; zStolen = stolenBuf; zChallenge = "";
+        zClaimed = nowBuf;
+        if( opts->zLease && opts->zLease[0] ){
+            iso_plus(parse_duration(opts->zLease), leaseBuf, sizeof(leaseBuf));
+            zLease = leaseBuf;
+        }
+        return structure_write(db, zId, opts->zType, opts->zPlace, zWho, opts->zDue,
+                               zState, opts->zCloses, zClaimed, zLease, zChallenge, zStolen);
+    }
+
+    /* COMPARE-AND-SET on --who. Setting a holder over an existing, different
+    ** one is exactly the collision ROLEPLAY.md prohibits in prose and the
+    ** tool used to permit silently. --force is for a holder correcting
+    ** itself; displacing someone else goes through --challenge/--steal. */
+    if( zWho && zWho[0] && who[0] && strcmp(zWho, who) != 0 && !opts->bForce ){
+        fprintf(stderr,
+            "viki structure: %s is already held by %s%s%s%s.\n"
+            "  To take it over: viki structure %s --challenge %s   (then --steal %s once the\n"
+            "  lease has lapsed and the grace period has passed). --force overrides.\n",
+            zId, who,
+            lease[0] ? " until " : "", lease[0] ? lease : "",
+            (lease[0] && strcmp(nowBuf, lease) >= 0) ? " (LAPSED)" : "",
+            zId, zWho, zWho);
+        return 1;
+    }
+
+    if( zWho && zWho[0] ){
+        zClaimed = nowBuf;
+        if( opts->zLease && opts->zLease[0] ){
+            long secs = parse_duration(opts->zLease);
+            if( secs <= 0 ){
+                fprintf(stderr, "viki structure: unparseable --lease '%s' "
+                                "(want 30s, 5m, 2h, 3d)\n", opts->zLease);
+                return 1;
+            }
+            iso_plus(secs, leaseBuf, sizeof(leaseBuf));
+            zLease = leaseBuf;
+        }
+    }
+    /* Releasing (--who "") clears the whole claim, not just the holder --
+    ** a lease or a challenge outliving its claim would be a ghost. */
+    if( zWho && !zWho[0] ){
+        zClaimed = ""; zLease = ""; zChallenge = ""; zStolen = "";
+    }
+
+    return structure_write(db, zId, opts->zType, opts->zPlace, zWho, opts->zDue,
+                           zState, opts->zCloses, zClaimed, zLease, zChallenge, zStolen);
 }
