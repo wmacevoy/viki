@@ -168,11 +168,26 @@ echo "==> Fetching sqlite-vec $SQLITE_VEC_VERSION"
 VEC_ARCHIVE="sqlite-vec-$SQLITE_VEC_VERSION-amalgamation.tar.gz"
 fetch_verify "$SQLITE_VEC_URL" "$SQLITE_VEC_SHA256" "$VEC_ARCHIVE"
 VEC_DIR="$CACHE_DIR/sqlite-vec-$SQLITE_VEC_VERSION"
+VEC_TMP="sqlite-vec-$SQLITE_VEC_VERSION.tmp"
 if [ ! -d "$VEC_DIR" ]; then
-    rm -rf "$VEC_DIR.tmp"
-    mkdir -p "$VEC_DIR.tmp"
-    tar xzf "$CACHE_DIR/$VEC_ARCHIVE" -C "$VEC_DIR.tmp"
-    mv "$VEC_DIR.tmp" "$VEC_DIR"
+    # EVERY PATH HERE IS RELATIVE TO $CACHE_DIR, on purpose, and it is a
+    # Windows fix rather than a style preference. On MSYS this script runs
+    # after `cygpath -m`, so $CACHE_DIR is a drive-letter path like
+    # D:/a/viki/viki/vendor/download-cache -- and GNU tar parses a colon in
+    # its -f argument as `host:path`, tries to reach a machine called "D",
+    # and dies with "tar (child): Cannot connect to D: resolve failed".
+    # --force-local would fix it for GNU tar and BREAK macOS, whose bsdtar
+    # has no such option; cd-ing first needs no platform branch at all.
+    #
+    # The identical `tar xzf "$CACHE_DIR/..."` for ONNX Runtime above is
+    # safe only because Windows takes the .zip/unzip path and never reaches
+    # it. This was the first tar on the Windows leg, and it failed the
+    # first time CI ran it.
+    ( cd "$CACHE_DIR" \
+      && rm -rf "$VEC_TMP" \
+      && mkdir -p "$VEC_TMP" \
+      && tar xzf "$VEC_ARCHIVE" -C "$VEC_TMP" )
+    mv "$CACHE_DIR/$VEC_TMP" "$VEC_DIR"
 fi
 [ -f "$VEC_DIR/sqlite-vec.c" ] || { echo "ERR: $VEC_DIR/sqlite-vec.c missing after extraction"; exit 1; }
 
