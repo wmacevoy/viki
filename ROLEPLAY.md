@@ -68,5 +68,26 @@ never take a task whose `~who` is already set by someone else.
 - Does the capture loop survive concurrent writers to the same `captures/` file?
 - Is `viki notes --state open` enough to coordinate, or is something missing?
 
-Findings go in `FINDINGS.md` on this branch. This branch is deliberately NOT
-merged to main; it is a laboratory.
+## What the first run answered (2026-08-21, merged to main)
+
+The branch WAS a laboratory and this file used to say it would never be
+merged. It was, because the run produced changes to shipped code rather than
+just a report -- keeping it on a side branch would have stranded them. The
+full write-up is in `FINDINGS.md`; the short version:
+
+- **Claim-by-push serialises.** The rejection is the lock, and it arrives
+  before the work, not after. No lock server.
+- **Concurrent writers to one capture file did not conflict**, because
+  `capture` appends and `structure` rewrites one `@key` line in place. That is
+  accidental, not designed. Two agents claiming the SAME note still conflict,
+  which is right.
+- **`--state open` listed CLAIMED work** and all three agents found it
+  independently. That is why `--unclaimed` exists.
+- **A claim carried no expiry**, which is why leases, `--heartbeat`,
+  `--challenge` and `--steal` exist.
+- **`git pull` does not refresh the queue**, and `git pull --rebase` refuses
+  while you have uncommitted work -- i.e. for the whole duration of a task.
+  Both are still true. Re-index after every pull; commit before you pull.
+
+The queue in `captures/` is kept as the worked example the write-up cites.
+Re-running the experiment means seeding new tasks, not resetting this file.
