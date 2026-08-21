@@ -16,33 +16,59 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
-## Swapping the vector engine (sqlite-ndvss -> sqlite-vec) changed retrieval quality by exactly nothing
+## sqlite-vec was built, measured, and reverted: ndvss is the MORE portable engine, and wasm is why that matters
 
-Measured 2026-08-21, and the measurement is the point: an engine swap that
-moves the numbers is a bug, not an improvement, and the only way to know
-is a valid A/B.
+2026-08-21. Recorded so nobody repeats the exercise. The swap was
+completed and CI-green on all eight jobs -- it was reverted on cost/benefit,
+not because it failed.
 
-Both binaries against the **same** corpus (`corpus fp 94b0908c4729bc2c`),
-`VIKI_BIN` varied, corpus NOT rebuilt between runs:
+**What it bought, measured rather than argued:**
 
-| build | recall@1 | recall@5 | recall@k | MRR |
-|---|---|---|---|---|
-| sqlite-ndvss (git HEAD) | 0.209 | 0.488 | 0.674 | 0.338 |
-| sqlite-vec 0.1.9        | 0.209 | 0.488 | 0.674 | 0.338 |
+- Retrieval quality: **identical**. Both engines score `recall@1=0.209
+  recall@5=0.488 recall@k=0.674 MRR=0.338` on `corpus fp
+  94b0908c4729bc2c` (same corpus, `VIKI_BIN` varied).
+- Algorithmic improvement: **none**. sqlite-vec 0.1.9 has no ANN index --
+  its only `hnsw` mention is a credit comment on a borrowed NEON kernel.
+  Both engines are brute-force scans.
+- Speed: **never measured**, which is itself the finding. The swap was
+  argued for partly on engine quality without that number.
 
-**A TRAP THIS ALMOST WALKED INTO.** The first sqlite-vec run scored 0.209
-against a documented baseline of 0.256, which looks like a regression the
-swap caused. It is not: the eval corpus is built from *this repository's
-own docs*, and FINDINGS.md/CLAUDE.md/QUEUE.md/AGENTS.md had all been
-edited earlier the same day, so the corpus fingerprint had moved. The old
-engine scores 0.209 on that same corpus too. `test/retrieval-eval.sh`
-prints `corpus fp` and warns "COMPARING TWO BUILDS: keep the SAME --corpus
-directory and vary VIKI_BIN" for exactly this reason -- **quote the
-fingerprint with any number, and never compare across it.**
+**What it cost:**
 
-The way to get the old binary is `git stash` the swap, build, copy the
-result INTO `build/dist/` (its rpath is `@executable_path`, so it cannot
-find `libonnxruntime` from anywhere else), then `git stash pop`.
+- **A Windows patch, where ndvss needed none.** `sqlite-vec.c:64` reads
+  `#ifndef _WIN32 / typedef u_int8_t uint8_t;` -- "not Windows implies the
+  BSD spellings exist". viki builds under MSYS2's **plain MSYS**, not
+  MINGW64, deliberately (`fork()`, BSD sockets), and plain MSYS does not
+  define `_WIN32`. So sqlite-vec takes its Unix branch on a platform with
+  `uint8_t` and no `u_int8_t`. viki is neither case upstream considered.
+- **Loss of wasm SIMD.** ndvss ships `similarity_functions_wasmsimd.h`
+  alongside neon/sve2/rvv/avx/sse41 kernels. An eventual wasm build --
+  here and for other consumers -- gets that for free from ndvss and would
+  have to be redone against sqlite-vec. **This is the durable reason, not
+  the arm64 bug.**
+
+**And the arm64 bug that motivated the whole thing is a five-line fix.**
+The SVE2 definitions are compile-time gated
+(`#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)`) while the Linux
+dispatch was runtime-gated only (`getauxval(AT_HWCAP2)`), so a build
+without `-march=...+sve` compiles the kernels out and still references
+them. The **Windows AArch64 branch a dozen lines below already had the
+right guard.** Fixed upstream in wmacevoy/sqlite-ndvss#1, verified both
+directions in an `arm64v8/debian:bookworm` container (patched compiles;
+unpatched fails with exactly the six undeclared-symbol errors), and CI's
+linux-arm64 leg dropped `experimental: true` as a result.
+
+**The reasoning error worth keeping.** CLAUDE.md said "do not fork
+sqlite-ndvss", so a compile bug in it was treated as unfixable and the
+conclusion became "replace the engine". But `vendor/sqlite-ndvss` **is
+already Warren's fork** -- patching it is maintaining what this project
+owns. A constraint read too literally turned a five-line fix into a
+dependency swap. When a rule seems to force an expensive answer, check
+whether the rule actually applies.
+
+sqlite-vec remains the better long-term home IF quantization-to-shrink-sync
+becomes a priority (it is the one benefit that survived, and it is
+unbuilt). Revisit then, with wasm coverage as an explicit requirement.
 
 ---
 

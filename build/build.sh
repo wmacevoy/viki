@@ -7,7 +7,7 @@ set -euo pipefail
 # non-vendored is either pinned+SHA256-verified downloaded source/binary
 # (this script's fetch_verify(), same pattern for all three of the
 # SQLite amalgamation, ONNX Runtime, and the embedding model+vocab) or
-# vendored source compiled directly (src/sha256.c) plus pinned downloads.
+# vendored source compiled directly (src/sha256.c, vendor/sqlite-ndvss).
 # This used to reuse fossil-see's SQLCipher amalgamation + LibreSSL
 # libcrypto build as a side effect of building fossil-see first (a
 # multi-minute LibreSSL-from-source step) -- decoupled so `viki` can be
@@ -17,7 +17,7 @@ set -euo pipefail
 # push/pull) -- resolved dynamically via $VIKI_FOSSIL_BIN/$PATH
 # (viki_cache.c), stock `fossil` works fine for that.
 #
-# sqlite-vec is compiled with -DSQLITE_CORE for static linking
+# vendor/sqlite-ndvss is compiled with -DSQLITE_CORE for static linking
 # (same mechanism SQLite's own FTS5/RTREE use), registered via
 # sqlite3_auto_extension() in src/viki_db.c -- not loaded as a runtime .so.
 #
@@ -50,12 +50,15 @@ CACHE_DIR="${CACHE_DIR:-$REPO_ROOT/vendor/download-cache}"
 # shellcheck source=./versions.env
 . "$SCRIPT_DIR/versions.env"
 
+NDVSS_DIR="$REPO_ROOT/vendor/sqlite-ndvss"
 SRC_DIR="$REPO_ROOT/src"
 
 if [ -z "${JOBS:-}" ]; then
     if command -v nproc >/dev/null 2>&1; then JOBS="$(nproc)"
     else JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 2)"; fi
 fi
+
+[ -f "$NDVSS_DIR/sqlite-ndvss.c" ] || { echo "ERR: $NDVSS_DIR/sqlite-ndvss.c missing (submodule not initialized?)"; exit 1; }
 
 mkdir -p "$OUTPUT_DIR" "$SCRIPT_DIR/obj" "$CACHE_DIR"
 OBJ_DIR="$SCRIPT_DIR/obj"
@@ -161,36 +164,6 @@ if [ ! -d "$SQLITE_DIR" ]; then
 fi
 [ -f "$SQLITE_DIR/sqlite3.c" ] || { echo "ERR: $SQLITE_DIR/sqlite3.c missing after extraction"; exit 1; }
 
-# -- sqlite-vec (vector index engine) --
-# Same pinned/verified/cached treatment as everything else here. Statically
-# linked via -DSQLITE_CORE below; never loaded as a runtime .so.
-echo "==> Fetching sqlite-vec $SQLITE_VEC_VERSION"
-VEC_ARCHIVE="sqlite-vec-$SQLITE_VEC_VERSION-amalgamation.tar.gz"
-fetch_verify "$SQLITE_VEC_URL" "$SQLITE_VEC_SHA256" "$VEC_ARCHIVE"
-VEC_DIR="$CACHE_DIR/sqlite-vec-$SQLITE_VEC_VERSION"
-VEC_TMP="sqlite-vec-$SQLITE_VEC_VERSION.tmp"
-if [ ! -d "$VEC_DIR" ]; then
-    # EVERY PATH HERE IS RELATIVE TO $CACHE_DIR, on purpose, and it is a
-    # Windows fix rather than a style preference. On MSYS this script runs
-    # after `cygpath -m`, so $CACHE_DIR is a drive-letter path like
-    # D:/a/viki/viki/vendor/download-cache -- and GNU tar parses a colon in
-    # its -f argument as `host:path`, tries to reach a machine called "D",
-    # and dies with "tar (child): Cannot connect to D: resolve failed".
-    # --force-local would fix it for GNU tar and BREAK macOS, whose bsdtar
-    # has no such option; cd-ing first needs no platform branch at all.
-    #
-    # The identical `tar xzf "$CACHE_DIR/..."` for ONNX Runtime above is
-    # safe only because Windows takes the .zip/unzip path and never reaches
-    # it. This was the first tar on the Windows leg, and it failed the
-    # first time CI ran it.
-    ( cd "$CACHE_DIR" \
-      && rm -rf "$VEC_TMP" \
-      && mkdir -p "$VEC_TMP" \
-      && tar xzf "$VEC_ARCHIVE" -C "$VEC_TMP" )
-    mv "$CACHE_DIR/$VEC_TMP" "$VEC_DIR"
-fi
-[ -f "$VEC_DIR/sqlite-vec.c" ] || { echo "ERR: $VEC_DIR/sqlite-vec.c missing after extraction"; exit 1; }
-
 # -- Step 2: pinned embedding model + vocab --
 echo "==> Fetching embedding model ($VIKI_MODEL_ID)"
 fetch_verify "$VIKI_MODEL_URL" "$VIKI_MODEL_SHA256" "model-$VIKI_MODEL_ID.onnx"
@@ -251,45 +224,12 @@ cc -O2 -Wall -Wno-unused-parameter \
    -c "$SQLITE_DIR/sqlite3.c" \
    -o "$OBJ_DIR/sqlite3.o"
 
-echo "==> Compiling sqlite-vec (static link via -DSQLITE_CORE)"
-# sqlite-vec 0.1.9 does this, at sqlite-vec.c:64:
-#
-#   #ifndef _WIN32
-#   ...
-#   typedef u_int8_t uint8_t;      /* and u_int16_t, u_int64_t */
-#
-# i.e. "if I am not on Windows, the BSD spellings exist". viki builds under
-# MSYS2's PLAIN MSYS environment, not MINGW64 -- a deliberate choice, since
-# it needs fork() and BSD sockets (see CLAUDE.md) -- and plain MSYS does
-# NOT define _WIN32. So sqlite-vec takes its Unix branch on a platform
-# whose headers have uint8_t but no u_int8_t, and the build dies with
-# "unknown type name 'u_int8_t'" followed by a cascade of conflicting-type
-# and incompatible-pointer errors from every use of them.
-#
-# Supplying the missing spellings makes sqlite-vec's assumption TRUE.
-# The alternative -- defining one of its other guards (__COSMOPOLITAN__,
-# __wasi__, __EMSCRIPTEN__; each appears exactly once, in this same block,
-# so any of them would work) -- would be claiming to be a platform we are
-# not, which is the kind of thing that is fine until it silently is not.
-# _WIN32 itself is NOT an option: sqlite3.h and the system headers read it
-# too, so setting it would change far more than this typedef.
-#
-# The resulting `typedef uint8_t uint8_t;` is a redundant self-typedef,
-# which C11 permits (verified under both -std=gnu99 and -std=c11).
-VEC_DEFS=""
-if [ "$ORT_OS" = "Windows" ]; then
-    VEC_DEFS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
-fi
-# -ffast-math is deliberately NOT used here, unlike the sqlite-ndvss build
-# this replaced. vec0's distances feed viki's confidence floor and muse's
-# band edges, both of which compare cosines against fixed thresholds, so
-# reassociation that perturbs the low bits is a worse trade than the few
-# percent it buys.
-cc -O3 -Wall -Wno-unused-parameter -Wno-unused-function \
-   -DSQLITE_CORE $VEC_DEFS \
+echo "==> Compiling sqlite-ndvss (static link via -DSQLITE_CORE)"
+cc -O3 -ffast-math -Wall -Wno-unused-parameter -Wno-unused-function \
+   -DSQLITE_CORE \
    -I"$SQLITE_DIR" \
-   -c "$VEC_DIR/sqlite-vec.c" \
-   -o "$OBJ_DIR/sqlite-vec.o"
+   -c "$NDVSS_DIR/sqlite-ndvss.c" \
+   -o "$OBJ_DIR/sqlite-ndvss.o"
 
 echo "==> Compiling viki sources"
 VIKI_EXTRA_DEFS=""
@@ -338,7 +278,7 @@ cc -O2 -o "$OUTPUT_DIR/$VIKI_BIN_NAME" \
     "$OBJ_DIR/viki_index.o" "$OBJ_DIR/viki_ask.o" "$OBJ_DIR/viki_muse.o" "$OBJ_DIR/viki_grep.o" "$OBJ_DIR/viki_note.o" "$OBJ_DIR/viki_link.o" \
     "$OBJ_DIR/viki_cache.o" "$OBJ_DIR/viki_fossilsee.o" "$OBJ_DIR/viki_serve.o" \
     "$OBJ_DIR/tokenizer.o" "$OBJ_DIR/embed.o" \
-    "$OBJ_DIR/sqlite3.o" "$OBJ_DIR/sqlite-vec.o" \
+    "$OBJ_DIR/sqlite3.o" "$OBJ_DIR/sqlite-ndvss.o" \
     $ORT_LINK_ARG $LINK_RPATH_FLAGS \
     $EXTRA_LIBS
 
@@ -346,7 +286,7 @@ ls -lh "$OUTPUT_DIR/$VIKI_BIN_NAME"
 
 echo "==> Smoke test"
 "$OUTPUT_DIR/$VIKI_BIN_NAME" version
-"$OUTPUT_DIR/$VIKI_BIN_NAME" vec-selftest
+"$OUTPUT_DIR/$VIKI_BIN_NAME" ndvss-selftest
 "$OUTPUT_DIR/$VIKI_BIN_NAME" embed-selftest "$OUTPUT_DIR/model"
 
 echo "==> Build complete"

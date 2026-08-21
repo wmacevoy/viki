@@ -27,13 +27,14 @@ jobs:
             os: ubuntu-24.04-arm
             container: debian:bookworm
             kind: unix
-            # NO LONGER experimental. The flag was here for sqlite-ndvss's
-            # aarch64 SVE2 dispatch bug (FINDINGS.md) -- a bug in that
-            # project, which KICKOFF.md forbids forking, so the only way
-            # out was a different engine. sqlite-vec replaced it, and
-            # removing this line is how that claim gets TESTED rather than
-            # asserted: if linux-arm64 still breaks, this job goes red and
-            # says so instead of being quietly tolerated.
+            # The experimental flag that used to be here was for
+            # sqlite-ndvss's aarch64-Linux SVE2 dispatch bug. That bug is
+            # FIXED upstream (wmacevoy/sqlite-ndvss#1: the Linux dispatch
+            # now carries the same `#if defined(__ARM_FEATURE_SVE)` guard
+            # its Windows AArch64 sibling always had) and vendor/
+            # sqlite-ndvss is pinned past it. Removing the flag is how that
+            # gets TESTED rather than asserted -- if this leg still breaks,
+            # it goes red and says so.
             deps: |
               apt-get update
               apt-get install -y --no-install-recommends \
@@ -76,14 +77,22 @@ jobs:
         with:
           submodules: false
 
-      # NO SUBMODULE FETCH, and that is now literally true rather than
-      # nearly true. The step that used to sit here initialised
-      # vendor/sqlite-ndvss (rewriting its SSH .gitmodules URL to HTTPS,
-      # since CI has no key). sqlite-vec replaced it and arrives as a
-      # pinned, SHA256-verified download like every other build input, so
-      # `build/build.sh` now needs no submodule at all -- it does not even
-      # invoke git. That is the standalone-build property FINDINGS.md
-      # records, in its strongest form yet.
+      # vendor/sqlite-ndvss is the only submodule the build needs (see
+      # FINDINGS.md: viki no longer depends on vendor/fossil-see at build
+      # time). Its .gitmodules URL is git@github.com:... (SSH) -- CI has
+      # no SSH key for that, so rewrite git@github.com: to https://
+      # first. vendor/fossil-see is deliberately left uninitialized here:
+      # nothing in this workflow needs it.
+      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
+        run: |
+          # Container jobs bind-mount the checkout from the host; the
+          # resulting UID mismatch trips git's dubious-ownership check for
+          # every step except actions/checkout's own internal git calls
+          # (which add this for themselves, but only for the duration of
+          # that action, not for later steps like this one).
+          git config --global --add safe.directory '*'
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init vendor/sqlite-ndvss
 
       - name: Install dependencies
         if: ${{ matrix.kind == 'unix' }}
@@ -250,19 +259,17 @@ jobs:
           # ---- platforms deliberately NOT covered (announce only) ----
           - label: linux-arm64
             skip_reason: >-
-              NOT run here, and the reason that used to be given is now
-              STALE rather than merely old: viki did not build on
-              aarch64-Linux because vendor/sqlite-ndvss's SVE2 dispatch
-              referenced functions its own compile-time gate left out
-              ("error: 'cosine_similarity_f_sve2' undeclared" and five
-              siblings, FINDINGS.md). sqlite-vec replaced that engine on
-              2026-08-21 and the `build` job's linux-arm64 leg dropped its
-              experimental flag in the same commit. If that leg is green,
-              the blocker is gone and this announce-only leg should be
-              deleted and linux-arm64 added to the real matrix above --
-              which nobody has done yet, so m1 remains unproven on arm64
-              and this leg says so rather than letting a stale reason imply
-              a blocker that no longer exists.
+              m1.sh has never been RUN here, which is the only claim this
+              leg makes. The blocker it used to cite -- sqlite-ndvss's
+              aarch64-Linux SVE2 dispatch referencing functions its own
+              compile-time gate left out, so no binary existed to test --
+              was fixed upstream on 2026-08-21
+              (wmacevoy/sqlite-ndvss#1) and the `build` job's linux-arm64
+              leg dropped its experimental flag in the same commit. If that
+              leg is green, nothing structural stands in the way any more:
+              delete this leg and add linux-arm64 to the real matrix above.
+              Until someone does, m1 is unproven on arm64 and this says so
+              rather than implying an obstacle that no longer exists.
           - label: windows-x86_64
             skip_reason: >-
               Not attempted, and NOT claimed to be impossible -- nobody has
@@ -335,16 +342,15 @@ jobs:
       # Same handling as the `build` job: container jobs bind-mount the
       # checkout from the host, so git's dubious-ownership check trips for
       # every step after actions/checkout's own internal git calls; and
-      # This step used to ALSO fetch vendor/sqlite-ndvss, whose .gitmodules
-      # URL was SSH and needed rewriting to HTTPS. That submodule is gone
-      # (sqlite-vec is a pinned download), so only the ownership fix is
-      # left -- and it must stay: later steps here run git themselves
-      # (`git rev-parse HEAD:vendor/fossil-see` for the cache key), and
-      # vendor/fossil-see is still fetched below.
-      - name: Allow git to operate on the mounted checkout
+      # .gitmodules gives vendor/sqlite-ndvss an SSH URL that CI has no key
+      # for. (vendor/fossil-see and its own two nested submodules are all
+      # HTTPS already -- the rewrite is a no-op for them.)
+      - name: Fetch vendor/sqlite-ndvss submodule (HTTPS, no SSH key in CI)
         if: ${{ !matrix.skip_reason }}
         run: |
           git config --global --add safe.directory '*'
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init vendor/sqlite-ndvss
 
       # `|| 'true'` because the announce-only legs carry no deps: an empty
       # `run:` body is not worth finding out about the hard way, even

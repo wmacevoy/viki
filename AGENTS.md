@@ -8,7 +8,7 @@ code change that makes it stale (KICKOFF.md's process rule).
 ## What exists right now
 
 A real, working `viki` CLI with **both** retrieval rungs implemented:
-FTS5 BM25 (rung 0) and ONNX sentence embeddings + `sqlite-vec` cosine
+FTS5 BM25 (rung 0) and ONNX sentence embeddings + `sqlite-ndvss` cosine
 search (rung 2), fused by reciprocal rank fusion when a model is present,
 degrading honestly to BM25-only when it isn't (VIKI_DESIGN.md's required
 standalone path). `viki index` covers **nine** Fossil-native content
@@ -102,8 +102,8 @@ FINDINGS.md.
 
 ```
 src/            viki CLI source (C)
-  viki.c          subcommand dispatch (index / ask / muse / grep / capture / structure / notes / serve / cache push|pull / version / vec-selftest / embed-selftest)
-  viki_db.c/.h    local cache db: schema, sqlite-vec static registration, and viki_db_vec_sync() -- the DERIVED vec0 index in its own file (.viki/vec.db, attached as `vecdb`), rebuilt from viki_chunk when row counts disagree. Separate file because cache.db is the D-12 artifact m1.sh C10 byte-compares and C18 asserts a fresh clone never writes to
+  viki.c          subcommand dispatch (index / ask / muse / grep / capture / structure / notes / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
+  viki_db.c/.h    local cache db: schema, ndvss static registration
   viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: on an ENCRYPTED repo each `fossil` invocation pays a SQLCipher KDF, so the per-artifact idiom is minutes where this is seconds. Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
   viki_muse.c/.h  `viki muse`: undirected recall, NO query. Picks a seed chunk and returns chunks from the calibrated MIDDLE of that seed's cosine band -- close enough to be about something, far enough that `ask` would never surface them. Vector-only (an unembedded cache is refused, not faked with BM25), but needs no model FILE: a cache pulled from a peer muses with no `model.onnx` on disk. Rejected scorers (|cos|, sum|xi*yi|, random subspace, anti-search) are recorded in `viki_muse.h` WITH the numbers that killed them, against a uniform-random control
   build/since-probe.sh   `viki index --since` coverage (14 checks). S5/S5b are the ones that matter: an incremental run must retire NOTHING even with a source deleted, and S5c is the control that a FULL pass still does, so "never retires" is a property of the incremental path rather than a broken sweep
@@ -111,7 +111,7 @@ src/            viki CLI source (C)
   viki_link.c/.h  maps an indexed source back to its page in Fossil's web UI: `wiki:` -> /wiki?name=, `ticket:` -> /tktview/, `forum:` -> /forumpost/, `ckin:`/`note:`/`tchg:` -> /info/ (fossil's universal artifact page, safer than inventing a per-class viewer), `attach:` -> /artifact/, `uv:` -> /uv/, a file -> /file?name=&ci=tip. Shapes taken from the fossil binary's own href templates, not guessed. Base URL from $VIKI_FOSSIL_URL; with none set there are no links at all, and an unknown namespace never gets a guessed one
   viki_note.c/.h  `viki capture` / `viki notes`: the CAPTURE LOOP, and the answer to two questions similarity ranking cannot reach. "what needs to be done in monument rocks" needs a filtered LIST, not five ranked chunks -- `ask` returned an observation and a schedule among them. "who baited rimi site last" needs a temporal superlative -- `ask` APPEARED to answer it until an older note with richer wording took rank 1 from the actually-most-recent. Three stages, and `viki structure` is the seam between the first two: CAPTURE offline (`viki capture` appends a block to captures/YYYY-MM.md; no model, no network, no fossil, so it works on a phone at a gate), STRUCTURE online (`viki structure --pending` is the AGENT'S WORK QUEUE -- captures with no @type yet; `viki structure <id> --type ... --place ...` writes the judgement back. viki owns the write rather than telling an agent to hand-edit, because a malformed block silently becomes a different note, and capture files are TRUTH while the projection is disposable. Temp-file + rename, so an interrupted pass cannot truncate a capture. `--closes ID` is SUPERSESSION MADE EXPLICIT: it retires the target and records WHICH note retired it, so "tire for utv fixed" closing "utv tire is flat" is answerable later as history, not just as a state flag -- the same relation as a forum edit superseding its original, met here at a fourth layer. `viki notes --closes ID` is the READ side of that link and the reason "answerable" is literal: without it the link was write-only and the only way to ask what retired a note was to grep captures/*.md, i.e. to go around the projection this table exists to be. viki has no LLM, every caller is one -- same division as the HyDE convention), PROJECT locally (`viki index` REBUILDS viki_note from the files wholesale, so it can never carry a stale row; the files are truth, the table is disposable, D-10). Timestamps are ISO-8601 UTC with MICROSECONDS -- not decoration: at second resolution a burst of captures shared ids and the projection silently kept one of each group, losing 4 of 7 notes. build/capture-probe.sh R1 pins that with a 25-note burst
   viki_grep.c/.h  `viki grep "<regex>"`: POSIX regex over every indexed chunk, exact and UNRANKED -- the complement to `ask`, for when you know the literal string rather than the idea. Its reason to exist is the artifacts `rg` CANNOT reach: five of the nine indexed classes (check-in comments, tech notes, ticket changes, attachments, unversioned files) plus wiki/tickets/forum are not files on disk. Engine is libc POSIX regcomp/regexec -- no vendored library, no download, no submodule -- so the syntax is ERE, NOT PCRE (`[[:digit:]]`, not `\d`; no lookaround). Registers `regexp()`/`regexpi()` on the cache db, which also makes SQLite's infix `x REGEXP y` work for agents driving .viki/cache.db directly. Compiled patterns are cached via sqlite3_set_auxdata so a scan compiles once, not once per row. Its excerpt carries the same fragment markers `viki ask`'s does, from the same `VIKI_MARK_*` macros (it includes `viki_ask.h` rather than retyping them) -- same defect, same fix: a truncated prefix of a possibly-middle chunk under the same citable `<hash>#<ix>` header.
-  viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + vec0 KNN (cosine distance, converted to similarity once here), reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
+  viki_ask.c/.h   `viki ask "<query>"`: FTS5 BM25 + ndvss cosine, reciprocal rank fusion (OR-of-terms FTS query, see FINDINGS.md). Retrieval logic lives in public `viki_ask_query()` (viki_ask.h) so `viki serve` can share it; `viki_cmd_ask` is a thin CLI-printing wrapper around it.
                   Each leg scores a given `(content_hash, chunk_ix)` at most once, at its best rank (`leg_hit()`), so a cache holding several `model_id` epochs of
                   the same content -- the normal steady state of D-11 sharing -- ranks identically to a single-epoch one instead of double-counting the BM25 leg (FINDINGS.md).
                   CLI hit lines are `[<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>` then the snippet indented 4 spaces; content_hash is the citable
@@ -232,12 +232,8 @@ build/
 vendor/
   fossil-see/     git submodule -- NOT a build dependency of viki itself (see FINDINGS.md); kept only so a
                   fossil-see binary is available at runtime if $VIKI_FOSSIL_BIN/PATH don't already have one
-  (sqlite-ndvss/  REMOVED 2026-08-21. Was a git submodule -- Warren's fork of
-                  JarkkoPar/sqlite-ndvss, statically linked. Replaced by sqlite-vec, which
-                  arrives as a pinned SHA256-verified download in build/versions.env rather
-                  than a submodule. Its aarch64 SVE2 dispatch bug is what kept CI's
-                  linux-arm64 leg experimental; KICKOFF forbids forking it, so the exit was a
-                  different engine. See FINDINGS.md -- quality was unchanged by the swap.)
+  sqlite-ndvss/   git submodule -- Warren's fork of JarkkoPar/sqlite-ndvss, statically linked (has a real
+                  aarch64-Linux-only build bug -- see FINDINGS.md, CI's linux-arm64 job is marked experimental)
   download-cache/ gitignored -- cached onnxruntime tarball + model/vocab downloads (build/build.sh's fetch_verify)
 test/
   m1.sh           THE Milestone 1 definition-of-done test (KICKOFF.md): 90 assertions over an encrypted
@@ -335,8 +331,7 @@ build/dist/viki cache push [db-path] [--no-model]
                                     #   leg is ON by default (viki_cache.h says why)
 build/dist/viki cache pull [db-path] [--no-model]
                                     # fetch both back; the model lands in $VIKI_MODEL_DIR
-build/dist/viki vec-selftest         # proves sqlite-vec is really statically linked, and that
-                                    #   cosine DISTANCE is not silently inverted into similarity
+build/dist/viki ndvss-selftest       # proves sqlite-ndvss is really statically linked
 build/dist/viki embed-selftest [model-dir]  # proves the ONNX pipeline produces real embeddings (semantic property check)
 build/dist/viki serve [--host H] [--port N]  # http://127.0.0.1:8080 by default; / = search page, /api/* = JSON
 ```
@@ -701,7 +696,7 @@ this file -- against a binary missing three fixes that were sitting in
   `snippet`) and `viki grep` are covered; **`viki muse` is not**, see
   "Not yet built".
 - `build/build.sh` produces `build/dist/viki` cleanly (only benign
-  unused-variable warnings, plus one
+  unused-variable warnings from sqlite-ndvss's own NEON kernels, plus one
   pre-existing `-Wformat-invalid-specifier` on `src/viki.c:67`'s usage
   string, which is a literal `%` inside help text, not a real format
   argument) -- including downloading, SHA256-verifying, and linking against
@@ -709,9 +704,7 @@ this file -- against a binary missing three fixes that were sitting in
 - `viki index` + `viki ask` on a scratch directory with planted content:
   correct chunk found, correctly ranked, snippet highlights the matched
   terms (BM25 path).
-- `viki vec-selftest`: confirms real static linking (`vec-selftest: PASS`; it asserts an
-  identical vector comes back at distance ~0 AND an orthogonal one at ~1, so an inverted
-  metric fails rather than merely returning a row). Previously `ndvss-selftest` (`ndvss instruction
+- `viki ndvss-selftest`: confirms real static linking (`ndvss instruction
   set: neon` on this Apple Silicon machine -- runtime CPU dispatch, not a
   stub).
 - `viki embed-selftest`: confirms the ONNX pipeline produces semantically
@@ -778,8 +771,7 @@ this file -- against a binary missing three fixes that were sitting in
      round's fixes -- scores `PASS=17 FAIL=9`, re-measured 2026-08-13
      from a freshly compiled binary (`git show HEAD:src/*` into a scratch
      dir, compiled against read-only copies of `build/obj/sqlite3.o` and
-     the vector-engine object, never touching `build/obj`; recipe in
-     FINDINGS.md -- it named `sqlite-ndvss.o`, now `sqlite-vec.o`).
+     `sqlite-ndvss.o`, never touching `build/obj`; recipe in FINDINGS.md).
      Failures: `B4 B5 B6 B7 C1 C2 C3 C4 C6`.
   The probe still has 26 assertions either way (`18+8 = 17+9 = 26`) and
   the two failure sets differ by exactly `C6` -- the *attribution*
@@ -1071,7 +1063,7 @@ the hardest thing for a later agent to recover is why something was NOT done.
 - ~~Cross-arch model verification~~ **Done, as of the CI round of
   2026-08-13.** The pinned model is the `arm64` quantization recipe,
   picked originally because it could only be verified on this arm64 dev
-  machine. `build/build.sh` ends by running `vec-selftest` and
+  machine. `build/build.sh` ends by running `ndvss-selftest` and
   `embed-selftest` (lines 283-284), so every CI `build` leg runs the same
   semantic-property check -- and it was **observed green on linux-x86_64
   and windows-x86_64 in the GitHub Actions runs of 2026-08-13** (the

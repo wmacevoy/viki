@@ -668,7 +668,7 @@ else
     ( cd "$H" && VIKI_MODEL_DIR="$VIKI_MODEL_DIR" "$VIKI_BIN" ask "$Q_KEYWORD" \
         >"$LOG/b.kw.out" 2>"$LOG/b.kw.err" </dev/null ) || true
     check "B3 ask announces hybrid mode naming the model_id" \
-          '$GREP -q "viki ask: hybrid mode (FTS5 BM25 + vec0 cosine, model_id=$MODEL_ID)" "$LOG/b.kw.err"' "$LOG/b.kw.err"
+          '$GREP -q "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=$MODEL_ID)" "$LOG/b.kw.err"' "$LOG/b.kw.err"
     check "B4 PLANTED ANSWER (with model): keyword query ranks barn.md first" \
           'head -1 "$LOG/b.kw.out" | $GREP -qE "${RANK1}\./docs/barn\.md\$"' "$LOG/b.kw.out"
 
@@ -848,7 +848,7 @@ if [ "$HAVE_MODEL" = 1 ]; then
     ( cd "$F" && VIKI_MODEL_DIR="$PULLED_MODEL" "$VIKI_BIN" ask "$Q_WITNESS_SEMANTIC" \
         >"$LOG/m.hyb.out" 2>"$LOG/m.hyb.err" </dev/null ) || true
     check "M7 SELF-CONTAINED: the fresh clone runs HYBRID retrieval on the PULLED model" \
-          '$GREP -q "viki ask: hybrid mode (FTS5 BM25 + vec0 cosine, model_id=$MODEL_ID)" "$LOG/m.hyb.err" \
+          '$GREP -q "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=$MODEL_ID)" "$LOG/m.hyb.err" \
            && head -1 "$LOG/m.hyb.out" | $GREP -qE "${RANK1}\./docs/uncommitted-witness\.md\$"' \
           "$LOG/m.hyb.err"
 
@@ -1228,8 +1228,8 @@ fi
 section "9. selftests and CLI contract"
 
 cd "$WORK"
-check "D1 sqlite-vec is really statically linked (not a stub)" \
-      '"$VIKI_BIN" vec-selftest </dev/null | $GREP -q "^vec-selftest: PASS$"'
+check "D1 sqlite-ndvss is really statically linked (not a stub)" \
+      '"$VIKI_BIN" ndvss-selftest </dev/null | $GREP -q "^ndvss instruction set: "'
 if [ "$HAVE_MODEL" = 1 ]; then
     check "D2 embed-selftest passes its semantic property check" \
           '"$VIKI_BIN" embed-selftest "$VIKI_MODEL_DIR" </dev/null | $GREP -qx "embed-selftest: PASS"'

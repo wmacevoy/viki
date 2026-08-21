@@ -182,7 +182,7 @@ matching ZERO rows, substitute the nearest vocabulary term by edit distance. Cor
 against terms that actually exist in THIS corpus, costs one lookup per failed term, leaves
 the hot path untouched. ~100 lines, no new process.
 
-## 11. DONE (2026-08-21). sqlite-vec, as a LOCAL DERIVED INDEX only  (user asked 2026-08-16)
+## 11. TRIED AND REVERTED 2026-08-21 -- keep sqlite-ndvss. sqlite-vec, as a LOCAL DERIVED INDEX only
 Do NOT move the shared cache to vec0. Keep `viki_chunk` exactly as it is -- that is the
 artifact D-12 ships between peers and D-11 says is computed once -- and build the vec0
 table as a local index rebuilt from it. D-10 compliant by construction, NO epoch bump, no
@@ -192,22 +192,17 @@ marked experimental; unlocks quantization later to shrink what travels over sync
 VIKI_DESIGN.md already names sqlite-vec as the intended swap, so this is executing a
 settled decision, not a new one.
 
-SHIPPED exactly to that shape. viki_chunk is untouched; `.viki/vec.db` (attached as
-`vecdb`) holds the vec0 table and is rebuilt by viki_db_vec_sync() when row counts
-disagree. It is a SEPARATE FILE, not a table inside cache.db -- m1.sh's C18 caught the
-first attempt, which wrote the index into the shared artifact a fresh clone is asserted
-never to touch. That was the design telling the truth through a test.
-
-- model_id is a vec0 PARTITION KEY, not a filter. vec0's KNN is a global top-k, so
-  post-filtering by model returns fewer than k rows (or none) once a second epoch exists.
-  0.1.9 is pinned because partition keys are what make this correct.
-- Quality is UNCHANGED: 0.209/0.488/0.674/0.338 for both engines on corpus fp
-  94b0908c4729bc2c. See FINDINGS.md, including the near-miss where a moved corpus made the
-  swap look like a regression.
-- The payoff was linux-arm64: `experimental: true` came off in the same commit, which is
-  how "sqlite-vec retires the SVE2 bug" gets TESTED instead of asserted.
-- vendor/sqlite-ndvss submodule removed. build/build.sh now needs NO submodule and does not
-  invoke git at all -- the standalone-build property in its strongest form yet.
+OUTCOME: built to exactly that shape, CI-green on all eight jobs, then REVERTED on
+Warren's call. The decision reason is PORTABILITY, and specifically WASM -- ndvss ships
+similarity_functions_wasmsimd.h and builds under plain MSYS; sqlite-vec needed a Windows
+patch and would need wasm redone. Quality was measured IDENTICAL and neither engine has
+an ANN index, so nothing was given up. The arm64 bug that motivated the swap turned out
+to be a five-line upstream fix (wmacevoy/sqlite-ndvss#1) in a repo we already own.
+Full accounting in FINDINGS.md, including the reasoning error: "do not fork ndvss" was
+read as "cannot fix ndvss", when vendor/sqlite-ndvss IS our fork.
+REVISIT ONLY IF quantization-to-shrink-sync becomes a priority -- the one surviving
+benefit, still unbuilt -- and make wasm coverage an explicit requirement of that
+evaluation.
 
 ## 12. Meilisearch: take the IDEA, never the dependency  (user asked 2026-08-16)
 Stretch is large and cuts against viki's constraints: Rust server (or `milli`, a heavy

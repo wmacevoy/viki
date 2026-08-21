@@ -1,3 +1,6 @@
 [submodule "vendor/fossil-see"]
 	path = vendor/fossil-see
 	url = https://github.com/wmacevoy/fossil-sqlcipher-libressl.git
+[submodule "vendor/sqlite-ndvss"]
+	path = vendor/sqlite-ndvss
+	url = git@github.com:wmacevoy/sqlite-ndvss.git
