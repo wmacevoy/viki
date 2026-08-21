@@ -659,3 +659,32 @@ into. Two different problems; the hook path needs no library at all.
 Related, unbuilt: `viki index` has no notion of rcvid at all, so this needs the extractors to
 be able to answer "what changed since rcvid N" -- which fossil's `blob.rcvid` column supports
 directly. Check that before designing anything.
+
+## 29. SQLite triggers do NOT see fossil's sync path -- poll blob.rcvid instead (2026-08-21)
+Warren: "doesn't sqlite have triggers? that's vikilib compatible." Right instinct, and it is
+the library-compatible shape -- no shell, no server process. MEASURED, and it does not work
+for the case that matters:
+  CREATE TRIGGER viki_on_blob AFTER INSERT ON blob -> INSERT INTO viki_pending ...
+  direct `fossil sql` INSERT into blob   -> trigger FIRED (1 pending row)
+  push, autosync off, 2 artifacts sent   -> hub blob 10 -> 12, pending STILL 0
+So a trigger on `blob` fires for user SQL and NOT for sync-path inserts. Mechanism NOT
+proven -- do not claim it -- but the plausible reason is sound: fossil clones untrusted
+databases over the network, so a repo carrying a trigger is an attack vector, and disabling
+triggers on transfer connections is the defensive choice. Fossil ships `vmerge_ck1` itself,
+so triggers are not off wholesale; it looks per-connection.
+Also verified: adding the trigger + table does NOT corrupt the repo (`test-integrity` clean,
+0 errors), and both survive a sync. They are simply inert on the path we need.
+**THE ANSWER IS POLLING blob.rcvid.** Fossil stamps every received artifact with a monotonic
+receive id. viki records the highest rcvid it has indexed and asks "anything above N?" -- one
+indexed query. This is strictly better than both alternatives:
+  - works on file:// syncs, where after-receive hooks DO NOT fire (see 28)
+  - works in-process with no shell, which is what makes it vikilib-compatible
+  - needs no server process, so it works on a phone
+  - it is the SAME delta the after-receive hook is handed, so one implementation serves both
+  - cheap enough to ask on every command, so "is my index stale?" stops being a discipline
+    problem -- which is exactly what defeated the roleplay agents (23, and the roleplay
+    FINDINGS entry: `git pull` does not refresh the queue)
+Triggers keep one legitimate home: `.viki/cache.db`, which viki owns end to end and no
+untrusted party writes to. In-database reactions are safe there.
+PREREQUISITE, unbuilt: viki has no notion of rcvid at all. Needs a persisted high-water mark
+and extractors that can answer "what changed since rcvid N".
