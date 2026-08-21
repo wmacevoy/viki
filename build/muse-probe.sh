@@ -221,6 +221,20 @@ fi
 # was sampling non-deterministically and no two muses would be comparable.
 FL=$(sed -n 's/.*floor cos>=\([0-9.]*\).*/\1/p' "$WORK/s1.err")
 FL2=$(sed -n 's/.*floor cos>=\([0-9.]*\).*/\1/p' "$WORK/s2.err")
+# B7b closes the other half: the floor being DROPPED for a thin draw must be
+# stated on the same line, not signalled by the corpus number vanishing. That
+# vanishing is exactly what made B7 fail -- two seeds over one corpus printed
+# band lines that disagreed about a number which cannot vary.
+mkdir -p "$WORK/thin/docs"
+i=1; while [ $i -le 5 ]; do
+  printf 'document %d about an entirely unrelated subject number %d\n' $i $i > "$WORK/thin/docs/d$i.md"
+  i=$((i+1)); done
+( cd "$WORK/thin" && "$VIKI" index . ) >/dev/null 2>&1
+( cd "$WORK/thin" && "$VIKI" muse --seed 3 --k 4 ) >"$WORK/thin.out" 2>"$WORK/thin.err" || true
+check "B7b a dropped floor still reports the CORPUS floor" \
+      "grep -q 'floor cos>=[0-9]' '$WORK/thin.err'"
+check "B7c ... and says plainly that it was not applied" \
+      "grep -q 'NOT IN FORCE' '$WORK/thin.err'"
 check "B7 the band floor is identical across seeds"  "[ -n '$FL' ] && [ \"$FL\" = \"$FL2\" ]"
 
 echo "== C. result integrity =="

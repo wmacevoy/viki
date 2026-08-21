@@ -897,21 +897,33 @@ int viki_cmd_muse(sqlite3 *db, const viki_muse_opts *opts, viki_embedder *emb){
     fprintf(stderr,
         "viki muse: seed=%llu  model_id=%s  corpus=%d chunk(s)\n",
         (unsigned long long)info.seed, info.modelId, info.nCorpus);
-    if( info.floorCos == VIKI_MUSE_NO_FLOOR ){
-        /* Never print "floor cos>=-2.0000 (corpus median pairwise cosine)".
-        ** -2 is the sentinel for "no floor in force" and printing it as if
-        ** it were the corpus median is a false statement on the one line a
-        ** reader trusts to describe the run. */
+    /* TWO DIFFERENT FACTS, and they used to share one field. floorSampled is
+    ** a property of the CORPUS -- the median pairwise cosine -- and is the
+    ** same for every seed. floorCos is the EFFECTIVE floor, which the
+    ** degradation cascade overwrites with a sentinel when a thin band forces
+    ** it to be dropped. Printing only the effective value meant a run that
+    ** dropped the floor reported nothing about the corpus at all, so two
+    ** seeds over one corpus produced band lines that disagreed about a number
+    ** that cannot vary. build/muse-probe.sh B7 asserts exactly that
+    ** invariant, and caught this. Report both: what the floor IS, and whether
+    ** it was applied. */
+    if( info.floorSampled == VIKI_MUSE_NO_FLOOR ){
+        /* The estimator itself could not sample -- a genuinely floorless
+        ** corpus, not a thin draw. Never print the -2 sentinel as if it were
+        ** a measurement. */
         fprintf(stderr,
-            "  band: skip the seed's nearest %d, window %d, NO floor in force\n"
+            "  band: skip the seed's nearest %d, window %d, no floor could be estimated\n"
             "  %d chunk(s) in band, from %d distinct document(s)\n",
             info.nSkip, info.nWindow, info.nBand, info.nBandDocs);
     }else{
         fprintf(stderr,
             "  band: skip the seed's nearest %d, window %d, floor cos>=%.4f "
-            "(corpus median pairwise cosine)\n"
+            "(corpus median pairwise cosine)%s\n"
             "  %d chunk(s) in band, from %d distinct document(s)\n",
-            info.nSkip, info.nWindow, info.floorCos, info.nBand, info.nBandDocs);
+            info.nSkip, info.nWindow, info.floorSampled,
+            info.floorCos == VIKI_MUSE_NO_FLOOR
+                ? " -- NOT IN FORCE this draw, band too thin" : "",
+            info.nBand, info.nBandDocs);
     }
     if( opts->nResults != info.kEffective ){
         fprintf(stderr, "  NOTE: --k %d is out of range; using %d (1..%d)\n",

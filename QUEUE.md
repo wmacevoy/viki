@@ -621,5 +621,12 @@ Same corpus (425 chunks), same binary, different seed -> different band SEMANTIC
 git HEAD's src/ into a scratch binary and running the probe against it: identical failure.
 It passed 40/0 in earlier runs, so the two seeds previously happened to agree -- i.e. B7 is
 a test that passes flakily and has now correctly caught something.
-Not fixed: found at the end of a long session with a precise repro in hand, and digging into
-viki_muse.c's estimator deserves a fresh start rather than a tired one. Repro is above.
+**FIXED 2026-08-21, and it was a REPORTING bug, not a logic one.** The floor drop is a
+documented degradation rung that fires when a seed's band is too thin -- working as designed.
+But `floorCos` is OVERWRITTEN by the sentinel when that happens, and stderr printed only
+`floorCos`, so a run that dropped the floor said nothing about the corpus at all. Two facts
+were sharing one field: what the corpus floor IS (`floorSampled`, invariant across seeds)
+and whether it was IN FORCE this draw (`floorCos`). muse now reports both --
+`floor cos>=0.3093 (corpus median pairwise cosine) -- NOT IN FORCE this draw, band too thin`.
+B7 was right and the code was misreporting. muse-probe now 42/0, with B7b/B7c covering the
+lapse path that previously had no test.
