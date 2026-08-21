@@ -16,6 +16,62 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+## `command -v sqlite3` is not a test that sqlite3 can do what you need, and it hid a red CI job for six commits
+
+`test/m1.sh` gated its database-corroboration assertions on
+
+```sh
+command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE3=1
+```
+
+Three of them (`H11`, `H11b`, `J1`) query `chunk_fts`, which is a **plain
+FTS5 virtual table**. A `sqlite3` built without the fts5 module cannot even
+PREPARE that statement. The GitHub macOS runner ships exactly such a build:
+
+```
+Error: in prepare, no such module: fts5
+test/m1.sh: line 91: [: : integer expression expected
+```
+
+Because the gate only asked whether the binary existed, the three ran, the
+failed call substituted an **empty string**, and the comparison failed. The
+job reported `87 passed, 3 failed, 0 skipped` -- which reads as *"viki did
+not withdraw the chunks"*, the exact opposite of the truth. `H8`/`H9`/`H10`
+assert the same withdrawal through `viki ask` and passed in the same run.
+
+It stayed unexamined for six commits on `main` because the `m1` job shares
+its red with `linux-arm64`, whose failure IS expected and documented (the
+sqlite-ndvss SVE2 bug) -- so the run summary looked like a known problem.
+It never reproduced locally: the stock macOS sqlite3 here (3.51.0,
+`/usr/bin/sqlite3`) does have fts5.
+
+Repro:
+
+```sh
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in *fts5*|*chunk_fts*)\n  echo "Error: in prepare, no such module: fts5" >&2; exit 1;; esac; done\nexec /usr/bin/sqlite3 "$@"\n' > /tmp/nofts5/sqlite3
+chmod +x /tmp/nofts5/sqlite3
+PATH=/tmp/nofts5:$PATH bash test/m1.sh
+```
+
+Fixed by probing capability (`HAVE_FTS5`, set only when `CREATE VIRTUAL
+TABLE ... USING fts5` actually works) and keeping it separate from
+`HAVE_SQLITE3` -- `E3`/`E3b`/`B2`/`C11` only need sqlite3 to OPEN a
+database and must not be skipped over a module they never touch. With the
+shim above the same run is now `87 passed, 0 failed, 3 skipped` and names
+the missing module. CI additionally installs an fts5-capable sqlite3 on
+macOS, because the job fails on any skip by design and three skipped
+assertions prove nothing.
+
+**The general claim: a presence check is not a capability check.** Every
+`command -v` gate in this tree is a candidate for the same bug, and the
+failure mode is not "the test skips" -- it is "the test runs, fails on
+empty output, and blames the code under test".
+
+---
+
+
+
+
 ## `db_open_repository()` does not register `content()`, so in-process SQL is NOT equivalent to `fossil sql`
 
 Found 2026-08-21 while wiring `libfossilsee` into `fossil_sql_framed()`.

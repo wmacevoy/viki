@@ -197,7 +197,10 @@ change can break.
 m1.sh prints `RESULT: PASS WITH SKIPS` — by its own words "NOT a full
 Milestone 1 pass" — and exits 0 anyway. There is no single skip figure;
 each missing dependency has its own, all measured 2026-08-13 against the
-same binary: no model → `64 passed, 0 failed, 26 skipped`; no `sqlite3` →
+same binary: no model → `64 passed, 0 failed, 26 skipped`; an `sqlite3`
+with no **fts5 module** → `87 passed, 0 failed, 3 skipped` (H11/H11b/J1
+query `chunk_fts`; this is what the CI macOS runner ships, and it read as
+three hard FAILures until 2026-08-21); no `sqlite3` →
 `80 passed, 0 failed, 10 skipped`; neither → `57 passed, 0 failed, 33
 skipped`; all present → `90 passed, 0 failed, 0 skipped`. The skip sets
 overlap, so they do not add. A missing model does **not** skip the whole

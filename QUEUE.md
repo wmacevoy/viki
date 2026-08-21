@@ -783,7 +783,7 @@ STILL OPEN, IN PRIORITY ORDER:
   `viki serve` has no /api/grep and no /api/muse. That is a day's work and helps every agent;
   this library helps a long-lived host process, which viki does not yet have.
 
-## 33. test/m1.sh has been RED on macos-arm64 in CI for at least 6 commits -- and it is not my change
+## 33. RESOLVED (2026-08-21). test/m1.sh was RED on macos-arm64 in CI for six commits
      (noticed 2026-08-21 while adding libfossilsee CI; pre-dates that work)
 
 Every one of the last six `main` runs is red. Two separate causes are mixed together in
@@ -822,14 +822,35 @@ checks presence. It would also explain the count exactly, because the run report
 `0 skipped` -- m1.sh believes sqlite3 is usable and runs the assertions instead of skipping
 them.
 
-NOT CONFIRMED. The stock macOS sqlite3 here (3.51.0, /usr/bin/sqlite3) DOES have FTS5, so
-if this is the cause the runner must be on an older macOS. Do not write it up as fact until
-the error is seen.
+CONFIRMED, and it was the lead above. The CI log carries it verbatim:
 
-NEXT DIAGNOSTIC STEP (cheap, one run): make the sqlite3 assertions capture stderr instead of
-discarding it, so the log says WHY. Today a failed `sqlite3` call yields an empty string, the
-`[ "$x" = "0" ]` comparison is simply false, and the reason is thrown away -- the same
-stderr-discarding mistake that made the libfossilsee export check undiagnosable in its first
-CI run. Then either fix the runner dependency or make HAVE_SQLITE3 probe FTS5 capability
-(`sqlite3 :memory: "CREATE VIRTUAL TABLE t USING fts5(x);"`) and SKIP honestly -- noting that
-CI fails on any skip by design, which is correct: a skip here means the job is misconfigured.
+    Error: in prepare, no such module: fts5
+    test/m1.sh: line 91: [: : integer expression expected
+
+The runner's /usr/bin/sqlite3 has no fts5 module (the one here, 3.51.0, does -- which is
+why this never reproduced locally). The failed call substituted an EMPTY STRING, the
+comparison failed, and the result read as "viki did not withdraw the chunks" -- the exact
+opposite of the truth, since H8/H9/H10 assert the same withdrawal through `viki ask` and
+passed in the same run.
+
+Worth naming the process error too: the error was in the log the whole time. It was missed
+because the first grep for it hit the wrong job id and truncated its output -- which is why
+the entry above says "NOT CONFIRMED" rather than guessing.
+
+FIXED IN BOTH HALVES, because either alone is unsatisfying:
+
+- test/m1.sh now probes CAPABILITY, not presence. HAVE_FTS5 is set only when sqlite3 can
+  actually `CREATE VIRTUAL TABLE ... USING fts5`, and H11/H11b/J1 gate on it. Deliberately
+  SEPARATE from HAVE_SQLITE3: E3/E3b/B2/C11 only need sqlite3 to OPEN a database and must
+  not be skipped over a module they never use. Verified with a shim that simulates the
+  runner: 87 passed, 0 failed, 3 skipped, with a note naming the missing module -- instead
+  of 87/3/0 and `[: : integer expression expected`.
+- CI installs an fts5-capable sqlite3 on the macOS runner (`brew install sqlite`, then
+  $GITHUB_PATH to get past keg-only). Skipping would not be good enough: the run step fails
+  on ANY skip by design, and three skipped assertions are three assertions proving nothing.
+  The comment that used to sit in that spot said Homebrew sqlite is keg-only and therefore
+  "a fix that fixes nothing" -- right about the mechanism, wrong about the conclusion.
+
+THE GENERAL LESSON, which is the part worth keeping: `command -v X` tests that a binary
+EXISTS, not that it can do the thing you need. Every capability gate in this tree deserves
+the same suspicion.

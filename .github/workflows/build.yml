@@ -228,14 +228,26 @@ jobs:
             # to" is not a build dependency: install it only if missing, so
             # a trimmed future image degrades into a 30-second brew install
             # instead of a confusing failure five minutes into a LibreSSL
-            # build. sqlite3 is not conditional-installed on purpose --
-            # macOS ships /usr/bin/sqlite3, and Homebrew's sqlite formula
-            # is keg-only (it would install without landing on PATH, i.e.
-            # a "fix" that fixes nothing). If it is ever genuinely absent,
-            # m1.sh skips E3/E3b/B2/C11 and the run step below fails loudly
-            # rather than passing with skips.
+            # build.
+            #
+            # sqlite3 IS installed here, and the note that used to sit in
+            # this spot -- "macOS ships /usr/bin/sqlite3 ... Homebrew's
+            # sqlite is keg-only, a fix that fixes nothing" -- was right
+            # about the mechanism and wrong about the conclusion. The
+            # runner's /usr/bin/sqlite3 has NO fts5 MODULE ("Error: in
+            # prepare, no such module: fts5"), so H11/H11b/J1 -- which
+            # query chunk_fts, a plain FTS5 table -- failed here for six
+            # commits while reading like a viki bug. Keg-only is a real
+            # obstacle but a solvable one: $GITHUB_PATH puts it ahead of
+            # /usr/bin for every LATER step, which is where m1.sh runs.
+            #
+            # Installing it (rather than letting m1.sh skip those three) is
+            # deliberate: the run step below fails on ANY skip, and three
+            # skipped assertions are three assertions not proving anything.
             deps: |
               command -v cmake >/dev/null 2>&1 || brew install cmake
+              brew install sqlite
+              echo "$(brew --prefix sqlite)/bin" >> "$GITHUB_PATH"
 
           # ---- platforms deliberately NOT covered (announce only) ----
           - label: linux-arm64
