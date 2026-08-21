@@ -14,6 +14,72 @@ that entry as a dated block quote rather than by rewriting it.
 ---
 
 
+
+## A/B trial: viki vs grep on the same corpus -- a wash on cost, and the corpus mattered more than either tool
+
+**Date:** 2026-08-20. Two agents, same 82-document corpus (`me.viki`: every
+design doc, all 25 source files, every test/build script, and all 31 commit
+messages as separate documents), same three questions, differing only in the
+retrieval tool.
+
+|  | viki | grep |
+|---|---|---|
+| tokens | 132,461 | 142,839 |
+| tool calls | 39 | 60 |
+| wall clock | 10.5 min | 8.4 min |
+
+**Cost is a wash.** 7% fewer tokens, a third fewer calls, 25% slower. Both
+workflows converged on the same shape: find the document, then read it by
+hand (`sqlite3` pulls for one, `sed` for the other). Anyone justifying a
+retrieval layer on token economics at this scale is arguing from a number
+that is not there.
+
+**THE COMPARISON WAS RIGGED IN GREP'S FAVOUR, and it is worth saying so.**
+To make it fair I flattened commit messages, source files and artifacts into
+markdown on disk. In real use five of nine indexed classes -- check-in
+comments, tech notes, ticket changes, attachments, uv blobs -- are NOT files,
+and grep cannot reach them without exactly the materialisation step I did by
+hand. Grep's parity was purchased with a corpus-prep step viki does natively.
+
+**Where viki won: the concept-shaped question.** "What must you not get wrong
+when adding an artifact class?" has no keyword, no title, and no single
+home. grep spent about two-thirds of its 60 calls on it and found the one
+worked example (`MEMORY_DESIGN.md`) **by accident, while chasing a different
+query** -- its own words: a semantic search "would have surfaced it
+immediately." viki found the actual assignment brief in one query. `muse`
+also earned its place: one undirected run surfaced the crispest statement of
+the vector-leg mechanism, which six directed queries had missed.
+
+**Where grep won: proving absence.** `grep stash` -> nothing. `grep
+query_is_identifier` absent from shipped source -> the revert is genuinely in
+effect. A ranked result can never establish that.
+
+**WHERE BOTH FAILED, and this is the finding.** The question that asked what
+had CHANGED defeated both. grep recovered by a lucky hunch -- it checked
+commit dates and discovered the files are numbered newest-first: *"if I'd
+assumed ascending chronology I would have gotten Q2 backwards."* viki could
+not recover at all; its attempt returned zero rows **silently** (see the
+anchoring bug below) and it named that as its largest remaining uncertainty.
+
+Both landed on the right answer anyway, and neither tool is why. **The corpus
+rescued them**: QUEUE.md is append-only by policy, §23 self-labels as a
+retraction of §14/§21, and the deprecation banners are explicit. grep called
+a heading map "the single best move of the session."
+
+> The authoring convention did the work the retrieval tools could not. For
+> multi-agent collaboration that is the transferable lesson: numbered claims,
+> dated corrections appended rather than edited in place, and explicit
+> "supersedes X" markers are worth more than either search tool, because they
+> put the supersession relation in the DATA where any tool can find it. This
+> is the same conclusion the |cos| detour reached from the other direction --
+> when the structure is not in the data, no scoring function recovers it.
+
+Two defects fell out of the trial, both now fixed: `viki grep`'s `^`/`$`
+anchored to the whole CHUNK rather than to lines (a silent empty result that
+reads as "this does not exist"), and there was no time dimension at all --
+`viki_source` had `mtime` for files and deliberately 0 for every virtual
+source, with the artifact's real time buried in prose.
+
 ## Rare words are not unrepresented -- they are only representable AGAINST THEMSELVES
 
 **Date:** 2026-08-20. Chasing why a *correct* semantic retrieval scored a

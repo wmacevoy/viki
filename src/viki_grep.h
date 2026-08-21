@@ -39,6 +39,7 @@ int viki_grep_register(sqlite3 *db);
 ** shape so the two commands' output can be consumed by the same parser.
 ** nMax <= 0 means unlimited. Returns 0 on success, nonzero on a bad pattern. */
 int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
-                  const char *zSourceLike, int nChars);
+                  const char *zSourceLike, int nChars,
+                  const char *zSince, const char *zUntil, int bNewest, int bShowTime);
 
 #endif

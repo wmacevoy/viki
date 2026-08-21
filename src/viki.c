@@ -58,6 +58,7 @@ static void usage(void){
         "                           printed. Run header on stderr, hits on stdout, in `ask` form:\n"
         "                             [<n>] cos=<c> rank=<r>  <content_hash>#<chunk_ix>  <source>\n"
         "  grep \"<regex>\" [--k N] [-i] [--source <like>] [--chars N]\n"
+        "       [--since ISO] [--until ISO] [--newest] [--time]\n"
         "                           POSIX regex over EVERY indexed chunk -- including the\n"
         "                           artifacts that are not files and so cannot be grepped:\n"
         "                           check-in comments, wiki, tickets, forum posts, tech\n"
@@ -258,14 +259,18 @@ int main(int argc, char **argv){
         ** never embeds anything, and loading the ONNX model costs more than
         ** the whole scan on a personal-scale cache. */
         sqlite3 *db;
-        int k = 0, icase = 0, nChars = 160, i;
-        const char *zSrc = NULL;
+        int k = 0, icase = 0, nChars = 160, i, bNewest = 0, bShowTime = 0;
+        const char *zSrc = NULL, *zSince = NULL, *zUntil = NULL;
         if( argc < 3 ){ fprintf(stderr, "usage: viki grep \"<regex>\" [--k N] [-i] [--source <like>] [--chars N]\n"); return 1; }
         for( i = 3; i < argc; i++ ){
             if( strcmp(argv[i], "--k") == 0 && i + 1 < argc ) k = atoi(argv[++i]);
             else if( strcmp(argv[i], "-i") == 0 ) icase = 1;
             else if( strcmp(argv[i], "--source") == 0 && i + 1 < argc ) zSrc = argv[++i];
             else if( strcmp(argv[i], "--chars") == 0 && i + 1 < argc ) nChars = atoi(argv[++i]);
+            else if( strcmp(argv[i], "--since") == 0 && i + 1 < argc ) zSince = argv[++i];
+            else if( strcmp(argv[i], "--until") == 0 && i + 1 < argc ) zUntil = argv[++i];
+            else if( strcmp(argv[i], "--newest") == 0 ) bNewest = 1;
+            else if( strcmp(argv[i], "--time") == 0 ) bShowTime = 1;
             else { fprintf(stderr, "viki grep: unknown option '%s'\n", argv[i]); return 1; }
         }
         if( ensure_viki_dir() ) return 1;
@@ -275,7 +280,7 @@ int main(int argc, char **argv){
             sqlite3_close(db);
             return 1;
         }
-        rc = viki_cmd_grep(db, argv[2], k, icase, zSrc, nChars);
+        rc = viki_cmd_grep(db, argv[2], k, icase, zSrc, nChars, zSince, zUntil, bNewest, bShowTime);
         sqlite3_close(db);
         return rc;
     }

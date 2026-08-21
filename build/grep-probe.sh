@@ -50,6 +50,55 @@ ck "C7 shared content_hash prints ONCE"         '[ "$("$VIKI" grep "E-4471" 2>/d
 ck "C8 --source filter excludes non-matches"    '! "$VIKI" grep "E-4471" --source "ckin:%" 2>/dev/null | grep -q "E-4471"'
 ck "C8b CONTROL: matching --source includes it" '"$VIKI" grep "E-4471" --source "./docs/%" | grep -q "E-4471"'
 
+
+# ---- line anchoring: ^ and $ bind to LINES, not to the whole chunk ----
+# Found by an A/B trial: `viki grep "^2026-08-2"` returned nothing against
+# documents that literally begin with that string on a later line. A silent
+# empty result reads as "this does not exist", which is the worst failure a
+# search tool can have.
+mkdir -p "$DIR/anchor" && cd "$DIR/anchor"
+mkdir -p docs
+printf 'first line here\n2026-08-20 the dated second line\nlast line here\n' > docs/multi.md
+"$VIKI" index . >/dev/null 2>&1
+ck "A1 ^ anchors to a LINE, not the chunk"      '"$VIKI" grep "^2026-08-2" | grep -q "dated second line"'
+ck "A2 \$ anchors to a LINE, not the chunk"     '"$VIKI" grep "second line\$" | grep -q "dated second line"'
+ck "A3 ^ still matches the FIRST line"          '"$VIKI" grep "^first line" | grep -q "first line"'
+ck "A4 CONTROL: a bogus anchor still matches nothing" \
+   '! "$VIKI" grep "^zzz-not-present" 2>/dev/null | grep -q "^\["'
+ck "A5 . does not cross a newline"              '! "$VIKI" grep "first line here.2026" 2>/dev/null | grep -q "^\["'
+ck "A5b CONTROL: the same pattern matches within one line" \
+   '"$VIKI" grep "dated.second" | grep -q "dated second line"'
+
+# ---- timestamps: filter and order by WHEN, not just what ----
+# Both arms of the A/B trial failed the same way on a question about change
+# over time: neither could establish which document was current. grep-over-
+# files recovered by a lucky hunch; viki could not recover at all.
+mkdir -p "$DIR/ts" && cd "$DIR/ts"
+mkdir -p docs
+printf 'the older document about pumps\n' > docs/old.md
+printf 'the newer document about pumps\n' > docs/new.md
+touch -t 202001010000 docs/old.md
+touch -t 209901010000 docs/new.md
+"$VIKI" index . >/dev/null 2>&1
+ck "T1 every source gets a timestamp"          '[ "$(sqlite3 .viki/cache.db "select sum(ts!=\"\") from viki_source")" -eq 2 ]'
+ck "T2 --time shows it"                '"$VIKI" grep "document about pumps" --time | grep -qE "\[[0-9]{4}-[0-9]{2}-[0-9]{2}T"'
+ck "T3 --since excludes the old one"           '! "$VIKI" grep "pumps" --since 2050-01-01 2>/dev/null | grep -q "older"'
+ck "T3b CONTROL: and keeps the new one"        '"$VIKI" grep "pumps" --since 2050-01-01 | grep -q "newer"'
+ck "T4 --until excludes the new one"           '! "$VIKI" grep "pumps" --until 2050-01-01 2>/dev/null | grep -q "newer"'
+ck "T4b CONTROL: and keeps the old one"        '"$VIKI" grep "pumps" --until 2050-01-01 | grep -q "older"'
+ck "T5 --newest puts the newest FIRST"         '"$VIKI" grep "pumps" --newest --k 1 | grep -q "newer"'
+ck "T2b CONTRACT: WITHOUT --time the header line is byte-for-byte unchanged" \
+   '! "$VIKI" grep "document about pumps" 2>/dev/null | grep -qE "\[[0-9]{4}-[0-9]{2}-[0-9]{2}T"'
+ck "T5b CONTROL: without it, order is by hash not time" \
+   '[ "$("$VIKI" grep "pumps" --k 9 2>/dev/null | grep -c "^\[")" -eq 2 ]'
+# a cache written before the column existed must MIGRATE, not answer "nothing"
+sqlite3 .viki/cache.db "ALTER TABLE viki_source RENAME TO viki_source_old;
+  CREATE TABLE viki_source(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL);
+  INSERT INTO viki_source SELECT path,content_hash,mtime FROM viki_source_old;
+  DROP TABLE viki_source_old;" 2>/dev/null
+ck "T6 a pre-ts cache MIGRATES instead of returning nothing" \
+   '"$VIKI" grep "pumps" 2>/dev/null | grep -q "pumps"'
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

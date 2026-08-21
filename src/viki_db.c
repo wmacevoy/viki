@@ -62,7 +62,15 @@ static const char *SCHEMA_SQL =
     "CREATE TABLE IF NOT EXISTS viki_source("
     "  path TEXT PRIMARY KEY,"
     "  content_hash TEXT NOT NULL,"
-    "  mtime INTEGER NOT NULL"
+    "  mtime INTEGER NOT NULL,"
+    /* ISO-8601 UTC, or '' when the source has no meaningful time. Separate
+    ** from mtime, which is a fast-skip optimisation and is deliberately 0
+    ** for every virtual source (see index_text_blob). ts is the ARTIFACT's
+    ** time -- when the check-in was made, the note written, the ticket
+    ** changed -- and it is what makes "what changed recently" answerable.
+    ** Text, not an integer, so lexicographic order IS chronological order
+    ** and no date arithmetic is needed anywhere. */
+    "  ts TEXT NOT NULL DEFAULT ''"
     ");";
 
 void viki_db_register_ndvss(void){
@@ -89,6 +97,24 @@ int viki_db_open(const char *zPath, sqlite3 **out){
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
 
     rc = sqlite3_exec(db, SCHEMA_SQL, NULL, NULL, &errmsg);
+    if( rc == SQLITE_OK ){
+        /* MIGRATION. `CREATE TABLE IF NOT EXISTS` does nothing to a table that
+        ** already exists, so a column added to the schema above is absent from
+        ** every cache built before it -- and the failure is nasty: the schema
+        ** step errors, and a query naming the new column returns NOTHING,
+        ** which reads as "no matches" rather than "your cache is old".
+        **
+        ** SQLite has no ADD COLUMN IF NOT EXISTS, so the idiom is to run it
+        ** and ignore the duplicate-column error. Cheap, idempotent, and it
+        ** keeps an existing cache working instead of demanding a reindex --
+        ** which matters even pre-alpha, because a stale cache that silently
+        ** answers "nothing found" is worse than one that refuses to open.
+        ** Any genuinely new column belongs in BOTH places, here and above. */
+        sqlite3_exec(db, "ALTER TABLE viki_source ADD COLUMN ts TEXT NOT NULL DEFAULT ''",
+                     NULL, NULL, NULL);
+        sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS viki_source_ts ON viki_source(ts DESC)",
+                     NULL, NULL, NULL);
+    }
     if( rc != SQLITE_OK ){
         fprintf(stderr, "viki: schema init failed: %s\n", errmsg ? errmsg : "(no message)");
         sqlite3_free(errmsg);

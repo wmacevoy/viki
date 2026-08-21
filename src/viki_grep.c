@@ -42,7 +42,20 @@ static void regexp_func(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     pRe = (regex_t*)sqlite3_get_auxdata(ctx, 0);
     if( !pRe ){
         const char *zPat = (const char*)sqlite3_value_text(argv[0]);
-        int flags = REG_EXTENDED | REG_NOSUB;
+        /* REG_NEWLINE makes ^ and $ match at LINE boundaries inside the
+        ** chunk, and stops '.' from crossing a newline -- i.e. the semantics
+        ** anyone typing into something called "grep" already has.
+        **
+        ** Without it they anchored to the whole CHUNK, and the failure was
+        ** silent in the worst possible way: an A/B trial had an agent run
+        ** `viki grep "^2026-08-2"` against a corpus where eight documents
+        ** literally begin with that string on their second line. It returned
+        ** ZERO matches, which reads exactly like "this does not exist" -- so
+        ** the agent could not enumerate the corpus chronologically and said
+        ** so as its single largest uncertainty. An empty result that means
+        ** "your anchors mean something else than you think" is the same
+        ** class of defect as an index that silently drops 61% of its text. */
+        int flags = REG_EXTENDED | REG_NOSUB | REG_NEWLINE;
         /* A trailing (?i) is not POSIX, so case-insensitivity is a flag on
         ** the command rather than pattern syntax; viki_cmd_grep lowercases
         ** nothing and instead passes the whole pattern through a second
@@ -82,7 +95,8 @@ int viki_grep_register(sqlite3 *db){
 }
 
 int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
-                  const char *zSourceLike, int nChars){
+                  const char *zSourceLike, int nChars,
+                  const char *zSince, const char *zUntil, int bNewest, int bShowTime){
     sqlite3_stmt *st;
     /* 1024, not 512. The expanded SQL below measures 393 bytes without
     ** the two fragment columns and 513 with them (nChars=160), so the
@@ -111,13 +125,25 @@ int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
         "       (SELECT s.path FROM viki_source s WHERE s.content_hash=c.content_hash LIMIT 1),"
         "       length(c.chunk_text) > %d,"
         "       (SELECT max(m.chunk_ix) FROM viki_chunk m WHERE m.content_hash=c.content_hash)"
+        "     , (SELECT s3.ts FROM viki_source s3 WHERE s3.content_hash=c.content_hash"
+        "        ORDER BY s3.ts DESC LIMIT 1) AS ts"
         "  FROM viki_chunk c"
         " WHERE %s(?1, c.chunk_text)"
         "   AND (?2 IS NULL OR EXISTS(SELECT 1 FROM viki_source s2"
         "        WHERE s2.content_hash=c.content_hash AND s2.path LIKE ?2))"
+        "   AND (?3='' OR ts >= ?3) AND (?4='' OR ts <= ?4)"
         " GROUP BY c.content_hash, c.chunk_ix"
-        " ORDER BY c.content_hash, c.chunk_ix",
-        nChars, nChars, bIgnoreCase ? "regexpi" : "regexp");
+        /* ISO-8601 text, so lexicographic order IS chronological: --newest
+        ** needs no date arithmetic, and an empty ts sorts last under DESC,
+        ** which is the honest place for "no time known". */
+        " ORDER BY %s",
+        /* Four specifiers, four arguments -- %d, %d, %s, %s in that order.
+        ** The order-by clause was added without its argument once, and
+        ** sqlite3_snprintf read a garbage pointer for it: the error came back
+        ** as `no such column: <mojibake>`, which points at the SQL rather than
+        ** at the format string and cost real time to read correctly. */
+        nChars, nChars, bIgnoreCase ? "regexpi" : "regexp",
+        bNewest ? "ts DESC, c.content_hash, c.chunk_ix" : "c.content_hash, c.chunk_ix");
 
     if( sqlite3_prepare_v2(db, zSql, -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki grep: prepare failed: %s\n", sqlite3_errmsg(db));
@@ -126,12 +152,15 @@ int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
     sqlite3_bind_text(st, 1, zPattern, -1, SQLITE_STATIC);
     if( zSourceLike ) sqlite3_bind_text(st, 2, zSourceLike, -1, SQLITE_STATIC);
     else sqlite3_bind_null(st, 2);
+    sqlite3_bind_text(st, 3, zSince ? zSince : "", -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 4, zUntil ? zUntil : "", -1, SQLITE_STATIC);
 
     while( (rc = sqlite3_step(st)) == SQLITE_ROW ){
         const char *zHash = (const char*)sqlite3_column_text(st, 0);
         int ix = sqlite3_column_int(st, 1);
         const char *zText = (const char*)sqlite3_column_text(st, 2);
         const char *zSrc  = (const char*)sqlite3_column_text(st, 3);
+        const char *zTs   = (const char*)sqlite3_column_text(st, 6);
         int bCut  = sqlite3_column_int(st, 4);
         /* NULL max(chunk_ix) means "extent unknown", not "chunk 0". Same
         ** rule as fill_fragment_flags(): an extent we could not read marks
@@ -164,8 +193,19 @@ int viki_cmd_grep(sqlite3 *db, const char *zPattern, int nMax, int bIgnoreCase,
         ** only. The header is a citation (`<hash>#<ix>` is what
         ** /api/chunk?hash=&ix= takes) and build/grep-probe.sh's C6/C7
         ** count it by position. */
-        printf("[%d] %s#%d  %s\n    %s%.*s%s%s\n\n", n, zHash ? zHash : "?", ix,
+        /* THE HEADER LINE IS A CITATION CONTRACT, and the timestamp is
+        ** therefore OPT-IN. `[N] <64hex>#<ix>  <source>` is asserted anchored
+        ** at BOTH ends by build/fragment-probe.sh R3 and parsed by position in
+        ** three test files; inserting a field broke it immediately. --time
+        ** appends after the ragged source, which is already last precisely so
+        ** nothing can shift a field a script reads by position. Filtering and
+        ** ordering (--since/--until/--newest) work regardless of this flag:
+        ** what you can SEE and what you can SELECT ON are separate questions. */
+        printf("[%d] %s#%d  %s%s%s%s\n    %s%.*s%s%s\n\n", n, zHash ? zHash : "?", ix,
                zSrc ? zSrc : "(source path unknown)",
+               (bShowTime && zTs && zTs[0]) ? "  [" : "",
+               (bShowTime && zTs && zTs[0]) ? zTs : "",
+               (bShowTime && zTs && zTs[0]) ? "]" : "",
                (ix > 0)                  ? VIKI_MARK_HEAD " " : "",
                nText, zShow,
                bCut                      ? " " VIKI_MARK_CUT  : "",

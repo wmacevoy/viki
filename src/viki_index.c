@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -296,17 +297,48 @@ static int insert_chunks(sqlite3 *db, const char *hash, const char *text, size_t
     return SQLITE_OK;
 }
 
-static void upsert_source(sqlite3 *db, const char *path, const char *hash, long mtime){
+/* Pulls the artifact's own timestamp out of the FIRST LINE of the composed
+** payload. Every virtual extractor already writes one there -- "check-in X
+** on 2026-08-20T12:00:00 by warren", "ticket Y changed 2026-...", "attachment
+** Z at 2026-..." -- because time belongs in the embedded/FTS-indexed text
+** rather than in viki_source.mtime (a real mtime there would defeat the
+** fast-skip after a `fossil amend`). Reading it back out is cheaper and far
+** less invasive than widening the frame contract, and it cannot desynchronise
+** from what the reader sees, because it IS what the reader sees.
+**
+** Scans only the first line, and only for a full ISO-8601 second: a bare
+** date elsewhere in a commit message must not be mistaken for the commit's
+** time. Returns 1 and fills out[20] on success. */
+static int iso_from_header(const char *zText, char *out){
+    const char *p = zText;
+    if( !zText ) return 0;
+    for( ; *p && *p != '\n'; p++ ){
+        int i, ok = 1;
+        static const char *pat = "dddd-dd-ddTdd:dd:dd";
+        for( i = 0; pat[i]; i++ ){
+            char c = p[i];
+            if( pat[i] == 'd' ){ if( c < '0' || c > '9' ){ ok = 0; break; } }
+            else if( c != pat[i] ){ ok = 0; break; }
+        }
+        if( ok ){ memcpy(out, p, 19); out[19] = '\0'; return 1; }
+    }
+    return 0;
+}
+
+static void upsert_source(sqlite3 *db, const char *path, const char *hash, long mtime,
+                          const char *zTs){
     sqlite3_stmt *st;
     if( sqlite3_prepare_v2(db,
-            "INSERT INTO viki_source(path, content_hash, mtime) VALUES(?1, ?2, ?3) "
-            "ON CONFLICT(path) DO UPDATE SET content_hash=excluded.content_hash, mtime=excluded.mtime",
+            "INSERT INTO viki_source(path, content_hash, mtime, ts) VALUES(?1, ?2, ?3, ?4) "
+            "ON CONFLICT(path) DO UPDATE SET content_hash=excluded.content_hash, "
+            "mtime=excluded.mtime, ts=excluded.ts",
             -1, &st, NULL) != SQLITE_OK ){
         return;
     }
     sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC);
     sqlite3_bind_text(st, 2, hash, -1, SQLITE_STATIC);
     sqlite3_bind_int64(st, 3, mtime);
+    sqlite3_bind_text(st, 4, zTs ? zTs : "", -1, SQLITE_TRANSIENT);
     sqlite3_step(st);
     sqlite3_finalize(st);
 }
@@ -375,6 +407,41 @@ static void index_text_blob(sqlite3 *db, const char *virtualPath, const char *da
 
     if( mtime != 0 && previously_seen_unchanged(db, virtualPath, mtime, cached_hash)
         && chunk_count_already_present(db, cached_hash, modelId) ){
+        /* The content is unchanged, so nothing needs re-hashing or
+        ** re-embedding -- but a column ADDED to viki_source since this row
+        ** was written is still empty, and this fast path is exactly why a
+        ** plain reindex would never fill it. Backfill only when it is
+        ** missing, so the steady state remains a pure read.
+        **
+        ** Found the hard way: after adding viki_source.ts, `viki index` on an
+        ** existing corpus reported success and left all 82 rows with ts='' --
+        ** every time filter then matched nothing, which looks exactly like
+        ** "there is nothing in that range". */
+        sqlite3_stmt *stTs;
+        if( sqlite3_prepare_v2(db, "SELECT ts FROM viki_source WHERE path=?1",
+                               -1, &stTs, NULL) == SQLITE_OK ){
+            int needs = 0;
+            sqlite3_bind_text(stTs, 1, virtualPath, -1, SQLITE_STATIC);
+            if( sqlite3_step(stTs) == SQLITE_ROW ){
+                const char *z = (const char*)sqlite3_column_text(stTs, 0);
+                needs = !z || !z[0];
+            }
+            sqlite3_finalize(stTs);
+            if( needs ){
+                char isoBuf[24] = "";
+                if( !iso_from_header(data, isoBuf) ){
+                    time_t t = (time_t)mtime;
+                    struct tm g;
+#ifdef _WIN32
+                    gmtime_s(&g, &t);
+#else
+                    gmtime_r(&t, &g);
+#endif
+                    strftime(isoBuf, sizeof(isoBuf), "%Y-%m-%dT%H:%M:%S", &g);
+                }
+                upsert_source(db, virtualPath, cached_hash, mtime, isoBuf);
+            }
+        }
         return;
     }
 
@@ -384,7 +451,23 @@ static void index_text_blob(sqlite3 *db, const char *virtualPath, const char *da
         insert_chunks(db, hash, data, len, emb, modelId);
         (*nChunked)++;
     }
-    upsert_source(db, virtualPath, hash, mtime);
+    {
+        /* A virtual source's time comes from its own composed header; a file's
+        ** comes from the filesystem. Both end up as one ISO-8601 string, so
+        ** "everything since Tuesday" is one comparison regardless of class. */
+        char isoBuf[24] = "";
+        if( !iso_from_header(data, isoBuf) && mtime != 0 ){
+            time_t t = (time_t)mtime;
+            struct tm g;
+#ifdef _WIN32
+            gmtime_s(&g, &t);
+#else
+            gmtime_r(&t, &g);
+#endif
+            strftime(isoBuf, sizeof(isoBuf), "%Y-%m-%dT%H:%M:%S", &g);
+        }
+        upsert_source(db, virtualPath, hash, mtime, isoBuf);
+    }
 }
 
 static int index_file(sqlite3 *db, const char *path, int *nFiles, int *nChunked,

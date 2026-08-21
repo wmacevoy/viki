@@ -605,3 +605,21 @@ SCHEMA NOTE (cheap now, per §21): needs a form/variant dimension on viki_chunk,
 table keyed by (content_hash, chunk_ix, form). Retrieval takes max() over forms and reports
 which form matched -- that last part matters for provenance: cite the ORIGINAL text, never
 the machine-generated restatement.
+
+
+## 27. `viki muse`'s band floor is conditional on the DRAW, not the corpus (2026-08-20)
+`build/muse-probe.sh` B7 exists because "the floor is a property of the CORPUS, not of the
+draw, so it must not move between seeds. A floor that wobbled per run would mean the
+estimator was sampling non-deterministically and no two muses would be comparable."
+IT IS NOW FAILING, and the failure is real:
+  seed=1 -> "band: skip the seed's nearest 15, window 22, floor cos>=0.3094 (corpus median
+             pairwise cosine)"   -> 14 chunks in band, 8 documents
+  seed=2 -> "band: skip the seed's nearest 15, window 22, NO floor in force"
+                                 -> 22 chunks in band, 12 documents
+Same corpus (425 chunks), same binary, different seed -> different band SEMANTICS.
+**PRE-EXISTING, NOT a regression from the timestamp work.** Verified by compiling all of
+git HEAD's src/ into a scratch binary and running the probe against it: identical failure.
+It passed 40/0 in earlier runs, so the two seeds previously happened to agree -- i.e. B7 is
+a test that passes flakily and has now correctly caught something.
+Not fixed: found at the end of a long session with a precise repro in hand, and digging into
+viki_muse.c's estimator deserves a fresh start rather than a tired one. Repro is above.
