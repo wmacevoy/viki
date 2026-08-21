@@ -252,13 +252,41 @@ cc -O2 -Wall -Wno-unused-parameter \
    -o "$OBJ_DIR/sqlite3.o"
 
 echo "==> Compiling sqlite-vec (static link via -DSQLITE_CORE)"
+# sqlite-vec 0.1.9 does this, at sqlite-vec.c:64:
+#
+#   #ifndef _WIN32
+#   ...
+#   typedef u_int8_t uint8_t;      /* and u_int16_t, u_int64_t */
+#
+# i.e. "if I am not on Windows, the BSD spellings exist". viki builds under
+# MSYS2's PLAIN MSYS environment, not MINGW64 -- a deliberate choice, since
+# it needs fork() and BSD sockets (see CLAUDE.md) -- and plain MSYS does
+# NOT define _WIN32. So sqlite-vec takes its Unix branch on a platform
+# whose headers have uint8_t but no u_int8_t, and the build dies with
+# "unknown type name 'u_int8_t'" followed by a cascade of conflicting-type
+# and incompatible-pointer errors from every use of them.
+#
+# Supplying the missing spellings makes sqlite-vec's assumption TRUE.
+# The alternative -- defining one of its other guards (__COSMOPOLITAN__,
+# __wasi__, __EMSCRIPTEN__; each appears exactly once, in this same block,
+# so any of them would work) -- would be claiming to be a platform we are
+# not, which is the kind of thing that is fine until it silently is not.
+# _WIN32 itself is NOT an option: sqlite3.h and the system headers read it
+# too, so setting it would change far more than this typedef.
+#
+# The resulting `typedef uint8_t uint8_t;` is a redundant self-typedef,
+# which C11 permits (verified under both -std=gnu99 and -std=c11).
+VEC_DEFS=""
+if [ "$ORT_OS" = "Windows" ]; then
+    VEC_DEFS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
+fi
 # -ffast-math is deliberately NOT used here, unlike the sqlite-ndvss build
 # this replaced. vec0's distances feed viki's confidence floor and muse's
 # band edges, both of which compare cosines against fixed thresholds, so
 # reassociation that perturbs the low bits is a worse trade than the few
 # percent it buys.
 cc -O3 -Wall -Wno-unused-parameter -Wno-unused-function \
-   -DSQLITE_CORE \
+   -DSQLITE_CORE $VEC_DEFS \
    -I"$SQLITE_DIR" \
    -c "$VEC_DIR/sqlite-vec.c" \
    -o "$OBJ_DIR/sqlite-vec.o"
