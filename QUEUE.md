@@ -630,3 +630,32 @@ and whether it was IN FORCE this draw (`floorCos`). muse now reports both --
 `floor cos>=0.3093 (corpus median pairwise cosine) -- NOT IN FORCE this draw, band too thin`.
 B7 was right and the code was misreporting. muse-probe now 42/0, with B7b/B7c covering the
 lapse path that previously had no test.
+
+## 28. TRIGGERS: fossil already has them; the gap is incremental indexing (2026-08-21)
+Warren asked whether viki needs TH1 ("tcl-lite") for "when a forum post happens, do this".
+**It does not.** `fossil hook` runs a SHELL COMMAND. Verified against the vendored binary:
+  valid types: after-receive, before-commit, disabled
+  `fossil hook test -R repo 0`                -> fired
+  push over file://                           -> did NOT fire
+  push to a running `fossil server`           -> FIRED
+TH1 remains as the older `xfer-commit-script`/`xfer-push-script`/`xfer-ticket-script` config
+keys, but it is sandboxed and buys nothing a shell command does not.
+**WHERE IT FIRES MATTERS:** server-side receive only. Every viki probe and test/m1.sh uses
+file:// clones (FINDINGS records that as the convenient testing shortcut), so hooks are
+structurally INVISIBLE to viki's whole test suite. Testing this needs a real server process.
+**THE ACTUAL GAP IS ON VIKI'S SIDE.** A hook can call `viki index` today, but that is an
+all-or-nothing pass over the corpus. Fossil HANDS the hook the delta -- `--base-rcvid`,
+`--new-rcvid`, and `hook-last-rcvid` persisted in config -- and viki has no way to accept it.
+  WANTED: `viki index --since-rcvid N`, so a hook does work proportional to what ARRIVED
+  rather than to the size of the repository.
+**This is not merely efficiency.** An after-receive hook runs synchronously in the server's
+request path, so a full re-index stalls the pushing client. Incremental is what keeps a push
+from timing out.
+**AND IT IS THE CASE AGAINST vikilib for this purpose.** A hub trigger wants a separate
+process: isolated, crash-independent, and mirroring the architecture viki already has (fossil
+is a subprocess to viki; here viki is a subprocess to fossil). The library matters for the
+OPPOSITE direction -- a Flutter app reacting in-process on a phone with no shell to spawn
+into. Two different problems; the hook path needs no library at all.
+Related, unbuilt: `viki index` has no notion of rcvid at all, so this needs the extractors to
+be able to answer "what changed since rcvid N" -- which fossil's `blob.rcvid` column supports
+directly. Check that before designing anything.
