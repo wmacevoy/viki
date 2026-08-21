@@ -16,6 +16,67 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+
+## A raw 256-bit key makes an encrypted repo 52x cheaper to open, and needs no patch anywhere
+
+**Date:** 2026-08-21. Every `fossil` invocation against an encrypted repo pays
+SQLCipher's PBKDF2. Measured on this machine, 5 invocations of
+`fossil sql -R <repo> "select 1"`:
+
+| key form | per open |
+|---|---|
+| passphrase | **333 ms** |
+| plaintext repo (control) | 5.8 ms |
+| **raw `x'<64 hex>'`** | **6.4 ms** |
+
+`FOSSIL_SEE_KEY="x'<64 hex chars>'"` works on the UNMODIFIED fossil-see binary:
+SQLCipher recognises that literal form and skips derivation entirely. No
+SQLCipher patch, no fossil patch, no rebuild.
+
+**It is still genuinely encrypted**, checked three ways rather than assumed:
+the file header is random bytes and not `SQLite format 3`, stock `sqlite3`
+reports "file is not a database", and a different raw key fails NOTADB.
+
+**Why this is not a weakening in the case that matters.** PBKDF2 exists to
+make a LOW-ENTROPY HUMAN PASSPHRASE expensive to brute-force. A 256-bit
+machine-generated key cannot be brute-forced at any iteration count, so
+stretching it protects entropy the key does not have. The at-rest guarantee
+is unchanged; what is given up is passphrase-brute-force resistance, which is
+irrelevant when there is no passphrase.
+
+So: **raw key for machine-to-machine** (a hub with a systemd credential per
+D-8, agents, CI), **passphrase for human-typed**. Same binary, same repos, the
+caller chooses. Do NOT use a raw key for a key a person types or remembers.
+
+**What this costs the arguments built on top of it.** ~2.6 s of pure key
+derivation per full index (8 extractors x 333 ms) was a main driver for
+embedding fossil in-process. It is now ~50 ms. Anyone reaching for
+`libfossilsee` on latency grounds should re-measure first; the remaining case
+for it is mobile/FFI, where there is no shell to spawn into at all.
+
+## PRAGMA data_version already answers "did another connection write?"
+
+**Date:** 2026-08-21. Chasing change-observability after triggers proved inert
+on fossil's sync path and `sqlite3_update_hook` proved per-connection.
+Measured with a two-connection C probe:
+
+```
+baseline on conn A                  1
+after A's OWN write                 1  unchanged
+after a SECOND connection wrote     2  CHANGED   <-- what update_hook misses
+after another write from B          3  CHANGED
+```
+
+`PRAGMA data_version` is stock SQLite, needs no patch, and is exactly the
+cross-connection signal the other two mechanisms lack. It does not say WHAT
+changed -- pair it with `blob.rcvid` for the delta, which is the same delta an
+after-receive hook is handed (QUEUE.md 28-30).
+
+Caveat that decides where it is useful: reading it requires an OPEN
+connection, so out-of-process it does not avoid the cost of opening. It is
+free for a long-lived connection -- which is the in-process case, and with a
+raw key (above) it is cheap even out-of-process.
+
 ## Three agents on one branch: the work queue could not answer "what is free to take?"
 
 **Date:** 2026-08-21. Three agents (alice, bob, carol) worked the `roleplay`

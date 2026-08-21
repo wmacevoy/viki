@@ -714,3 +714,25 @@ changed" is producing exactly the rcvid delta of 29, arrived at from the other e
 delta, push instead of pull. So ONE indexing implementation serves both: poll blob.rcvid when
 viki is a separate process, register update_hook when it is in-process, and both feed the same
 `index --since` path. Build the `--since` path first; the two front ends are small after that.
+
+## 31. Raw key + data_version: two patches that turned out to be unnecessary (2026-08-21)
+Warren asked for (a) a sqlite patch for genuine observability and (b) a sqlite-see patch to
+lighten key derivation, reasoning that an unguessable key needs no expensive derivation.
+BOTH ANSWER TO "NO PATCH NEEDED" -- see the two FINDINGS entries of this date.
+ (a) `PRAGMA data_version` already detects OTHER connections' writes. Stock sqlite.
+ (b) `FOSSIL_SEE_KEY="x'<64 hex>'"` takes SQLCipher's raw-key path: 333ms -> 6.4ms per open,
+     52x, on the unmodified binary, still genuinely encrypted (verified 3 ways).
+     His reasoning was exactly right: PBKDF2 protects entropy a machine key does not have.
+ACTIONS THIS UNBLOCKS OR CHANGES:
+- Document the raw-key form in ENCRYPTION.md and server/setup-hub.sh: a hub keyed from a
+  systemd credential should use a raw key, a human-typed key should not.
+- test/m1.sh and every probe use passphrase keys and so pay 333ms per fossil call. Switching
+  the TEST corpora to raw keys would cut suite time substantially. Do not switch the
+  human-facing docs' examples.
+- **Re-measure before building libfossilsee on latency grounds.** ~2.6s of KDF per full index
+  was a main driver for in-process fossil; it is now ~50ms. The surviving case for the
+  library is mobile/FFI (no shell to spawn into), which is real but is a different deliverable.
+- The agent-IPC question may not need a library at all: `viki ask`/`grep`/`notes` read the
+  UNENCRYPTED cache and never open the repo, so they pay no KDF. `viki serve` already holds
+  the model and cache open. Its gap is COVERAGE (no /api/grep, no /api/muse), not architecture.
+  Finishing the serve API is a day; the library is not.
