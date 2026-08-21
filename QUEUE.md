@@ -782,3 +782,54 @@ STILL OPEN, IN PRIORITY ORDER:
 - §31's LAST bullet still stands and is still probably the better next move for agent IPC:
   `viki serve` has no /api/grep and no /api/muse. That is a day's work and helps every agent;
   this library helps a long-lived host process, which viki does not yet have.
+
+## 33. test/m1.sh has been RED on macos-arm64 in CI for at least 6 commits -- and it is not my change
+     (noticed 2026-08-21 while adding libfossilsee CI; pre-dates that work)
+
+Every one of the last six `main` runs is red. Two separate causes are mixed together in
+that red, and only one of them is known-benign:
+
+- `linux-arm64` build fails. EXPECTED: that leg is `experimental: true`, the sqlite-ndvss
+  SVE2 dispatch bug, documented in FINDINGS.md and not viki's code.
+- **`m1 (macos-arm64)` fails: `87 passed, 3 failed, 0 skipped`.** NOT expected, not
+  announced anywhere, and it means the Milestone 1 definition-of-done gate is not actually
+  green on a platform the matrix claims to cover.
+
+Always the same three, and they have a shape:
+
+    FAIL  H11  the withdrawn chunks are gone from viki_chunk AND chunk_fts
+    FAIL  H11b CONTROL: the untouched document's rows are all still present
+    FAIL  J1   SETUP: the cache really holds two epochs of the same chunk
+
+WHAT IS ALREADY RULED OUT:
+- Not my libfossilsee change: present on main before it, identical assertions.
+- Not reproducible locally on macOS arm64, INCLUDING under CI's exact environment
+  (`TMPDIR=$PWD/m1-scratch VIKI_TEST_KEEP=1`): 90 passed, 0 failed, 0 skipped.
+- Not the withdrawal logic itself. H9/H10 assert the SAME withdrawal through `viki ask`
+  and both PASS in CI. What fails is only the corroboration done by shelling out to
+  `sqlite3` against `.viki/cache.db`.
+
+THE LEAD, and it fits all three: every failing assertion shells out to `sqlite3`, and the
+gate for those is
+
+    HAVE_SQLITE3=0
+    command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE3=1
+
+which tests that the BINARY EXISTS, not that it can do what the assertions need -- H11 and
+H11b both query `chunk_fts`, an FTS5 virtual table, which a stock `sqlite3` without FTS5
+cannot even open. That is this project's favourite bug shape: a capability probe that
+checks presence. It would also explain the count exactly, because the run reports
+`0 skipped` -- m1.sh believes sqlite3 is usable and runs the assertions instead of skipping
+them.
+
+NOT CONFIRMED. The stock macOS sqlite3 here (3.51.0, /usr/bin/sqlite3) DOES have FTS5, so
+if this is the cause the runner must be on an older macOS. Do not write it up as fact until
+the error is seen.
+
+NEXT DIAGNOSTIC STEP (cheap, one run): make the sqlite3 assertions capture stderr instead of
+discarding it, so the log says WHY. Today a failed `sqlite3` call yields an empty string, the
+`[ "$x" = "0" ]` comparison is simply false, and the reason is thrown away -- the same
+stderr-discarding mistake that made the libfossilsee export check undiagnosable in its first
+CI run. Then either fix the runner dependency or make HAVE_SQLITE3 probe FTS5 capability
+(`sqlite3 :memory: "CREATE VIRTUAL TABLE t USING fts5(x);"`) and SKIP honestly -- noting that
+CI fails on any skip by design, which is correct: a skip here means the job is misconfigured.
