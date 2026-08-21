@@ -14,9 +14,9 @@ projected into `viki_note`, and an agent coordinates by writing to it:
 git pull --rebase origin roleplay              # BEFORE you look AND before you push
 viki index .                                   # a pulled claim is invisible until you do this
 viki notes --type task --state open --unclaimed   # what is ACTUALLY free
-viki structure <id> --who <you> --lease 5m     # CLAIM, declaring your responsiveness
+viki structure <id> --who <you>                # CLAIM. No lease needed.
 git commit && git push origin roleplay         # a claim is not a claim until it is pushed
-viki structure <id> --heartbeat --lease 5m     # renew while you work
+viki structure <id> --heartbeat                # "still on it", while you work
 viki structure <id> --state closed             # when done
 ```
 
@@ -25,9 +25,16 @@ sets `~who` and never touches state. All three agents in the first run
 discovered this independently, and each avoided a collision only by reading a
 `~who` marker with their own eyes.
 
-**Declare a lease you can keep.** It is a promise about how fast you can
-answer, and it is the only thing that distinguishes "offline in the field"
-from "dead". Say `--lease 2d` if you are going to the north pasture.
+**A lease is optional and most claims should not have one.** Someone
+delivering hay is not going to stop and estimate how long they will be
+reachable, and a protocol that demands it will simply not be used. A plain
+`--who you` is a complete claim. An undeclared claim is judged by its AGE --
+`viki notes --stale 3d` asks "has anyone touched this in three days", which is
+the judgement a person makes anyway.
+
+Add `--lease 5m` only when you want to be precise about it: a lease is the one
+thing that can REFUSE a challenge outright, which is worth having when you are
+at a keyboard and want to be left alone for the next five minutes.
 
 ## If a claim looks abandoned
 
@@ -36,7 +43,7 @@ Stealing is allowed, and it is explicit. You may not simply take it:
 ```sh
 viki structure <id> --challenge <you>          # refused while their lease is live
 # ... wait out the grace period ...
-viki structure <id> --steal <you> --grace 1m --lease 5m
+viki structure <id> --steal <you> --grace 1m
 ```
 
 The record keeps `@stolen-from`, so the history says who held it, who asked,

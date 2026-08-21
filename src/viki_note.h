@@ -88,7 +88,9 @@ typedef struct {
                     ** cannot express it, since an empty filter means "no
                     ** filter on that field". The one question a work queue
                     ** must answer was the one it could not. */
-    int bStale;     /* only claims whose declared lease has lapsed */
+    int bStale;     /* only claims that look abandoned: a lapsed lease, OR no
+                    ** lease and a claim older than staleAfter */
+    const char *staleAfter;  /* age threshold for UNLEASED claims; default 1d */
 } viki_note_filter;
 
 /* PURE query: no output of its own. `viki notes`, `viki structure --pending`
@@ -125,8 +127,17 @@ int viki_cmd_structure_pending(sqlite3 *db, int nMax);
 ** that go offline for long stretches, so a fixed global timeout cannot tell
 ** those apart. The claimer therefore declares its OWN responsiveness:
 **
-**   viki structure <id> --who alice --lease 1m   "I'm online, challenge me fast"
+**   viki structure <id> --who alice              plain claim -- NO lease needed
+**   viki structure <id> --who alice --lease 1m   "challenge me fast, I'm at a keyboard"
 **   viki structure <id> --who alice --lease 2d   "I'm going to the north pasture"
+**
+** THE LEASE IS OPTIONAL AND MOST CLAIMS SHOULD NOT HAVE ONE. Someone
+** delivering hay is not going to stop and estimate how long they will be
+** reachable, and a protocol that demands it will simply not be used. An
+** undeclared claim is judged by its AGE -- "nobody has touched that in three
+** days" is a judgement people make without any ceremony, and `--stale 3d`
+** asks exactly that question. A lease is for the caller who wants to be
+** precise: it is the only thing that can REFUSE a challenge outright.
 **
 ** A lease is a promise about availability, written by the only party who
 ** knows. Everything else follows from it:

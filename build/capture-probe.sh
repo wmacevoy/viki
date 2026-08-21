@@ -196,6 +196,28 @@ ck "L9b the steal is RECORDED as a supersession, not an overwrite" \
 ck "L9c ... and the new holder is in force"  '"$VIKI" notes --who bob --k 9 2>/dev/null | grep -q "west gate"'
 ck "L10 GUARD: stealing an UNCLAIMED task is refused, not silently allowed" \
    'UID2=$("$VIKI" notes --unclaimed --k 9 2>/dev/null | grep "^[0-9]" | head -1 | cut -d" " -f1); ! "$VIKI" structure "$UID2" --steal carol >/dev/null 2>&1'
+# The no-ceremony path. A lease is for callers who want precision; most
+# claims will not have one, and the friction-free path must be the SAFE one.
+# The first implementation had this backwards: an unleased claim was treated
+# as instantly stale, punishing exactly the claimer least able to stop and
+# estimate their own availability.
+"$VIKI" capture "deliver hay to the north pasture" --type task --state open >/dev/null
+"$VIKI" index . >/dev/null 2>&1
+HAY=$("$VIKI" notes --type task --k 9 2>/dev/null | grep -A1 "^[0-9]" | paste - - | grep hay | cut -d" " -f1)
+"$VIKI" structure "$HAY" --who warren >/dev/null 2>&1
+"$VIKI" index . >/dev/null 2>&1
+ck "L12 a plain claim needs NO lease"          '"$VIKI" notes --who warren --k 9 2>/dev/null | grep -q hay'
+ck "L13 undeclared is NOT stale"               '! "$VIKI" notes --stale --k 9 2>/dev/null | grep -q hay'
+ck "L13b ... but --stale AGE judges it by claim age" \
+   'sleep 2; "$VIKI" notes --stale 1s --k 9 2>/dev/null | grep -q hay'
+ck "L13c CONTROL: a generous age still spares it" \
+   '! "$VIKI" notes --stale 30d --k 9 2>/dev/null | grep -q hay'
+ck "L14 an unleased claim is still NOT unclaimed" \
+   '! "$VIKI" notes --unclaimed --k 9 2>/dev/null | grep -q hay'
+ck "L15 a bare --heartbeat needs no duration"  '"$VIKI" structure "$HAY" --heartbeat >/dev/null 2>&1'
+ck "L16 an unleased claim can be challenged, and reports its age for judging" \
+   '"$VIKI" structure "$HAY" --challenge marta 2>&1 | grep -q "declared no lease"'
+
 ck "L11 GUARD: an unparseable --lease is refused, not treated as expired" \
    '! "$VIKI" structure "$CID" --who dave --force --lease "soon" >/dev/null 2>&1'
 

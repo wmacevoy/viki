@@ -415,7 +415,14 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
         "   AND (?3='' OR state=?3) AND (?4='' OR who=?4)"
         "   AND (?5='' OR ts >= ?5) AND (?6='' OR regexp(?6, text))"
         "   AND (%d=0 OR who IS NULL OR who='')"
-        "   AND (%d=0 OR (who IS NOT NULL AND who<>'' AND (lease='' OR lease < ?9)))"
+        /* An unleased claim is NOT stale -- it is UNDECLARED, and the two are
+        ** opposite. Judge it by the age of the claim instead, which is what a
+        ** person does anyway ("nobody has touched that in three days"). The
+        ** original predicate treated a missing lease as expired, which
+        ** punished exactly the claimer least able to fiddle with a phone --
+        ** someone mid-task delivering hay. */
+        "   AND (%d=0 OR (who IS NOT NULL AND who<>'' AND"
+        "        ((lease<>'' AND lease < ?9) OR (coalesce(lease,'')='' AND claimed < ?10))))"
         "   AND (?8='' OR closes=?8)"
         "   AND (%d=0 OR type IS NULL OR type='')"
         " ORDER BY ts %s LIMIT ?7",
@@ -437,9 +444,13 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
     {
         /* "now", for the lease comparison. Text, so the comparison is the
         ** same lexicographic one used everywhere else in this file. */
-        char zNow[32];
+        char zNow[32], zCut[32];
+        long age = parse_duration(f->staleAfter ? f->staleAfter : "1d");
         iso_now(zNow, sizeof(zNow));
+        if( age <= 0 ) age = 86400;
+        iso_plus(-age, zCut, sizeof(zCut));
         sqlite3_bind_text(st, 9, zNow, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 10, zCut, -1, SQLITE_TRANSIENT);
     }
     sqlite3_bind_text(st, 8, f->closes ? f->closes : "", -1, SQLITE_TRANSIENT);
 
@@ -646,14 +657,14 @@ int viki_cmd_structure_opts(sqlite3 *db, const char *zId, const viki_structure_o
             fprintf(stderr, "viki structure: %s has no holder to heart-beat\n", zId);
             return 1;
         }
+        /* A bare --heartbeat is "still on it" and needs no duration. Only
+        ** re-stamp the lease if the caller actually named one. */
         secs = parse_duration(opts->zLease ? opts->zLease : "");
-        if( secs <= 0 ){
-            fprintf(stderr, "viki structure: --heartbeat needs --lease <duration> "
-                            "(30s, 5m, 2h, 3d) -- a renewal must say for how long\n");
-            return 1;
+        if( secs > 0 ){
+            iso_plus(secs, leaseBuf, sizeof(leaseBuf));
+            zLease = leaseBuf;
         }
-        iso_plus(secs, leaseBuf, sizeof(leaseBuf));
-        zClaimed = nowBuf; zLease = leaseBuf; zChallenge = "";   /* answering clears it */
+        zClaimed = nowBuf; zChallenge = "";   /* answering clears the challenge */
         return structure_write(db, zId, NULL, NULL, NULL, NULL, NULL, NULL,
                                zClaimed, zLease, zChallenge, NULL);
     }
@@ -670,6 +681,22 @@ int viki_cmd_structure_opts(sqlite3 *db, const char *zId, const viki_structure_o
             fprintf(stderr, "viki structure: %s is held by %s under a live lease until %s "
                             "-- challenge refused\n", zId, who, lease);
             return 1;
+        }
+        if( !lease[0] ){
+            /* No lease declared, so there is nothing to have lapsed. Say when
+            ** it was claimed and let the challenger judge -- which is what
+            ** they were going to do anyway. */
+            char claimedAt[32] = "";
+            sqlite3_stmt *stC;
+            if( sqlite3_prepare_v2(db, "SELECT coalesce(claimed,'') FROM viki_note WHERE note_id=?1",
+                                   -1, &stC, NULL) == SQLITE_OK ){
+                sqlite3_bind_text(stC, 1, zId, -1, SQLITE_STATIC);
+                if( sqlite3_step(stC) == SQLITE_ROW )
+                    snprintf(claimedAt, sizeof(claimedAt), "%s", (const char*)sqlite3_column_text(stC, 0));
+                sqlite3_finalize(stC);
+            }
+            fprintf(stderr, "viki structure: %s declared no lease; claimed %s -- your call\n",
+                    who, claimedAt[0] ? claimedAt : "(time unknown)");
         }
         snprintf(chalBuf, sizeof(chalBuf), "%s %s", opts->zChallenge, nowBuf);
         fprintf(stderr, "viki structure: challenged %s's claim on %s -- "
@@ -693,6 +720,9 @@ int viki_cmd_structure_opts(sqlite3 *db, const char *zId, const viki_structure_o
                             "-- refusing to steal\n", who, zId, lease);
             return 1;
         }
+        /* No lease is not an invitation. The challenge-and-grace path still
+        ** applies; the only thing a lease changes is that it can REFUSE a
+        ** challenge outright. Undeclared means "judge it", not "take it". */
         if( !chal[0] ){
             fprintf(stderr, "viki structure: no challenge on record for %s. Ask first:\n"
                             "  viki structure %s --challenge %s\n", zId, zId, opts->zSteal);

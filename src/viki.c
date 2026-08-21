@@ -85,7 +85,7 @@ static void usage(void){
         "                           --closes marks the TARGET note closed and records the\n"
         "                           link, which is how \"tire fixed\" retires \"tire is flat\".\n"
         "  notes [--place P] [--type T] [--state S] [--who W] [--since ISO]\n"
-        "        [--unclaimed] [--stale]\n"
+        "        [--unclaimed] [--stale [AGE]]\n"
         "        [--grep RE] [--closes ID] [--last] [--k N]\n"
         "                           Query captured notes by FIELD, not by similarity: filter,\n"
         "                           aggregate, and order by time. Answers what `ask` cannot --\n"
@@ -253,6 +253,7 @@ int main(int argc, char **argv){
         const char *zPlace=NULL,*zType=NULL,*zState=NULL,*zWho=NULL,*zSince=NULL,*zGrep=NULL;
         const char *zCloses=NULL;
         int bLast = 0, nMax = 0, i, bUnclaimed = 0, bStale = 0;
+        const char *zStaleAfter = NULL;
         for( i = 2; i < argc; i++ ){
             if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
             else if( strcmp(argv[i], "--type") == 0 && i+1 < argc ) zType = argv[++i];
@@ -263,7 +264,11 @@ int main(int argc, char **argv){
             else if( strcmp(argv[i], "--closes") == 0 && i+1 < argc ) zCloses = argv[++i];
             else if( strcmp(argv[i], "--last") == 0 ) bLast = 1;
             else if( strcmp(argv[i], "--unclaimed") == 0 ) bUnclaimed = 1;
-            else if( strcmp(argv[i], "--stale") == 0 ) bStale = 1;
+            else if( strcmp(argv[i], "--stale") == 0 ){
+                bStale = 1;
+                /* Optional age: `--stale 3d`. Bare --stale keeps the default. */
+                if( i+1 < argc && argv[i+1][0] != '-' ) zStaleAfter = argv[++i];
+            }
             else if( strcmp(argv[i], "--k") == 0 && i+1 < argc ) nMax = atoi(argv[++i]);
             else { fprintf(stderr, "viki notes: unknown option '%s'\n", argv[i]); return 1; }
         }
@@ -278,7 +283,7 @@ int main(int argc, char **argv){
             nf.place=zPlace; nf.type=zType; nf.state=zState; nf.who=zWho;
             nf.since=zSince; nf.grep=zGrep; nf.closes=zCloses;
             nf.bLast=bLast; nf.nMax=nMax;
-            nf.bUnclaimed=bUnclaimed; nf.bStale=bStale;
+            nf.bUnclaimed=bUnclaimed; nf.bStale=bStale; nf.staleAfter=zStaleAfter;
             rc = viki_cmd_notes_filter(db, &nf);
         }
         sqlite3_close(db);
