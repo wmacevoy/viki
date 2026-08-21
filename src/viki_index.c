@@ -392,6 +392,7 @@ static int previously_seen_unchanged(sqlite3 *db, const char *path, long mtime, 
 ** (no meaningful filesystem mtime), which just means they're always
 ** re-hashed on every `viki index` run; content-hash dedup still avoids
 ** redundant re-chunking when the content itself hasn't changed. */
+
 static void index_text_blob(sqlite3 *db, const char *virtualPath, const char *data, size_t len,
                              long mtime, viki_embedder *emb, const char *modelId, int *nChunked){
     char hash[65];
@@ -721,6 +722,102 @@ static char *fossil_sql_framed(const char *zSql, size_t *pnOut){
     if( rc != 0 ){ free(zOut); *pnOut = 0; return NULL; }
     return zOut;
 }
+
+/* ---- incremental indexing: the rcvid high-water mark ----
+**
+** fossil stamps every artifact it RECEIVES with a monotonically increasing
+** blob.rcvid. That is the delta an `after-receive` hook is handed, and the
+** same delta a sqlite3_update_hook callback could only accumulate, so one
+** mechanism here serves both -- see QUEUE.md 28/29/30.
+**
+** THE MARK MUST NOT TRAVEL. rcvid is the LOCAL receive order of ONE
+** repository: two clones of the same project assign different rcvids to the
+** same artifact. viki_cache.c ships .viki/cache.db to peers as a uv blob
+** (D-12), so a mark stored in the cache would arrive on another machine
+** meaning something entirely different and silently skip real content. It
+** lives in a SIBLING file the cache push does not carry, stamped with the
+** project code so a mark from a different repository is detected and
+** ignored rather than trusted. */
+#define VIKI_RCVID_MARK ".viki/rcvid.mark"
+
+
+/* The mark file: "<project-code> <rcvid>". A SIBLING of cache.db and never
+** inside it, because viki_cache.c ships cache.db to peers as a uv blob and
+** rcvid is the LOCAL receive order of ONE repository -- two clones assign
+** different rcvids to the same artifact, so a travelling mark would silently
+** skip real content on arrival. The project code is stamped so a mark that
+** did travel some other way is detected rather than trusted. */
+static long read_rcvid_mark(void){
+    FILE *f = fopen(VIKI_RCVID_MARK, "r");
+    char proj[128] = "";
+    long v = -1;
+    if( !f ) return -1;
+    if( fscanf(f, "%127s %ld", proj, &v) != 2 ) v = -1;
+    fclose(f);
+    return v;
+}
+
+static int read_rcvid_mark_project(char *out, size_t n){
+    FILE *f = fopen(VIKI_RCVID_MARK, "r");
+    long v;
+    char proj[128] = "";
+    out[0] = '\0';
+    if( !f ) return 0;
+    if( fscanf(f, "%127s %ld", proj, &v) == 2 ) snprintf(out, n, "%s", proj);
+    fclose(f);
+    return out[0] != '\0';
+}
+
+static void write_rcvid_mark(const char *zProject, long v){
+    FILE *f = fopen(VIKI_RCVID_MARK, "w");
+    if( !f ) return;
+    fprintf(f, "%s %ld\n", zProject && zProject[0] ? zProject : "?", v);
+    fclose(f);
+}
+
+/* ONE fossil invocation answering all three questions the incremental path
+** needs: the project code, the repository's current max rcvid, and whether
+** anything arrived above the caller's mark.
+**
+** It is one call because each `fossil` invocation against an ENCRYPTED repo
+** pays ~470 ms of SQLCipher key derivation regardless of what it asks (see
+** FINDINGS). Three separate probes measured 1.42 s for a hub where NOTHING
+** had happened -- which defeats the purpose, since the reason this path
+** exists is that an after-receive hook runs synchronously in the pushing
+** client's request path. */
+static int repo_probe(long since, char *projOut, size_t nProj, long *pMax, int *pChanged){
+    char sql[768];
+    char *z;
+    const char *nl;
+    long maxRcvid = -1, nNew = 0;
+    projOut[0] = '\0';
+    sqlite3_snprintf(sizeof(sql), sql,
+        "SELECT 'p ' || length(cast("
+        "   coalesce((SELECT value FROM config WHERE name='project-code'),'?')"
+        "   || ' ' || coalesce((SELECT max(rcvid) FROM blob),0)"
+        "   || ' ' || (SELECT count(*) FROM blob WHERE rcvid > %ld) AS BLOB))"
+        " || ' x' || char(10) || "
+        "   coalesce((SELECT value FROM config WHERE name='project-code'),'?')"
+        "   || ' ' || coalesce((SELECT max(rcvid) FROM blob),0)"
+        "   || ' ' || (SELECT count(*) FROM blob WHERE rcvid > %ld);"
+        "SELECT '" VIKI_FRAME_EOF "';", since, since);
+    z = fossil_sql_framed(sql, NULL);
+    if( !z ) return 0;
+    nl = strchr(z, '\n');
+    if( nl ){
+        char proj[128] = "";
+        if( sscanf(nl + 1, "%127s %ld %ld", proj, &maxRcvid, &nNew) == 3 ){
+            snprintf(projOut, nProj, "%s", proj);
+            if( pMax ) *pMax = maxRcvid;
+            if( pChanged ) *pChanged = nNew > 0;
+            free(z);
+            return 1;
+        }
+    }
+    free(z);
+    return 0;
+}
+
 
 /* Composes "<zHeader>\n\n<body>" -- the frozen shape every new virtual
 ** class uses. The header line is built entirely in SQL (see each
@@ -1791,6 +1888,10 @@ static int gc_orphan_chunks(sqlite3 *db){
 }
 
 int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
+    return viki_cmd_index_since(db, zDir, emb, VIKI_SINCE_FULL);
+}
+
+int viki_cmd_index_since(sqlite3 *db, const char *zDir, viki_embedder *emb, long sinceRcvid){
     int nFiles = 0, nChunked = 0;
     int nWiki = 0, nWikiChunked = 0;
     int nTickets = 0, nTicketChunked = 0;
@@ -1802,10 +1903,42 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     int nUv = 0, nUvChunked = 0;
     VikiAuth auth;
     int nDropped, nOrphans;
+    int bIncremental = 0, bAnythingNew = 1;
+    long newMark = -1;
+    char projCode[128] = "";
     char *errmsg = NULL;
     const char *modelId = emb ? viki_embedder_model_id(emb) : VIKI_MODEL_NONE;
 
     memset(&auth, 0, sizeof(auth));
+
+    /* Resolve the incremental window before any extractor runs. */
+    if( sinceRcvid == VIKI_SINCE_AUTO ){
+        /* Read the mark from disk FIRST (free), so the single repo probe can
+        ** answer "anything above it?" in the same invocation. */
+        sinceRcvid = read_rcvid_mark();
+        if( sinceRcvid < 0 )
+            fprintf(stderr, "viki index: no rcvid mark yet -- full pass, and one will be left\n");
+    }
+    if( sinceRcvid >= 0 ){
+        char markProj[128] = "";
+        if( !repo_probe(sinceRcvid, projCode, sizeof(projCode), &newMark, &bAnythingNew) ){
+            fprintf(stderr, "viki index: cannot read blob.rcvid (no repository?) -- full pass\n");
+            sinceRcvid = VIKI_SINCE_FULL;
+        }else if( read_rcvid_mark_project(markProj, sizeof(markProj))
+                  && markProj[0] && projCode[0] && strcmp(markProj, projCode) != 0 ){
+            /* rcvid is the LOCAL receive order of ONE repository. A mark from
+            ** a different project is not merely stale, it is meaningless
+            ** here, and trusting it would silently skip real content. */
+            fprintf(stderr, "viki index: rcvid mark belongs to project %s, not %s "
+                            "-- ignoring it, full pass\n", markProj, projCode);
+            sinceRcvid = VIKI_SINCE_FULL;
+        }else{
+            bIncremental = 1;
+            fprintf(stderr, "viki index: incremental, rcvid > %ld (repo is at %ld). "
+                            "NOT authoritative -- nothing will be retired this run.\n",
+                    sinceRcvid, newMark);
+        }
+    }
 
     if( sqlite3_exec(db, "BEGIN", NULL, NULL, &errmsg) != SQLITE_OK ){
         fprintf(stderr, "viki index: BEGIN failed: %s\n", errmsg ? errmsg : "?");
@@ -1836,14 +1969,61 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     ** Ordered by measured episodic value, not alphabetically: check-in
     ** comments carry 9 of the 16 answers the coverage measurement said
     ** were unreachable. */
-    auth.wiki   = index_wiki(db, emb, modelId, &nWiki, &nWikiChunked);
-    auth.ticket = index_tickets(db, emb, modelId, &nTickets, &nTicketChunked);
-    auth.forum  = index_forum(db, emb, modelId, &nForum, &nForumChunked);
-    auth.ckin   = index_checkins(db, emb, modelId, &nCkin, &nCkinChunked);
-    auth.note   = index_technotes(db, emb, modelId, &nNote, &nNoteChunked);
-    auth.tchg   = index_ticket_changes(db, emb, modelId, &nTchg, &nTchgChunked);
-    auth.attach = index_attachments(db, emb, modelId, &nAttach, &nAttachChunked);
-    auth.uv     = index_unversioned(db, emb, modelId, &nUv, &nUvChunked);
+    if( bIncremental && !bAnythingNew ){
+        /* Nothing arrived at all. This is the DOMINANT case on a quiet hub,
+        ** and it is why an after-receive hook can afford to call viki on
+        ** every push: one indexed count(*) and we are done.
+        **
+        ** Deliberately a SINGLE check rather than eight per-class
+        ** predicates. Extracting a whole class is milliseconds (FINDINGS:
+        ** 3.26 MB framed in 25 ms) while eight hand-written rcvid predicates
+        ** is eight chances to be subtly and silently wrong about which
+        ** artifacts belong to a class. The expensive part -- embedding -- is
+        ** already skipped per content_hash by index_text_blob. */
+        fprintf(stderr, "viki index: no artifacts received since rcvid %ld -- "
+                        "skipping all extractors\n", sinceRcvid);
+    }else{
+        auth.wiki   = index_wiki(db, emb, modelId, &nWiki, &nWikiChunked);
+        auth.ticket = index_tickets(db, emb, modelId, &nTickets, &nTicketChunked);
+        auth.forum  = index_forum(db, emb, modelId, &nForum, &nForumChunked);
+        auth.ckin   = index_checkins(db, emb, modelId, &nCkin, &nCkinChunked);
+        auth.note   = index_technotes(db, emb, modelId, &nNote, &nNoteChunked);
+        auth.tchg   = index_ticket_changes(db, emb, modelId, &nTchg, &nTchgChunked);
+        auth.attach = index_attachments(db, emb, modelId, &nAttach, &nAttachChunked);
+        auth.uv     = index_unversioned(db, emb, modelId, &nUv, &nUvChunked);
+    }
+
+    if( bIncremental ){
+        /* THE SAFETY PROPERTY OF THIS WHOLE FEATURE. sweep_sources() retires
+        ** every source it did not observe, and an incremental run
+        ** deliberately does not observe what did not change -- so sweeping
+        ** after one would delete almost the entire cache. Forcing the auth
+        ** flags off is the existing mechanism doing exactly what it was built
+        ** for, and it is why `--since` cannot be a mere query optimisation
+        ** bolted onto the full path. */
+        memset(&auth, 0, sizeof(auth));
+    }
+
+    /* Advance the mark after ANY successful run, incremental or not.
+    **
+    ** A full pass has by definition seen everything up to the current max, so
+    ** it is entitled to say so -- and if it does not, `--since auto` can never
+    ** BOOTSTRAP: with no mark it correctly falls back to a full pass, and if
+    ** that pass leaves no mark behind then every subsequent `auto` run is also
+    ** full, forever. Measured before the fix: a "quiet hub" incremental run
+    ** took 3.7s and re-extracted everything, silently, while reporting
+    ** success. */
+    {
+        long mark = newMark;
+        if( mark < 0 ){
+            int dummy;
+            repo_probe(-1, projCode, sizeof(projCode), &mark, &dummy);
+        }
+        if( mark >= 0 ){
+            write_rcvid_mark(projCode, mark);
+            fprintf(stderr, "viki index: rcvid mark advanced to %ld\n", mark);
+        }
+    }
 
     /* Invalidation, in this order: retire the sources that are gone, THEN
     ** collect the chunks nothing points at any more. Running the GC second

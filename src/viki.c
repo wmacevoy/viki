@@ -28,7 +28,14 @@
 static void usage(void){
     fprintf(stderr,
         "usage: viki <subcommand> [args...]\n\n"
-        "  index [dir]              Walk dir (default: .) and (re)index into the local cache\n"
+        "  index [dir] [--since N|auto]\n"
+        "                           Walk dir (default: .) and (re)index into the local cache.\n"
+        "                           --since indexes only when artifacts arrived above that\n"
+        "                           blob.rcvid ('auto' uses the stored mark), for an\n"
+        "                           after-receive hook that must not stall the pushing client.\n"
+        "                           An incremental run is NOT authoritative: nothing is\n"
+        "                           retired, because it deliberately does not look at what\n"
+        "                           did not change.\n"
         "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found.\n"
         "                           Each hit prints one header line, then the snippet indented 4 spaces:\n"
         "                             [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>\n"
@@ -159,12 +166,20 @@ int main(int argc, char **argv){
     if( strcmp(sub, "index") == 0 ){
         sqlite3 *db;
         viki_embedder *emb;
-        const char *dir = argc > 2 ? argv[2] : ".";
+        const char *dir = argc > 2 && argv[2][0] != '-' ? argv[2] : ".";
+        long since = VIKI_SINCE_FULL;
+        int ai;
+        for( ai = 2; ai < argc; ai++ ){
+            if( strcmp(argv[ai], "--since") == 0 && ai + 1 < argc ){
+                const char *z = argv[++ai];
+                since = strcmp(z, "auto") == 0 ? VIKI_SINCE_AUTO : strtol(z, NULL, 10);
+            }
+        }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
         emb = open_embedder_if_available();
         if( !emb ) fprintf(stderr, "viki index: no embedding model found -- indexing BM25-only (rung 0)\n");
-        rc = viki_cmd_index(db, dir, emb);
+        rc = viki_cmd_index_since(db, dir, emb, since);
         if( emb ) viki_embedder_close(emb);
         sqlite3_close(db);
         return rc;
