@@ -296,12 +296,13 @@ static void print_note_row(void *pCtx, const viki_note_row *r){
 
 int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
                    const char *zState, const char *zWho, const char *zSince,
-                   const char *zGrep, int bLast, int nMax){
+                   const char *zGrep, const char *zCloses, int bLast, int nMax){
     viki_note_filter f;
     int n;
     memset(&f, 0, sizeof(f));
     f.place=zPlace; f.type=zType; f.state=zState; f.who=zWho;
-    f.since=zSince; f.grep=zGrep; f.bLast=bLast; f.nMax=nMax;
+    f.since=zSince; f.grep=zGrep; f.closes=zCloses;
+    f.bLast=bLast; f.nMax=nMax;
     n = viki_note_query(db, &f, print_note_row, NULL);
     if( n < 0 ) return 1;
     if( n == 0 ) fprintf(stderr, "(no notes match)\n");
@@ -332,6 +333,7 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
         " WHERE (?1='' OR place=?1) AND (?2='' OR type=?2)"
         "   AND (?3='' OR state=?3) AND (?4='' OR who=?4)"
         "   AND (?5='' OR ts >= ?5) AND (?6='' OR regexp(?6, text))"
+        "   AND (?8='' OR closes=?8)"
         "   AND (%d=0 OR type IS NULL OR type='')"
         " ORDER BY ts %s LIMIT ?7",
         f->bPending ? 1 : 0, f->bPending ? "ASC" : "DESC");
@@ -348,6 +350,7 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
     sqlite3_bind_text(st, 5, f->since ? f->since : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 6, f->grep ? f->grep : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(st, 7, f->bLast ? 1 : (f->nMax > 0 ? f->nMax : 50));
+    sqlite3_bind_text(st, 8, f->closes ? f->closes : "", -1, SQLITE_TRANSIENT);
 
     while( sqlite3_step(st) == SQLITE_ROW ){
         viki_note_row r;

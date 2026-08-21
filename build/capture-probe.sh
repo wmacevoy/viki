@@ -100,6 +100,18 @@ FIX=$("$VIKI" structure --pending 2>/dev/null | grep "tire for utv fixed" | cut 
 ck "ST6 --closes retires the TARGET note"           '! "$VIKI" notes --state open 2>/dev/null | grep -q "tire is flat"'
 ck "ST6b ... and the link is recorded, not just the state"    '"$VIKI" notes --k 99 2>/dev/null >/dev/null; grep -q "^@closes $FLAT" captures/*.md'
 ck "ST6c CONTROL: an unrelated open note is untouched"    '"$VIKI" structure --pending 2>/dev/null | grep -q "camper" || "$VIKI" notes 2>/dev/null | grep -q "camper"'
+# ST6b proves the link is WRITTEN by grepping the capture file, which is
+# exactly what a caller had to do before `notes --closes` existed: the
+# supersession link was write-only, so "what retired this?" fell out of the
+# projection and back onto the files. ST6d asks it as a QUERY instead.
+ck "ST6d --closes ID names the note that RETIRED ID" \
+   '[ "$("$VIKI" notes --closes "$FLAT" 2>/dev/null | grep -c "^$FIX")" -eq 1 ]'
+ck "ST6e ... and it is the successor, not the retired note itself" \
+   '! "$VIKI" notes --closes "$FLAT" 2>/dev/null | grep -q "tire is flat"'
+ck "ST6f CONTROL: an id nothing retired matches NOTHING" \
+   '[ "$("$VIKI" notes --closes "$FIX" 2>/dev/null | grep -c "^[0-9]\{8\}-")" -eq 0 ]'
+ck "ST6g CONTROL: --closes narrows -- without it the note is still listed" \
+   '"$VIKI" notes --k 99 2>/dev/null | grep -q "tire is flat"'
 
 # ---- the @type vocabulary: warned, never enforced ----
 mkdir -p "$DIR/vocab" && cd "$DIR/vocab"
@@ -151,6 +163,8 @@ if command -v curl >/dev/null 2>&1; then
   ck "H5 POST /api/capture with the header works" 'curl -sf -X POST -H "$H" "http://127.0.0.1:'$PORT'/api/capture?text=api+note&type=task" | grep -q "\"ok\":true"'
   ck "H6 POST /api/reindex projects it"           'curl -sf -X POST -H "$H" "http://127.0.0.1:'$PORT'/api/reindex" | grep -q "\"ok\":true"'
   ck "H7 GET /api/notes filters by type"          'curl -sf "http://127.0.0.1:'$PORT'/api/notes?type=task" | grep -q "api note"'
+  ck "H7b GET /api/notes takes closes= too, so CLI and API cannot drift" \
+     '[ "$(curl -sf "http://127.0.0.1:'$PORT'/api/notes?closes=nothing-retired-this" | sed -n "s/.*\"count\":\([0-9]*\).*/\1/p")" = "0" ]'
   ck "H8 GUARD: POST without the header is refused" \
      '[ "$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:'$PORT'/api/capture?text=driveby")" = "403" ]'
   ck "H8b ... and the drive-by did NOT capture anything" \

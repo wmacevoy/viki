@@ -69,9 +69,14 @@ typedef struct {
 
 typedef void (*viki_note_cb)(void *pCtx, const viki_note_row *row);
 
-/* Filters. Empty/NULL means "no filter on that field". */
+/* Filters. Empty/NULL means "no filter on that field".
+**
+** `closes` is the SUPERSESSION filter and it reads backwards from the others:
+** every other field asks "which notes look like this", `closes` asks "which
+** note RETIRED that one". It matches the raw note id -- unlike place/type/
+** who/state it is never normalize_key'd, because an id is an id. */
 typedef struct {
-    const char *place, *type, *state, *who, *since, *grep;
+    const char *place, *type, *state, *who, *since, *grep, *closes;
     int bLast;      /* only the most recent match */
     int nMax;
     int bPending;   /* untyped captures only -- the agent's work queue */
@@ -110,9 +115,16 @@ int viki_cmd_structure_apply(sqlite3 *db, const char *zId, const char *zType,
 
 /* `viki notes [filters]` -- the aggregation and recency surface.
 ** NULL/0 means "no filter on that field". bLast returns only the most recent
-** match, which is the "who baited rimi site last" shape. */
+** match, which is the "who baited rimi site last" shape.
+**
+** zCloses is the other half of `structure --closes`: writing the link made
+** supersession explicit, but without a filter the link was write-only -- a
+** closed note said only THAT it was retired, and finding what retired it
+** meant grepping the capture files by hand for `@closes <id>`, which is
+** exactly the "read the files, not the projection" habit this table exists
+** to end. `viki notes --closes <old-id>` answers it as a query. */
 int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
                    const char *zState, const char *zWho, const char *zSince,
-                   const char *zGrep, int bLast, int nMax);
+                   const char *zGrep, const char *zCloses, int bLast, int nMax);
 
 #endif

@@ -452,6 +452,7 @@ static void note_json_row(void *pCtx, const viki_note_row *r){
 static int handle_notes(sbuf *body, sqlite3 *db, const char *query, int bPending){
     char place[128]={0}, type[64]={0}, state[32]={0}, who[128]={0};
     char since[64]={0}, grep[256]={0}, kbuf[16]={0}, last[8]={0};
+    char closes[64]={0};
     viki_note_filter f;
     note_json_ctx ctx;
     int n;
@@ -462,12 +463,13 @@ static int handle_notes(sbuf *body, sqlite3 *db, const char *query, int bPending
     get_query_param(query, "who",   who,   sizeof(who));
     get_query_param(query, "since", since, sizeof(since));
     get_query_param(query, "grep",  grep,  sizeof(grep));
+    get_query_param(query, "closes",closes,sizeof(closes));
     get_query_param(query, "k",     kbuf,  sizeof(kbuf));
     get_query_param(query, "last",  last,  sizeof(last));
 
     memset(&f, 0, sizeof(f));
     f.place = place; f.type = type; f.state = state; f.who = who;
-    f.since = since; f.grep = grep;
+    f.since = since; f.grep = grep; f.closes = closes;
     f.bLast = last[0] && last[0] != '0';
     f.nMax = kbuf[0] ? atoi(kbuf) : 50;
     f.bPending = bPending;

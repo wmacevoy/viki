@@ -83,11 +83,14 @@ static void usage(void){
         "                           --closes marks the TARGET note closed and records the\n"
         "                           link, which is how \"tire fixed\" retires \"tire is flat\".\n"
         "  notes [--place P] [--type T] [--state S] [--who W] [--since ISO]\n"
-        "        [--grep RE] [--last] [--k N]\n"
+        "        [--grep RE] [--closes ID] [--last] [--k N]\n"
         "                           Query captured notes by FIELD, not by similarity: filter,\n"
         "                           aggregate, and order by time. Answers what `ask` cannot --\n"
         "                           \"what is open at monument rocks\" (a list, not five chunks)\n"
         "                           and \"who did X last\" (a superlative similarity cannot do).\n"
+        "                           --closes ID reads the supersession link BACKWARDS: it\n"
+        "                           returns the note that RETIRED ID, so a closed note's\n"
+        "                           history is a query and not a grep of the capture files.\n"
         "  serve [--host H] [--port N]\n"
         "                           Local HTTP server: human search page at / plus a JSON API for\n"
         "                           agents/scripts (GET /api/ask?q=&k=, /api/chunk?hash=&ix=,\n"
@@ -235,6 +238,7 @@ int main(int argc, char **argv){
     if( strcmp(sub, "notes") == 0 ){
         sqlite3 *db;
         const char *zPlace=NULL,*zType=NULL,*zState=NULL,*zWho=NULL,*zSince=NULL,*zGrep=NULL;
+        const char *zCloses=NULL;
         int bLast = 0, nMax = 0, i;
         for( i = 2; i < argc; i++ ){
             if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
@@ -243,13 +247,14 @@ int main(int argc, char **argv){
             else if( strcmp(argv[i], "--who") == 0 && i+1 < argc ) zWho = argv[++i];
             else if( strcmp(argv[i], "--since") == 0 && i+1 < argc ) zSince = argv[++i];
             else if( strcmp(argv[i], "--grep") == 0 && i+1 < argc ) zGrep = argv[++i];
+            else if( strcmp(argv[i], "--closes") == 0 && i+1 < argc ) zCloses = argv[++i];
             else if( strcmp(argv[i], "--last") == 0 ) bLast = 1;
             else if( strcmp(argv[i], "--k") == 0 && i+1 < argc ) nMax = atoi(argv[++i]);
             else { fprintf(stderr, "viki notes: unknown option '%s'\n", argv[i]); return 1; }
         }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
-        rc = viki_cmd_notes(db, zPlace, zType, zState, zWho, zSince, zGrep, bLast, nMax);
+        rc = viki_cmd_notes(db, zPlace, zType, zState, zWho, zSince, zGrep, zCloses, bLast, nMax);
         sqlite3_close(db);
         return rc;
     }
