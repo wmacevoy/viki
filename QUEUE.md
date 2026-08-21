@@ -688,3 +688,29 @@ Triggers keep one legitimate home: `.viki/cache.db`, which viki owns end to end 
 untrusted party writes to. In-database reactions are safe there.
 PREREQUISITE, unbuilt: viki has no notion of rcvid at all. Needs a persisted high-water mark
 and extractors that can answer "what changed since rcvid N".
+
+## 30. sqlite3_update_hook: right for IN-PROCESS only, and it converges with 29 (2026-08-21)
+Warren asked about sqlite3_update_hook. MEASURED with a standalone C probe against viki's own
+sqlite3.o, five cases:
+  [1] insert, same connection          -> update_hook FIRED, commit_hook FIRED
+  [2] insert then ROLLBACK             -> update_hook FIRED ANYWAY, then rollback_hook
+  [3] insert from a SECOND connection  -> NOTHING
+  [4] WITHOUT ROWID table              -> update_hook did NOT fire (commit_hook did)
+  [5] DELETE FROM x (truncate opt)     -> update_hook did NOT fire (commit_hook did)
+**[3] DECIDES THE ARCHITECTURE.** update_hook is strictly per-connection: it cannot observe
+another connection's writes, let alone another process's. So viki-as-a-separate-process still
+cannot watch fossil's sync with it, and 28/29 stand unchanged for the hub.
+**It IS the right mechanism for the in-process case** -- vikilib/FFI, where ../fossil-sqlcipher-
+libressl/embed/ already exists. Push instead of pull, no shell, no server.
+THREE CAVEATS, all measured, all load-bearing for that design:
+ - A ROLLED-BACK write still fires it. For offline peers a sync failing mid-transfer is
+   ORDINARY, not theoretical, so it MUST be paired with commit_hook or viki indexes artifacts
+   that never landed.
+ - Blind to WITHOUT ROWID tables and truncate-optimised deletes, so "nothing fired" NEVER
+   means "nothing changed". Any design that treats silence as evidence is wrong.
+ - SQLite forbids writing to the db from inside the callback, so it can only ENQUEUE.
+**THE CONVERGENCE, which is the useful part:** a callback that can only accumulate "these rids
+changed" is producing exactly the rcvid delta of 29, arrived at from the other end. Same
+delta, push instead of pull. So ONE indexing implementation serves both: poll blob.rcvid when
+viki is a separate process, register update_hook when it is in-process, and both feed the same
+`index --since` path. Build the `--since` path first; the two front ends are small after that.
