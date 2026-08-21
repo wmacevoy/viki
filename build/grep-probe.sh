@@ -18,6 +18,10 @@
 #   * "no matches" being indistinguishable from "pattern rejected" (C4/C5)
 #   * one chunk printed once per source path when two files share a
 #     content_hash -- the DISTINCT/GROUP BY in viki_cmd_grep (C7)
+#   * a flag that works ALONE and not in company: -i chooses the SQL
+#     function name by format substitution, --since/--until are bound
+#     values on the statement that name builds, and testing each on its
+#     own can never catch one dropping the other (X1-X4)
 #
 # Usage: sh build/grep-probe.sh <scratch-dir> [viki-binary]
 set -e
@@ -91,6 +95,40 @@ ck "T2b CONTRACT: WITHOUT --time the header line is byte-for-byte unchanged" \
    '! "$VIKI" grep "document about pumps" 2>/dev/null | grep -qE "\[[0-9]{4}-[0-9]{2}-[0-9]{2}T"'
 ck "T5b CONTROL: without it, order is by hash not time" \
    '[ "$("$VIKI" grep "pumps" --k 9 2>/dev/null | grep -c "^\[")" -eq 2 ]'
+
+# ---- -i COMPOSED WITH the time filters ----
+# C3/C3b prove -i alone; T3/T4 prove --since/--until alone. Neither proves
+# they survive each other, and they do not travel by the same road: -i picks
+# the SQL function NAME by sqlite3_snprintf() into viki_cmd_grep's fixed zSql
+# buffer (`regexpi` vs `regexp`), while --since/--until are bound values ?3
+# and ?4 on the statement that name builds. A regression in either half is
+# SILENT in exactly the way this file exists to catch -- the -i half fails
+# closed (zero rows, printed as "no matches", indistinguishable from "your
+# corpus does not contain that"), and the --since half fails OPEN, quietly
+# handing back the old document the caller asked to exclude. X1/X2 are one
+# call read two ways so a single result cannot satisfy both by accident:
+# the uppercase pattern can only match through regexpi, and the excluded
+# document can only be dropped by ?3.
+ck "X1 -i and --since compose: the case-folded match survives the filter" \
+   '"$VIKI" grep "PUMPS" -i --since 2050-01-01 | grep -q "newer"'
+ck "X2 ...and --since still EXCLUDES, it is not ignored under -i" \
+   '! "$VIKI" grep "PUMPS" -i --since 2050-01-01 2>/dev/null | grep -q "older"'
+ck "X2b CONTROL: drop -i and the same call matches NOTHING" \
+   '! "$VIKI" grep "PUMPS" --since 2050-01-01 2>/dev/null | grep -q "^\["'
+ck "X3 -i and --until compose the other direction" \
+   '"$VIKI" grep "PUMPS" -i --until 2050-01-01 | grep -q "older"'
+ck "X3b ...and --until still excludes the new one under -i" \
+   '! "$VIKI" grep "PUMPS" -i --until 2050-01-01 2>/dev/null | grep -q "newer"'
+# The parse loop is a strcmp chain where --since consumes argv[++i]. Nothing
+# stops a future option from swallowing a neighbouring flag, and the failure
+# would look like "-i sometimes does not work", so pin ORDER-INDEPENDENCE by
+# comparing the two spellings byte-for-byte -- with -n so two empty outputs
+# cannot pass this by being equally broken.
+ck "X4 -i before or after --since is the same command" \
+   'A="$("$VIKI" grep "PUMPS" -i --since 2050-01-01 2>/dev/null)";
+    B="$("$VIKI" grep "PUMPS" --since 2050-01-01 -i 2>/dev/null)";
+    [ -n "$A" ] && [ "$A" = "$B" ]'
+
 # a cache written before the column existed must MIGRATE, not answer "nothing"
 sqlite3 .viki/cache.db "ALTER TABLE viki_source RENAME TO viki_source_old;
   CREATE TABLE viki_source(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL);
