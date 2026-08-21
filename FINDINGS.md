@@ -16,6 +16,188 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+## sqlite-vec was built, measured, and reverted: ndvss is the MORE portable engine, and wasm is why that matters
+
+2026-08-21. Recorded so nobody repeats the exercise. The swap was
+completed and CI-green on all eight jobs -- it was reverted on cost/benefit,
+not because it failed.
+
+**What it bought, measured rather than argued:**
+
+- Retrieval quality: **identical**. Both engines score `recall@1=0.209
+  recall@5=0.488 recall@k=0.674 MRR=0.338` on `corpus fp
+  94b0908c4729bc2c` (same corpus, `VIKI_BIN` varied).
+- Algorithmic improvement: **none**. sqlite-vec 0.1.9 has no ANN index --
+  its only `hnsw` mention is a credit comment on a borrowed NEON kernel.
+  Both engines are brute-force scans.
+- Speed: **never measured**, which is itself the finding. The swap was
+  argued for partly on engine quality without that number.
+
+**What it cost:**
+
+- **A Windows patch, where ndvss needed none.** `sqlite-vec.c:64` reads
+  `#ifndef _WIN32 / typedef u_int8_t uint8_t;` -- "not Windows implies the
+  BSD spellings exist". viki builds under MSYS2's **plain MSYS**, not
+  MINGW64, deliberately (`fork()`, BSD sockets), and plain MSYS does not
+  define `_WIN32`. So sqlite-vec takes its Unix branch on a platform with
+  `uint8_t` and no `u_int8_t`. viki is neither case upstream considered.
+- **Loss of wasm SIMD.** ndvss ships `similarity_functions_wasmsimd.h`
+  alongside neon/sve2/rvv/avx/sse41 kernels. An eventual wasm build --
+  here and for other consumers -- gets that for free from ndvss and would
+  have to be redone against sqlite-vec. **This is the durable reason, not
+  the arm64 bug.**
+
+**And the arm64 bug that motivated the whole thing is a five-line fix.**
+The SVE2 definitions are compile-time gated
+(`#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)`) while the Linux
+dispatch was runtime-gated only (`getauxval(AT_HWCAP2)`), so a build
+without `-march=...+sve` compiles the kernels out and still references
+them. The **Windows AArch64 branch a dozen lines below already had the
+right guard.** Fixed upstream in wmacevoy/sqlite-ndvss#1, verified both
+directions in an `arm64v8/debian:bookworm` container (patched compiles;
+unpatched fails with exactly the six undeclared-symbol errors), and CI's
+linux-arm64 leg dropped `experimental: true` as a result.
+
+**The reasoning error worth keeping.** CLAUDE.md said "do not fork
+sqlite-ndvss", so a compile bug in it was treated as unfixable and the
+conclusion became "replace the engine". But `vendor/sqlite-ndvss` **is
+already Warren's fork** -- patching it is maintaining what this project
+owns. A constraint read too literally turned a five-line fix into a
+dependency swap. When a rule seems to force an expensive answer, check
+whether the rule actually applies.
+
+sqlite-vec remains the better long-term home IF quantization-to-shrink-sync
+becomes a priority (it is the one benefit that survived, and it is
+unbuilt). Revisit then, with wasm coverage as an explicit requirement.
+
+---
+
+
+
+
+## `command -v sqlite3` is not a test that sqlite3 can do what you need, and it hid a red CI job for six commits
+
+`test/m1.sh` gated its database-corroboration assertions on
+
+```sh
+command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE3=1
+```
+
+Three of them (`H11`, `H11b`, `J1`) query `chunk_fts`, which is a **plain
+FTS5 virtual table**. A `sqlite3` built without the fts5 module cannot even
+PREPARE that statement. The GitHub macOS runner ships exactly such a build:
+
+```
+Error: in prepare, no such module: fts5
+test/m1.sh: line 91: [: : integer expression expected
+```
+
+Because the gate only asked whether the binary existed, the three ran, the
+failed call substituted an **empty string**, and the comparison failed. The
+job reported `87 passed, 3 failed, 0 skipped` -- which reads as *"viki did
+not withdraw the chunks"*, the exact opposite of the truth. `H8`/`H9`/`H10`
+assert the same withdrawal through `viki ask` and passed in the same run.
+
+It stayed unexamined for six commits on `main` because the `m1` job shares
+its red with `linux-arm64`, whose failure IS expected and documented (the
+sqlite-ndvss SVE2 bug) -- so the run summary looked like a known problem.
+It never reproduced locally: the stock macOS sqlite3 here (3.51.0,
+`/usr/bin/sqlite3`) does have fts5.
+
+Repro:
+
+```sh
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in *fts5*|*chunk_fts*)\n  echo "Error: in prepare, no such module: fts5" >&2; exit 1;; esac; done\nexec /usr/bin/sqlite3 "$@"\n' > /tmp/nofts5/sqlite3
+chmod +x /tmp/nofts5/sqlite3
+PATH=/tmp/nofts5:$PATH bash test/m1.sh
+```
+
+Fixed by probing capability (`HAVE_FTS5`, set only when `CREATE VIRTUAL
+TABLE ... USING fts5` actually works) and keeping it separate from
+`HAVE_SQLITE3` -- `E3`/`E3b`/`B2`/`C11` only need sqlite3 to OPEN a
+database and must not be skipped over a module they never touch. With the
+shim above the same run is now `87 passed, 0 failed, 3 skipped` and names
+the missing module. CI additionally installs an fts5-capable sqlite3 on
+macOS, because the job fails on any skip by design and three skipped
+assertions prove nothing.
+
+**The general claim: a presence check is not a capability check.** Every
+`command -v` gate in this tree is a candidate for the same bug, and the
+failure mode is not "the test skips" -- it is "the test runs, fails on
+empty output, and blames the code under test".
+
+---
+
+
+
+
+## `db_open_repository()` does not register `content()`, so in-process SQL is NOT equivalent to `fossil sql`
+
+Found 2026-08-21 while wiring `libfossilsee` into `fossil_sql_framed()`.
+
+Fossil's `content()`, `compress()`, `decompress()` and
+`gather_artifact_stats()` SQL functions are registered by
+`add_content_sql_commands()` in `sqlcmd.c`, which the **`fossil sql`
+command** calls -- not `db_open_repository()`. An embedder that opens a
+repository directly gets a connection where `content()` does not exist.
+
+Three of viki's seven extractors (`ckin:`, `note:`, `attach:`) call
+`content()`. Through the in-process path they all failed with
+`no such function: content`, which viki correctly read as "not
+authoritative" -- so the run reported
+
+```
+viki index: not authoritative this run for ticket: forum: note: tchg: attach: uv:
+```
+
+where the subprocess path reported only `ticket: forum: uv:`. **Nothing
+crashed and no error reached the user**; the extractors simply, silently,
+stopped extracting, and the only visible symptom was three extra
+namespaces in a line most readers skim.
+
+Repro: open a repo with `db_open_repository()` and run
+`SELECT content(uuid) FROM blob LIMIT 1;` -- `no such function: content`.
+Fix: call `add_content_sql_commands(g.db)` after opening.
+
+**The general claim, which is the part worth keeping:** "it opened the
+same database" is not the same as "it is the same interface". Fossil
+installs per-command SQL functions, and an embedding inherits none of
+them by default. `build/fossilsee-probe.sh`'s E3 assertion (authority
+verdicts identical down both paths) is what caught this, and it is the
+assertion to keep if any others are ever dropped.
+
+---
+
+## `fossil_sql_framed()` dereferenced an optional out-param, crashing `viki index --since` outside a checkout
+
+Found 2026-08-21 by inspection while adding the in-process path; present
+in git `HEAD` at `src/viki_index.c:722`:
+
+```c
+if( rc != 0 ){ free(zOut); *pnOut = 0; return NULL; }
+```
+
+`pnOut` is optional and `repo_probe()` passes NULL (line 804). `rc != 0`
+is reachable: `fossil sql` exits nonzero when the **repository cannot be
+opened**, which is exactly what happens outside a checkout --
+
+```
+$ cd /tmp/empty && fossil-see sql --readonly "SELECT 1;" ; echo $?
+1
+```
+
+-- and `run_capture()` returns a non-NULL empty buffer there, so the
+earlier `if( !zOut ) return NULL;` does not save it. `viki index --since
+auto` in any non-checkout directory therefore dereferenced NULL.
+
+Fixed by guarding the store. Worth noting how it survived: the crash needs
+the `--since` path AND a directory with no repository, and every test in
+the tree runs `--since` inside a checkout it just created.
+
+---
+
+
+
 
 ## A raw 256-bit key makes an encrypted repo 52x cheaper to open, and needs no patch anywhere
 

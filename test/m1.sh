@@ -162,6 +162,29 @@ HAVE_SQLITE3=0
 command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE3=1
 [ "$HAVE_SQLITE3" = 1 ] || printf '  note: no stock `sqlite3` on PATH -- corroborating db assertions will be skipped\n'
 
+# PRESENCE IS NOT CAPABILITY, and assuming it was cost six commits of a red
+# `m1 (macos-arm64)` nobody chased. Three assertions (H11, H11b, J1) query
+# `chunk_fts`, a PLAIN FTS5 virtual table -- a `sqlite3` built without the
+# fts5 module cannot even PREPARE that statement. On the GitHub macOS
+# runner it cannot: `Error: in prepare, no such module: fts5`. Because the
+# only gate was `command -v sqlite3`, those three ran anyway, the failed
+# call substituted an EMPTY STRING, and the comparison failed with
+# `[: : integer expression expected` -- which reads as "viki did not
+# withdraw the chunks", the exact opposite of the truth. H8/H9/H10 assert
+# the same withdrawal through `viki ask` and passed in the same run.
+#
+# So probe what is actually needed. Note this is a stricter gate than
+# HAVE_SQLITE3 and deliberately separate from it: E3/E3b/B2/C11 only need
+# sqlite3 to OPEN a database and must not be skipped over a missing module
+# they never use.
+HAVE_FTS5=0
+if [ "$HAVE_SQLITE3" = 1 ] \
+   && sqlite3 :memory: "CREATE VIRTUAL TABLE t USING fts5(x);" >/dev/null 2>&1; then
+    HAVE_FTS5=1
+fi
+[ "$HAVE_SQLITE3" != 1 ] || [ "$HAVE_FTS5" = 1 ] || \
+    printf '  note: `sqlite3` on PATH has no fts5 module -- chunk_fts assertions will be skipped\n'
+
 # An INDEPENDENT sha256, used to prove that the content_hash `viki ask`
 # prints is the real sha256 of the source bytes and not merely something
 # 64 hex characters long. Deliberately not viki's own sha256.c: a hash
@@ -1105,7 +1128,7 @@ check "H10 CONTROL: the wiki page and ticket survived the sweeps too" \
       'head -1 "$LOG/g.tkt.out" | $GREP -qE "${RANK1}ticket:[0-9a-f]+\$" \
        && $GREP -q "wiki:PumpMaintenance" "$LOG/g.tkt.out"' "$LOG/g.tkt.out"
 
-if [ "$HAVE_SQLITE3" = 1 ] && [ -n "$SHA256" ]; then
+if [ "$HAVE_FTS5" = 1 ] && [ -n "$SHA256" ]; then
     # Corroboration below the retrieval layer. chunk_fts is a PLAIN FTS5
     # table (not external-content), so a row deleted from viki_chunk and
     # left in chunk_fts would still be fully searchable -- assert BOTH.
@@ -1122,9 +1145,9 @@ if [ "$HAVE_SQLITE3" = 1 ] && [ -n "$SHA256" ]; then
            && [ "$(sqlite3 "$G/.viki/cache.db" "SELECT count(*) FROM viki_source WHERE path='"'"'./docs/grocery.md'"'"';")" = "1" ]'
 else
     skip_ "H11 the withdrawn chunks are gone from viki_chunk AND chunk_fts" \
-          "needs both sqlite3 and shasum/sha256sum"
+          "needs shasum/sha256sum and an fts5-capable sqlite3"
     skip_ "H11b CONTROL: the untouched document's rows are all still present" \
-          "needs both sqlite3 and shasum/sha256sum"
+          "needs shasum/sha256sum and an fts5-capable sqlite3"
 fi
 
 # ------------------------- 8. a mixed-epoch cache scores each chunk once --
@@ -1160,7 +1183,7 @@ else
     ( cd "$X" && VIKI_MODEL_DIR="$VIKI_MODEL_DIR" "$VIKI_BIN" index . \
         >"$LOG/j.index1.out" 2>"$LOG/j.index1.err" </dev/null ) || true
 
-    if [ "$HAVE_SQLITE3" = 1 ]; then
+    if [ "$HAVE_FTS5" = 1 ]; then
         # THE PRECONDITION. If this fails, everything below is vacuous:
         # there would be no duplicate rows to mis-score.
         check "J1 SETUP: the cache really holds two epochs of the same chunk" \
@@ -1168,7 +1191,8 @@ else
                && [ "$(sqlite3 "$X/.viki/cache.db" "SELECT count(*) FROM chunk_fts WHERE content_hash='"'"'$G_HASH'"'"' AND chunk_ix=0;")" = "2" ] \
                && [ "$(sqlite3 "$D/.viki/cache.db" "SELECT count(*) FROM chunk_fts WHERE content_hash='"'"'$G_HASH'"'"' AND chunk_ix=0;")" = "1" ]'
     else
-        skip_ "J1 SETUP: the cache really holds two epochs of the same chunk" "no sqlite3 on PATH"
+        skip_ "J1 SETUP: the cache really holds two epochs of the same chunk" \
+              "no fts5-capable sqlite3 on PATH"
     fi
 
     # Both asks run WITHOUT a model, so only the BM25 leg is live and the

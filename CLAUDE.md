@@ -141,6 +141,10 @@ sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliber
 sh build/grep-probe.sh <empty-dir>          # `viki grep`: ERE really ERE, -i, --k, --source
 sh build/muse-probe.sh <empty-dir>          # `viki muse`: undirected recall, no query
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
+sh build/fossilsee-probe.sh <empty-dir>     # in-process fossil SQL == subprocess.
+                                            #   Needs a built libfossilsee; REFUSES the
+                                            #   equivalence half without one rather than
+                                            #   passing vacuously
 build/dist/viki ndvss-selftest              # proves sqlite-ndvss is really statically linked
 build/dist/viki embed-selftest [model-dir]  # semantic property check, not just "didn't crash"
 bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE (not pass/fail)
@@ -193,7 +197,10 @@ change can break.
 m1.sh prints `RESULT: PASS WITH SKIPS` — by its own words "NOT a full
 Milestone 1 pass" — and exits 0 anyway. There is no single skip figure;
 each missing dependency has its own, all measured 2026-08-13 against the
-same binary: no model → `64 passed, 0 failed, 26 skipped`; no `sqlite3` →
+same binary: no model → `64 passed, 0 failed, 26 skipped`; an `sqlite3`
+with no **fts5 module** → `87 passed, 0 failed, 3 skipped` (H11/H11b/J1
+query `chunk_fts`; this is what the CI macOS runner ships, and it read as
+three hard FAILures until 2026-08-21); no `sqlite3` →
 `80 passed, 0 failed, 10 skipped`; neither → `57 passed, 0 failed, 33
 skipped`; all present → `90 passed, 0 failed, 0 skipped`. The skip sets
 overlap, so they do not add. A missing model does **not** skip the whole
@@ -203,8 +210,8 @@ Never read exit status alone; read the `N passed, N failed, N skipped`
 line. CI does exactly that and fails the job on any skip.
 
 CI (`.github/workflows/build.yml`) builds on linux-x86_64, linux-arm64
-(experimental), macos-arm64 and windows-x86_64, and runs `test/m1.sh` on the
-first and third of those — the other two carry an announce-only job leg named
+(experimental), macos-arm64 and windows-x86_64, and runs `test/m1.sh` **and
+`build/fossilsee-probe.sh`** on the first and third of those — the other two carry an announce-only job leg named
 `-- NOT RUN` explaining why. Adding a platform to the m1 matrix is what
 removes its announcement; there is no second list to keep in sync.
 
@@ -279,10 +286,30 @@ That is cache *fragmentation*, not corruption, and not an epoch bump — but the
 header formats are frozen, and changing one must be called out as
 cache-fragmenting.
 
-**Everything Fossil is a subprocess**, resolved by `viki_fossil_binary()`
-(`$VIKI_FOSSIL_BIN`, else `fossil-see` on PATH, else `fossil`). Nothing is
-linked in-process. In-process Fossil is a separate, unfinished track — before
-touching it, read `../fossil-sqlcipher-libressl/embed/README.md`, **not**
+**Fossil is a subprocess by default**, resolved by `viki_fossil_binary()`
+(`$VIKI_FOSSIL_BIN`, else `fossil-see` on PATH, else `fossil`). **Nothing is
+linked at build time and that is a hard constraint** — viki builds on four
+platforms with no fossil-see prerequisite.
+
+**The one exception is `viki_fossilsee.c`, and it is `dlopen`, not a link.**
+When `libfossilsee` is loadable, `fossil_sql_framed()` runs its SQL
+in-process; when it is absent, damaged or ABI-mismatched, it falls back to
+the subprocess silently. Degraded mode is a required path here exactly as it
+is for the model. The reason to prefer the in-process path is **not speed**
+(`viki index` issues ~7 queries per run, so it saves ~45ms): `fossil sql`
+exits 0 whether a query returned no rows *or failed to prepare*, which is the
+ambiguity that once let `sweep_sources()` delete every `forum:` row. In
+process, a failed prepare is a real error. `viki fossilsee-status` (hidden)
+says which path is live, and `build/fossilsee-probe.sh` is the standing proof
+the two agree. Two traps if you extend it: the ABI declarations in
+`viki_fossilsee.c` are a hand-copy of `embed/fossilsee.h` guarded only by
+`fossilsee_abi()`, and Fossil registers per-command SQL functions that
+`db_open_repository()` does not — `content()` was missing this way and three
+extractors silently produced nothing (FINDINGS.md).
+
+Everything *else* Fossil-related is still a subprocess, and the wider
+in-process track remains unfinished — before touching it, read
+`../fossil-sqlcipher-libressl/embed/README.md`, **not**
 `FFI_RISK.md`/`experiments/`, which are a frozen and now-outdated snapshot.
 
 **sqlite-ndvss is statically linked**, compiled with `-DSQLITE_CORE` and
@@ -303,8 +330,25 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   `zPath`/`nItems`/`pDb` naming, `/* ... */` comments with `**` continuation,
   no C99 declarations-after-statements in most files. Comments explain *why*,
   and cite `FINDINGS.md` when the reason was discovered empirically.
-- **`vendor/` is read-only upstream.** Vendor, don't edit — including
-  `vendor/sqlite-ndvss` (KICKOFF: do not fork it). Its aarch64-Linux build bug
+- **`vendor/` is read-only upstream**, with one deliberate exception:
+  `vendor/sqlite-ndvss` is **already Warren's fork**, so fixing a real
+  portability bug there is maintaining what this project owns, not forking
+  something it doesn't. KICKOFF's "do not fork it" was about not diverging
+  from upstream's *design*, and it has been read too literally at least
+  once — it is what pushed an engine swap (sqlite-vec) that was later
+  reverted. Send the fix upstream and pin past it; do not accumulate local
+  patches.
+
+  **Why ndvss and not sqlite-vec, decided 2026-08-21 after actually trying
+  the swap: PORTABILITY, and specifically wasm.** ndvss ships per-ISA
+  kernels including `similarity_functions_wasmsimd.h`, which matters for
+  the eventual wasm build (here and for other consumers of this engine).
+  It also builds under MSYS2's plain MSYS environment, which viki requires
+  for `fork()`/BSD sockets — sqlite-vec does not, without a patch:
+  `sqlite-vec.c` assumes `#ifndef _WIN32` implies the BSD `u_int8_t`
+  spellings exist, and plain MSYS is neither case. The swap was built,
+  measured and reverted rather than argued about; see FINDINGS.md for what
+  it did and did not buy. Its aarch64-Linux build bug
   is why CI's linux-arm64 job is `experimental: true`; that is a bug in that
   project, not something to work around here.
 - **Never `strtok_r` Fossil's TSV/line output** — it collapses empty fields and

@@ -182,7 +182,7 @@ matching ZERO rows, substitute the nearest vocabulary term by edit distance. Cor
 against terms that actually exist in THIS corpus, costs one lookup per failed term, leaves
 the hot path untouched. ~100 lines, no new process.
 
-## 11. sqlite-vec, as a LOCAL DERIVED INDEX only  (user asked 2026-08-16)
+## 11. TRIED AND REVERTED 2026-08-21 -- keep sqlite-ndvss. sqlite-vec, as a LOCAL DERIVED INDEX only
 Do NOT move the shared cache to vec0. Keep `viki_chunk` exactly as it is -- that is the
 artifact D-12 ships between peers and D-11 says is computed once -- and build the vec0
 table as a local index rebuilt from it. D-10 compliant by construction, NO epoch bump, no
@@ -191,6 +191,18 @@ Wins: better-maintained engine; retires the aarch64 SVE2 bug that has linux-arm6
 marked experimental; unlocks quantization later to shrink what travels over sync.
 VIKI_DESIGN.md already names sqlite-vec as the intended swap, so this is executing a
 settled decision, not a new one.
+
+OUTCOME: built to exactly that shape, CI-green on all eight jobs, then REVERTED on
+Warren's call. The decision reason is PORTABILITY, and specifically WASM -- ndvss ships
+similarity_functions_wasmsimd.h and builds under plain MSYS; sqlite-vec needed a Windows
+patch and would need wasm redone. Quality was measured IDENTICAL and neither engine has
+an ANN index, so nothing was given up. The arm64 bug that motivated the swap turned out
+to be a five-line upstream fix (wmacevoy/sqlite-ndvss#1) in a repo we already own.
+Full accounting in FINDINGS.md, including the reasoning error: "do not fork ndvss" was
+read as "cannot fix ndvss", when vendor/sqlite-ndvss IS our fork.
+REVISIT ONLY IF quantization-to-shrink-sync becomes a priority -- the one surviving
+benefit, still unbuilt -- and make wasm coverage an explicit requirement of that
+evaluation.
 
 ## 12. Meilisearch: take the IDEA, never the dependency  (user asked 2026-08-16)
 Stretch is large and cuts against viki's constraints: Rust server (or `milli`, a heavy
@@ -736,3 +748,121 @@ ACTIONS THIS UNBLOCKS OR CHANGES:
   UNENCRYPTED cache and never open the repo, so they pay no KDF. `viki serve` already holds
   the model and cache open. Its gap is COVERAGE (no /api/grep, no /api/muse), not architecture.
   Finishing the serve API is a day; the library is not.
+
+## 32. libfossilsee v0 SHIPPED -- and it did NOT ship for the reason §31 predicted
+     (built 2026-08-21, Warren asked for it directly: "i think libfossilsee is a foundation")
+
+WHAT SHIPPED. In ../fossil-sqlcipher-libressl: `embed/fossilsee.{h,c}`, `embed/build-lib.sh`,
+`embed/test-fossilsee.c` (16 assertions). In viki: `src/viki_fossilsee.{c,h}` (dlopen shim),
+`fossil_sql_framed()` wired to prefer it, `viki fossilsee-status` (hidden),
+`build/fossilsee-probe.sh` (19 assertions). Scope is READ-ONLY SQL only, enforced by an
+sqlite3 authorizer -- not documented-only, because the embed README is explicit that raw SQL
+writes to ticket/tktchng desync Fossil's hash-chained history from its SQL view.
+
+§31 SAID re-measure before building on latency grounds, and that was right: the honest number
+is ~45ms saved per `viki index` run (7 queries x ~6.5ms). NOT why it is worth having.
+The reason is the AUTHORITY signal -- `fossil sql` exits 0 for a failed query, the ambiguity
+that let sweep_sources() delete every forum: row. In-process, a failed prepare is a real error.
+If this had been built for speed it would have been a bad trade; it is a correctness fix that
+happens to also be faster.
+
+WHAT IT COST TO GET RIGHT (all found by the probes, none by inspection):
+- `db_open_repository()` does not register `content()`; three extractors silently produced
+  nothing. FINDINGS.md. The equivalence probe's E3 (authority verdicts) caught it.
+- Fossil caches the encryption key in a process-global (`zSavedKey`), so a second open
+  IGNORES the key it is handed -- a deliberately wrong key SUCCEEDED. Fixed in the library's
+  close path; it is the third such function-static found in that codebase.
+- `g.nameOfExe` must be primed or `db_open_repository()` segfaults.
+- viki's own `fossil_sql_framed()` had a NULL deref on the `--since` path, shipped in HEAD.
+
+STILL OPEN, IN PRIORITY ORDER:
+- ~~Forum unverified in-process~~ -- DONE the same day. `build/forum-e2e-probe.sh` is
+  `PASS=26 FAIL=0` down both paths against live posts, and the in-process leg was checked to
+  be non-vacuous (`fossilsee-status` reports the library loaded in that checkout, and `forum:`
+  is absent from the "not authoritative" line, so the extractor genuinely ran in-process).
+  Worth having done: forum is where this project's bugs historically hide.
+- **macOS arm64 only.** No Linux/Windows build of the library, and CI does not build it.
+  The dlopen shim itself is platform-guarded but untested off Darwin.
+- The ABI declarations in `viki_fossilsee.c` are a hand-copy of `embed/fossilsee.h`. Deliberate
+  (viki must compile with no copy of that project) and guarded by `fossilsee_abi()`, but the
+  guard is the ONLY thing between a skew and undefined behaviour. Do not add entry points
+  without bumping the ABI.
+- The library's prologue MIRRORS `fossil_main()`'s rather than sharing it. A future Fossil that
+  adds an init step compiles clean and fails at runtime. Durable fix is a
+  `fossil_embed_open_repository()` patched into main.c; see that repo's README.
+- The wider slices (wiki/sync/ticket argv shim) still need output capture, still unsolved.
+- §31's LAST bullet still stands and is still probably the better next move for agent IPC:
+  `viki serve` has no /api/grep and no /api/muse. That is a day's work and helps every agent;
+  this library helps a long-lived host process, which viki does not yet have.
+
+## 33. RESOLVED (2026-08-21). test/m1.sh was RED on macos-arm64 in CI for six commits
+     (noticed 2026-08-21 while adding libfossilsee CI; pre-dates that work)
+
+Every one of the last six `main` runs is red. Two separate causes are mixed together in
+that red, and only one of them is known-benign:
+
+- `linux-arm64` build fails. EXPECTED: that leg is `experimental: true`, the sqlite-ndvss
+  SVE2 dispatch bug, documented in FINDINGS.md and not viki's code.
+- **`m1 (macos-arm64)` fails: `87 passed, 3 failed, 0 skipped`.** NOT expected, not
+  announced anywhere, and it means the Milestone 1 definition-of-done gate is not actually
+  green on a platform the matrix claims to cover.
+
+Always the same three, and they have a shape:
+
+    FAIL  H11  the withdrawn chunks are gone from viki_chunk AND chunk_fts
+    FAIL  H11b CONTROL: the untouched document's rows are all still present
+    FAIL  J1   SETUP: the cache really holds two epochs of the same chunk
+
+WHAT IS ALREADY RULED OUT:
+- Not my libfossilsee change: present on main before it, identical assertions.
+- Not reproducible locally on macOS arm64, INCLUDING under CI's exact environment
+  (`TMPDIR=$PWD/m1-scratch VIKI_TEST_KEEP=1`): 90 passed, 0 failed, 0 skipped.
+- Not the withdrawal logic itself. H9/H10 assert the SAME withdrawal through `viki ask`
+  and both PASS in CI. What fails is only the corroboration done by shelling out to
+  `sqlite3` against `.viki/cache.db`.
+
+THE LEAD, and it fits all three: every failing assertion shells out to `sqlite3`, and the
+gate for those is
+
+    HAVE_SQLITE3=0
+    command -v sqlite3 >/dev/null 2>&1 && HAVE_SQLITE3=1
+
+which tests that the BINARY EXISTS, not that it can do what the assertions need -- H11 and
+H11b both query `chunk_fts`, an FTS5 virtual table, which a stock `sqlite3` without FTS5
+cannot even open. That is this project's favourite bug shape: a capability probe that
+checks presence. It would also explain the count exactly, because the run reports
+`0 skipped` -- m1.sh believes sqlite3 is usable and runs the assertions instead of skipping
+them.
+
+CONFIRMED, and it was the lead above. The CI log carries it verbatim:
+
+    Error: in prepare, no such module: fts5
+    test/m1.sh: line 91: [: : integer expression expected
+
+The runner's /usr/bin/sqlite3 has no fts5 module (the one here, 3.51.0, does -- which is
+why this never reproduced locally). The failed call substituted an EMPTY STRING, the
+comparison failed, and the result read as "viki did not withdraw the chunks" -- the exact
+opposite of the truth, since H8/H9/H10 assert the same withdrawal through `viki ask` and
+passed in the same run.
+
+Worth naming the process error too: the error was in the log the whole time. It was missed
+because the first grep for it hit the wrong job id and truncated its output -- which is why
+the entry above says "NOT CONFIRMED" rather than guessing.
+
+FIXED IN BOTH HALVES, because either alone is unsatisfying:
+
+- test/m1.sh now probes CAPABILITY, not presence. HAVE_FTS5 is set only when sqlite3 can
+  actually `CREATE VIRTUAL TABLE ... USING fts5`, and H11/H11b/J1 gate on it. Deliberately
+  SEPARATE from HAVE_SQLITE3: E3/E3b/B2/C11 only need sqlite3 to OPEN a database and must
+  not be skipped over a module they never use. Verified with a shim that simulates the
+  runner: 87 passed, 0 failed, 3 skipped, with a note naming the missing module -- instead
+  of 87/3/0 and `[: : integer expression expected`.
+- CI installs an fts5-capable sqlite3 on the macOS runner (`brew install sqlite`, then
+  $GITHUB_PATH to get past keg-only). Skipping would not be good enough: the run step fails
+  on ANY skip by design, and three skipped assertions are three assertions proving nothing.
+  The comment that used to sit in that spot said Homebrew sqlite is keg-only and therefore
+  "a fix that fixes nothing" -- right about the mechanism, wrong about the conclusion.
+
+THE GENERAL LESSON, which is the part worth keeping: `command -v X` tests that a binary
+EXISTS, not that it can do the thing you need. Every capability gate in this tree deserves
+the same suspicion.
