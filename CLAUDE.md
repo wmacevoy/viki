@@ -140,6 +140,14 @@ bash test/m1.sh                             # "0 failed, 0 skipped" == M1 met (s
 sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliberately omits
 sh build/grep-probe.sh <empty-dir>          # `viki grep`: ERE really ERE, -i, --k, --source
 sh build/muse-probe.sh <empty-dir>          # `viki muse`: undirected recall, no query
+sh build/vikiverse-up.sh <dir> [tribe] [--lan]  # stands up a WORKING vikiverse: one
+                                            #   encrypted hub served over real HTTP, a
+                                            #   `laptop` peer that has the model and does
+                                            #   the embedding, and a `phone` peer with NO
+                                            #   model that pulls cache+model as uv blobs
+                                            #   and still answers semantically. Writes a
+                                            #   README.txt and a vikiverse-down.sh.
+                                            #   DO NOT PIPE IT -- see its header
 sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests under CONTEST:
                                             #   a long same-topic document must bury the one
                                             #   chunk naming the identifier, or every
