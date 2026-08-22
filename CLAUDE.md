@@ -277,8 +277,15 @@ if `(content_hash, model_id)` is absent. **Nine** content types share one
 
 Each non-file class costs **one** `fossil sql` subprocess, not one per
 artifact, using a counted framing parsed by `framed_next()`. That is not
-tidiness: on an encrypted repo every `fossil` invocation pays a SQLCipher KDF
-(~0.5 s here), so per-artifact extraction is minutes where this is seconds.
+tidiness: every `fossil` invocation costs a process spawn plus repo open, so
+per-artifact extraction is O(artifacts) subprocesses where this is O(1).
+**The magnitude depends on the key form and the old figure here was the
+passphrase one.** Measured 2026-08-21, 40 reps: plaintext repo 5.71 ms/open,
+encrypted with a raw `x'<64 hex>'` key **5.99 ms**, encrypted with a
+passphrase **345.93 ms** — SQLCipher uses a raw 256-bit key directly and
+skips PBKDF2 entirely (FINDINGS.md). So the KDF is only a real cost for
+human-typed keys; the counted framing is still right, but do not justify it
+with a ~0.5 s per-open number.
 `viki_source.mtime` stays **0** for every virtual source and must — `fossil
 amend` changes `ecomment` without touching the check-in's own time, so a real
 mtime would make the fast-skip serve pre-amend text forever. Time belongs in
@@ -426,7 +433,18 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
 - **`viki index` invalidates, and its scoping rule is load-bearing.** Superseded
   and deleted sources are retired from `viki_source`, then chunks no longer
   referenced by any live source are deleted from **both** `viki_chunk` and
-  `chunk_fts` (a plain FTS5 table — nothing cascades). A run only invalidates
+  `chunk_fts` — nothing cascades. **`chunk_fts` is an EXTERNAL-CONTENT FTS5
+  table** (`content='viki_chunk'`) since 2026-08-21, which removed a full second
+  copy of every chunk's text and took **36.4%** off the artifact D-12 ships
+  (4,882,432 → 3,104,768 bytes, `VACUUM INTO`, same 245 matches). That makes
+  the **delete order load-bearing**: FTS5 keeps no text of its own, so it
+  re-reads `viki_chunk` to know which tokens to drop — delete the chunk row
+  first and the FTS delete succeeds, changes nothing, and *the withdrawn text
+  stays searchable*. `gc_orphan_chunks()` deletes **fts first, then
+  `viki_chunk`**, and m1's H11 is what catches a regression. Old caches
+  migrate on open (`migrate_chunk_fts()` in `viki_db.c`); `cache pull`
+  **rebuilds** the index rather than copying it, because external-content
+  entries are bound to rowids and rowids are assigned locally. A run only invalidates
   namespaces it can prove it observed: filesystem paths under the directory it
   actually walked, and each virtual namespace only when that extractor proved
   it ran (a `#viki-eof` sentinel row, **not** the exit status — `fossil sql`

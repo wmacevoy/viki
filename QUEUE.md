@@ -991,6 +991,17 @@ ALSO REPRODUCED, lower priority:
 M1-M9 DO NOT COVER ANY OF THIS. They prove D-12 blob integrity on one machine with the hub
 always reachable -- see VIKIVERSE.md, which no longer claims otherwise.
 
+POSSIBLE MECHANISM for gap 2 and the `required` tier, noted 2026-08-21:
+`sqlite3_deserialize()` makes an in-memory byte buffer BE a database -- no file, no
+VFS, no export step. It is live in the pinned amalgamation (3.53.4;
+`SQLITE_OMIT_DESERIALIZE` undefined, and build.sh does not define it). A read-only
+peer could hold cache.db as bytes it never writes to disk, which is the phone case.
+Costs one full copy resident in RAM (5.35 MB for viki's own cache today), and
+`SQLITE_DESERIALIZE_READONLY` avoids the growth problem. What it does NOT solve is
+querying the blob IN PLACE inside the repo -- that is impossible for reasons now in
+FINDINGS.md (overflow chains, zlib framing, ciphertext pages), so `cache pull`
+exporting to a real file stays correct.
+
 ## 37. The hub as scripted is PLAINTEXT, and ENCRYPTION.md's deltas were never folded in
      (found 2026-08-21 by an operations roleplay of VIKIVERSE.md; verified in server/)
 
@@ -1039,3 +1050,108 @@ than a plaintext repo with a reassuring name.
   but nothing shrinks automatically (no auto_vacuum in fossil; needs `rebuild --vacuum`),
   `uv rm` needs the same `y` capability, and clones that never sync again keep their copy
   forever.
+
+## 39. CROSS-REPO SEARCH: opening is free, so the cost model the design assumes is wrong
+     (measured 2026-08-21 while asking whether a read-only VFS buys lightweight recursive search)
+
+MEASURED on this machine, 40 reps each:
+  open + query one plaintext .viki/cache.db ............ 5.71 ms
+  open + query an encrypted .efossil (raw hex key) ..... 5.99 ms
+  ATTACH all three real cache.db here + UNION ALL scan .. 3.4 ms total
+
+So "don't open everything to find your socks" optimizes a non-cost at laptop scale.
+The real limits, in the order they actually arrive:
+
+1. SQLITE_MAX_ATTACHED = 10 (amalgamation:14869). A wall on COUNT, not cost;
+   compile-time raisable to 125. This is hit long before any timing matters.
+2. The vector leg is O(total chunks) -- ndvss has no ANN, so a cross-repo ask scans
+   the sum of every cache. 574 chunks (viki's own) is nothing; 574k is not.
+3. MATERIALIZATION, not opening: a repo not on this device. That is
+   caching={none,optional,required}, and the cost is network + disk.
+
+WHAT SQLITE ALREADY SHIPS, and why it does not fit. `ext/misc/unionvtab.c` provides
+`swarmvtab`, which is startlingly close to the ask: it opens source databases ON
+DEMAND, holds at most `maxopen` open (default 9, LRU), and takes a `missing=<udf>`
+callback invoked when a file is not on disk -- exactly the on-demand-fetch hook the
+caching tiers want. Two disqualifiers:
+  - Sources must be plain ROWID TABLES. FTS5 is a virtual table, so the BM25 leg
+    cannot be a swarmvtab source at all.
+  - Pruning is rowid/PK-range ONLY (`unionBestIndex`: `p->iColumn<0 ||
+    p->iColumn==pTab->iPK`). A rowid range cannot express "does this repo hold a
+    chunk near this vector?"
+Right plumbing, none of the pruning. Do not reach for it expecting the second half.
+
+A PER-REPO SUMMARY ("could this repo match?" without opening it) WAS PROPOSED HERE AND
+THEN MEASURED. It does not pay. Built 6 shards from real data -- viki/src 233,
+viki/docs 207, viki/test 120, viki/server 14, fossil-sqlcipher 17, viki-hub 6 (597
+chunks) -- computed k centroids per shard by k-means with a worst-case member radius,
+and scored 200 held-out chunk queries against ground truth from a full cosine scan:
+
+  K centroids/shard   keep top-1 shard        lossless radius bound
+   1                  69.0% recall / 29% scan   99.9% scanned
+   4                  69.5% recall / 31% scan   98.2% scanned
+   8                  77.5% recall / 31% scan   94.2% scanned
+  16                  74.5% recall / 31% scan   91.4% scanned
+
+Both halves fail. The LOSSLESS bound (prune only clusters that provably cannot hold a
+better point) prunes essentially NOTHING -- 384-dim embeddings put every cluster
+within reach of every query, which is the curse of dimensionality doing exactly what
+it does. The APPROXIMATE version saves ~70% of a scan but drops 22-31% of true top-1
+answers, which is not a search system. More centroids barely move it.
+
+DECISION 2026-08-21 (Warren): let the recursion idea go. If the blob is compressed you
+have to extract it to search it anyway, so the honest shape is EXTRACT -> CACHE ->
+SEARCH -- and locality of reference pays for it: if you looked once you will look
+again soon, so the extraction amortizes. That is already what viki does, and what
+caching={none,optional,required} is for. Do not reopen query-in-place or per-repo
+pruning without a corpus large enough to change the numbers above; at laptop scale
+opening is 6 ms and a full scan is milliseconds, so there is nothing to buy.
+
+D-10 ALREADY DOES THE HEAVY LIFTING, worth saying out loud: you never need to open
+the REPOS to search. Caches are the projection; a repo is opened only to fetch an
+artifact once you know which cache had it. Cross-repo search is search over caches,
+and the .efossil files stay closed.
+
+## 40. [DONE 2026-08-21] cache.db STORED EVERY CHUNK'S TEXT TWICE -- fixed, 36.4% off the shipped artifact
+     (measured 2026-08-21 on viki's own 5.35 MB cache)
+
+  viki_chunk ................ 2,461,696  50.8%
+  chunk_fts_content ......... 1,658,880  34.2%   <- a second full copy of chunk_text
+  chunk_fts_data ............   569,344  11.7%   <- the actual inverted index
+
+`chunk_fts` is a plain FTS5 table, so FTS5 keeps its own copy of every chunk's text
+beside `viki_chunk.chunk_text`. Raw totals confirm it: sum(length(chunk_text)) =
+1,088,065 vs sum(length(embedding)) = 881,664 -- the TEXT is the bigger half, and it
+is stored twice.
+
+FTS5's external-content option (`content=viki_chunk`) drops that copy while KEEPING
+`snippet()`. Contentless (`content=''`) would not, and snippet() is load-bearing for
+every surface and for the fragment markers. ~31% off the blob D-12 ships via
+`fossil uv` -- exactly what the phone / `required` tier pays for.
+
+DONE 2026-08-21. `chunk_fts` is now `content='viki_chunk', content_rowid='rowid'`.
+The UNINDEXED columns survived unchanged -- FTS5 fetches them from viki_chunk on
+demand -- so `viki_ask.c` needed NO edit at all, and snippet() still works.
+
+MEASURED: shipped artifact 4,882,432 -> 3,104,768 bytes (VACUUM INTO), **36.4%**,
+same 245 matches for the same query. `chunk_fts_content` is gone entirely and
+`chunk_fts_data` fell 569,344 -> 450,560.
+
+THE REAL HAZARD WAS NOT SIZE, IT WAS DELETE ORDER, and it was found by measuring
+rather than reasoning. External-content FTS5 keeps no text, so it re-reads
+viki_chunk to learn which tokens to remove. The pre-existing gc_orphan_chunks()
+deleted viki_chunk FIRST and chunk_fts second -- which under the new schema makes
+the FTS delete a silent no-op and leaves withdrawn text permanently searchable,
+exactly the defect that function exists to prevent. Repro in scratch SQL: with the
+old order a withdrawn chunk still matched its own distinctive term. Now fts-first;
+FTS5's own `integrity-check` passes; m1 H11 is the standing guard.
+
+Two more consequences, both handled: old caches migrate on open
+(`migrate_chunk_fts()`, detection on the stored schema SQL since there is no
+version column), and `cache pull` REBUILDS the index instead of copying
+`inc.chunk_fts`, because external-content entries are bound to rowids and rowids
+are assigned locally on merge. That also makes a peer running an older build
+mergeable, since the pull path no longer reads inc.chunk_fts at all.
+
+VERIFIED: m1.sh 90/0/0 (H11 included), cache-probe 17/0, fragment-probe 38/0/0,
+grep-probe 35/0, muse-probe 58/0/1, fossilsee-probe 19/0.

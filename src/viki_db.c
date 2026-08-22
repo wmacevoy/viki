@@ -8,6 +8,20 @@
 ** the only contract a consumer needs (see vendor/sqlite-ndvss/CLAUDE.md). */
 extern int sqlite3_ndvss_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 
+/* Shared by SCHEMA_SQL (fresh caches) and migrate_chunk_fts() (existing
+** ones) so the two definitions cannot drift apart -- the failure mode this
+** file already warns about for ALTER TABLE, one level up. */
+#define CHUNK_FTS_CREATE \
+    "CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(" \
+    "  chunk_text," \
+    "  content_hash UNINDEXED," \
+    "  model_id UNINDEXED," \
+    "  chunk_ix UNINDEXED," \
+    "  content = 'viki_chunk'," \
+    "  content_rowid = 'rowid'," \
+    "  tokenize = 'porter unicode61'" \
+    ");"
+
 static const char *SCHEMA_SQL =
     "CREATE TABLE IF NOT EXISTS viki_chunk("
     "  content_hash TEXT NOT NULL,"
@@ -17,13 +31,27 @@ static const char *SCHEMA_SQL =
     "  embedding    BLOB,"
     "  PRIMARY KEY(content_hash, model_id, chunk_ix)"
     ");"
-    "CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5("
-    "  chunk_text,"
-    "  content_hash UNINDEXED,"
-    "  model_id UNINDEXED,"
-    "  chunk_ix UNINDEXED,"
-    "  tokenize = 'porter unicode61'"
-    ");"
+    /* EXTERNAL-CONTENT FTS5. `content='viki_chunk'` means FTS5 stores only
+    ** the inverted index and reads column VALUES back from viki_chunk by
+    ** rowid, instead of keeping its own copy of every chunk's text. That
+    ** copy was 34.2% of a 5.35MB cache here (chunk_fts_content 1,658,880
+    ** bytes) -- pure duplication of viki_chunk.chunk_text, and it rode
+    ** along in the blob D-12 ships via `fossil uv` (QUEUE 40).
+    **
+    ** Contentless (`content=''`) would ALSO drop the copy but breaks
+    ** snippet(), which every surface and both fragment markers depend on.
+    ** External content keeps snippet() working -- the UNINDEXED columns
+    ** below are still queryable, fetched from viki_chunk on demand, so
+    ** viki_ask.c's BM25 query needed no change at all.
+    **
+    ** THE TRAP, measured before writing this: an external-content table
+    ** must be deleted from BEFORE its content row goes away. FTS5 needs to
+    ** re-read the original text to know which tokens to remove; if
+    ** viki_chunk's row is already gone the DELETE silently succeeds and
+    ** THE TEXT STAYS SEARCHABLE. That is exactly the withdrawal defect
+    ** gc_orphan_chunks() was written to prevent, so its two DELETEs are
+    ** now ordered fts-then-chunk and must stay that way. */
+    CHUNK_FTS_CREATE
     /* Side table: path -> (content_hash, mtime), so `viki index` can skip
     ** re-hashing/re-chunking files whose mtime hasn't moved. Not part of
     ** VIKI_DESIGN.md's schema block (which is intentionally content-
@@ -87,6 +115,44 @@ void viki_db_register_ndvss(void){
     sqlite3_auto_extension((void(*)(void))sqlite3_ndvss_init);
 }
 
+/* Rebuild chunk_fts as an external-content table on a cache built before
+** that change. `CREATE VIRTUAL TABLE IF NOT EXISTS` will not touch a table
+** that already exists, so without this an old cache keeps the duplicating
+** schema forever and silently never gets the 34% back (QUEUE 40).
+**
+** Detection is on the stored SQL rather than a version counter, because
+** the cache has no version column and adding one would need this same
+** migration to bootstrap it. Rebuilding is safe and cheap: chunk_fts is
+** DERIVED from viki_chunk (D-10), so dropping it loses nothing that
+** 'rebuild' cannot regenerate from the chunk text that is already there.
+**
+** Failure is deliberately non-fatal in the same spirit as the ALTER TABLE
+** loop above: a cache whose FTS could not be migrated still answers on the
+** vector leg, and refusing to open would be worse. */
+static void migrate_chunk_fts(sqlite3 *db){
+    sqlite3_stmt *st = NULL;
+    int bExternal = 0, bFound = 0;
+
+    if( sqlite3_prepare_v2(db,
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='chunk_fts'",
+            -1, &st, NULL) != SQLITE_OK ) return;
+    if( sqlite3_step(st) == SQLITE_ROW ){
+        const char *zSql = (const char*)sqlite3_column_text(st, 0);
+        bFound = 1;
+        /* strstr on the stored SQL: FTS5 records the option list verbatim,
+        ** and this file is the only thing that ever writes it. */
+        if( zSql && strstr(zSql, "content = 'viki_chunk'") ) bExternal = 1;
+    }
+    sqlite3_finalize(st);
+    if( !bFound || bExternal ) return;
+
+    /* Order matters only in that the drop must precede the create; the
+    ** rebuild then reads viki_chunk, which was never touched. */
+    if( sqlite3_exec(db, "DROP TABLE chunk_fts", NULL, NULL, NULL) != SQLITE_OK ) return;
+    if( sqlite3_exec(db, CHUNK_FTS_CREATE, NULL, NULL, NULL) != SQLITE_OK ) return;
+    sqlite3_exec(db, "INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')", NULL, NULL, NULL);
+}
+
 int viki_db_open(const char *zPath, sqlite3 **out){
     sqlite3 *db = NULL;
     char *errmsg = NULL;
@@ -147,6 +213,7 @@ int viki_db_open(const char *zPath, sqlite3 **out){
             ** precisely when it is actually needed. */
             sqlite3_exec(db, azMigrate[iMig], NULL, NULL, NULL);
         }
+        migrate_chunk_fts(db);
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS viki_source_ts ON viki_source(ts DESC)",
                      NULL, NULL, NULL);
     }

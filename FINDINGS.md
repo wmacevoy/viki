@@ -15,6 +15,104 @@ that entry as a dated block quote rather than by rewriting it.
 
 
 
+## A SQLite blob can back a database but can never be mmap'd, and SQLCipher turns the mmap path off per-pager rather than at build time
+
+2026-08-21. Recorded because "keep the cache inside the repo and query it in
+place" is an idea that will recur, and two of the three reasons it fails are
+not obvious.
+
+**Recursion is real and supported.** SQLite reaches its file only through the
+VFS (`xRead`/`xWrite`/`xTruncate`/`xFileSize`/`xLock`/`xSync`); nothing in
+that interface says "file", so an inner database backed by
+`sqlite3_blob_read()`/`sqlite3_blob_write()` on an outer one is a legitimate
+construction. `ext/misc/appendvfs.c` in the sqlcipher tree does the adjacent
+thing (a database at an offset inside another file -- how `sqlite3 --append`
+and SQLite Archive work). Two constraints bite: `sqlite3_blob_write()` CANNOT
+resize, so the inner db can never exceed its `zeroblob(N)` preallocation, and
+any statement modifying that row invalidates the handle (`SQLITE_ABORT`).
+
+**mmap of a blob is impossible, and it is structural.** Past the in-cell
+prefix a blob becomes an OVERFLOW CHAIN: a singly linked list of pages, each
+opening with a 4-byte big-endian next-page pointer. Measured, 100,000-byte
+blob at `page_size=4096`:
+
+```
+$ sqlite3 t.db "PRAGMA page_size=4096; CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
+                INSERT INTO t VALUES(1, randomblob(100000));"
+$ sqlite3 t.db "SELECT name,pagetype,count(*) FROM dbstat GROUP BY name,pagetype;"
+t|leaf|1            <- 2085 bytes in-cell
+t|overflow|24       <- 24 pages x 4080 bytes
+$ od -An -tu1 -j $((2*4096)) -N4 t.db     # page 3 -> next
+            0   0   0   4
+$ od -An -tu1 -j $((25*4096)) -N4 t.db    # page 26 -> end of chain
+            0   0   0   0
+```
+
+So there is no `(offset, length)` to hand `mmap`: the payload is interrupted
+by a pointer every page, and the pages need not be adjacent (they were only
+because the file was fresh). `sqlite3_blob_read()` exists to walk that chain.
+(4080 rather than the stock 4092 because macOS's system `sqlite3` reserves 12
+bytes/page -- header offset 20. Stock SQLite gives 4092.)
+
+SQLite does mmap, but the OUTER file: whole pages, read-only, via
+`xFetch`/`xUnfetch` (`sqlite3_io_methods` v3). Pointers to file pages, never
+to blob payloads.
+
+**And SQLCipher disables that path per-pager, not at build time.** The
+expectation going in was a build-time `SQLITE_MAX_MMAP_SIZE=0`; that define
+exists in `sqliteInt.h` but is guarded by `__OpenBSD__ || __QNXNTO__` and is
+stock SQLite, nothing to do with the codec. The real switch is in
+`setGetterMethod()`, and it is SQLCipher's own marked delta --
+`vendor/sqlcipher-libressl/src/pager.c:1074`:
+
+```c
+  }else if( USEFETCH(pPager)
+/* BEGIN SQLCIPHER */
+#ifdef SQLITE_HAS_CODEC
+   && pPager->xCodec==0
+#endif
+/* END SQLCIPHER */
+  ){
+    pPager->xGet = getPageMMap;
+```
+
+Correct -- a mapped page is ciphertext, so bypassing the codec would hand out
+garbage -- but it means the SAME BINARY takes the mmap path on a plaintext
+repo and the normal path on an `.efossil`. Same control shape as m1's E2/E3b.
+
+**What this rules out concretely.** Querying `.viki/cache.db` in place as a
+`uv:` blob inside the repo, skipping `viki cache pull`'s export, is blocked
+twice over and the VFS is neither reason: (1) fossil stores unversioned
+content zlib-compressed behind a 4-byte BE length prefix when `encoding=1`
+(`viki_index.c:1682`, measured), so the blob is a deflate stream and not a
+database image at all -- decompressing IS extracting; (2) the outer repo is
+SQLCipher, so its pages are ciphertext and there is no mapping to hand out.
+`cache pull` exporting to a real file is the right shape.
+
+**What it does NOT rule out:** `sqlite3_deserialize()`. Read the bytes into
+memory once and SQLite treats the buffer as a database with no VFS and no
+file. Present in the pinned amalgamation (3.53.4; `SQLITE_OMIT_DESERIALIZE`
+is not defined and `build/build.sh` does not define it). See QUEUE 36.
+
+**Settled the same day, so this does not read as an open door.** The reason
+to want query-in-place was lightweight recursive search across many repos --
+"don't open everything to find your socks". Measured, that premise is false:
+opening an encrypted repo costs 5.99 ms (5.71 ms plaintext), and ATTACHing
+all three real caches on this machine and scanning across them costs 3.4 ms.
+Per-repo centroid pruning was then built and measured against a full-scan
+ground truth and it does not pay either -- the lossless radius bound prunes
+1-9% of a 384-dim space, and the approximate form drops 22-31% of true top-1
+answers (QUEUE 39 has the table). **The shape is extract -> cache -> search**,
+paid for by locality of reference: a compressed blob has to be extracted to be
+searched at all, and if you looked once you will look again soon. That is
+already what viki does.
+
+---
+
+
+
+
+
 
 ## sqlite-vec was built, measured, and reverted: ndvss is the MORE portable engine, and wasm is why that matters
 

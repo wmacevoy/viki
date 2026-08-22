@@ -765,16 +765,23 @@ static int cache_merge_in(const char *zCacheDbPath, const char *zIncoming){
         "BEGIN;"
         "INSERT OR IGNORE INTO viki_chunk(content_hash,model_id,chunk_ix,chunk_text,embedding)"
         "  SELECT content_hash,model_id,chunk_ix,chunk_text,embedding FROM inc.viki_chunk;"
-        /* chunk_fts is a PLAIN fts5 table with no unique constraint, so
-        ** OR IGNORE cannot help -- the anti-join is what stops duplicate
-        ** rows, which would otherwise inflate BM25 for the duplicated
-        ** chunk. */
-        "INSERT INTO chunk_fts(chunk_text,content_hash,model_id,chunk_ix)"
-        "  SELECT i.chunk_text,i.content_hash,i.model_id,i.chunk_ix FROM inc.chunk_fts i"
-        "  WHERE NOT EXISTS (SELECT 1 FROM chunk_fts c"
-        "                     WHERE c.content_hash=i.content_hash"
-        "                       AND c.model_id=i.model_id"
-        "                       AND c.chunk_ix=i.chunk_ix);"
+        /* The FTS index is REBUILT from the merged viki_chunk rather than
+        ** copied out of inc.chunk_fts, and that is not laziness.
+        ** chunk_fts is external-content (viki_db.c), so an entry is bound
+        ** to a viki_chunk ROWID -- and rowids are assigned locally by the
+        ** INSERT above, so the incoming cache's rowids name different rows
+        ** here (or no rows at all). Copying them would produce an index
+        ** whose snippets and deletes silently resolve to the wrong chunk.
+        **
+        ** Rebuilding is also what makes a peer running an OLDER build
+        ** mergeable: inc.chunk_fts may still be a plain fts5 table with an
+        ** incompatible shape, and this path no longer reads it at all.
+        ** Only inc.viki_chunk -- unchanged by that work -- is required.
+        **
+        ** Cost is O(local corpus) per pull instead of O(delta). Pull is not
+        ** a hot path (it follows a network sync), and correctness here is
+        ** the thing that was already broken twice; see QUEUE 40. */
+        "INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild');"
         "COMMIT;", NULL, NULL, &zErr);
     if( rc != SQLITE_OK ){
         fprintf(stderr, "viki cache pull: merge failed: %s\n", zErr ? zErr : "(no message)");

@@ -242,9 +242,15 @@ static int insert_chunks(sqlite3 *db, const char *hash, const char *text, size_t
         "INSERT INTO viki_chunk(content_hash, model_id, chunk_ix, chunk_text, embedding) "
         "VALUES(?1, ?2, ?3, ?4, ?5)", -1, &stChunk, NULL);
     if( rc != SQLITE_OK ){ free(vec); return rc; }
+    /* rowid is explicit because chunk_fts is EXTERNAL-CONTENT (viki_db.c):
+    ** FTS5 stores no text of its own and reads it back from viki_chunk by
+    ** rowid, so an entry whose rowid does not name its viki_chunk row is
+    ** unresolvable -- snippet() returns nothing and the delete path cannot
+    ** find the tokens to remove. Bound from sqlite3_last_insert_rowid()
+    ** immediately after the chunk insert below. */
     rc = sqlite3_prepare_v2(db,
-        "INSERT INTO chunk_fts(chunk_text, content_hash, model_id, chunk_ix) "
-        "VALUES(?1, ?2, ?3, ?4)", -1, &stFts, NULL);
+        "INSERT INTO chunk_fts(rowid, chunk_text, content_hash, model_id, chunk_ix) "
+        "VALUES(?1, ?2, ?3, ?4, ?5)", -1, &stFts, NULL);
     if( rc != SQLITE_OK ){ sqlite3_finalize(stChunk); free(vec); return rc; }
 
     while( p < end ){
@@ -282,10 +288,11 @@ static int insert_chunks(sqlite3 *db, const char *hash, const char *text, size_t
             sqlite3_step(stChunk);
             sqlite3_reset(stChunk);
 
-            sqlite3_bind_text(stFts, 1, chunk_start, (int)clen, SQLITE_STATIC);
-            sqlite3_bind_text(stFts, 2, hash, -1, SQLITE_STATIC);
-            sqlite3_bind_text(stFts, 3, modelId, -1, SQLITE_STATIC);
-            sqlite3_bind_int(stFts, 4, ix);
+            sqlite3_bind_int64(stFts, 1, sqlite3_last_insert_rowid(db));
+            sqlite3_bind_text(stFts, 2, chunk_start, (int)clen, SQLITE_STATIC);
+            sqlite3_bind_text(stFts, 3, hash, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stFts, 4, modelId, -1, SQLITE_STATIC);
+            sqlite3_bind_int(stFts, 5, ix);
             sqlite3_step(stFts);
             sqlite3_reset(stFts);
         }
@@ -1901,21 +1908,30 @@ static int sweep_sources(sqlite3 *db, const char *zDir, const VikiAuth *pAuth){
 ** needs those vectors still has the content, and D-11 recomputes them
 ** deterministically from (content_hash, model_id).
 **
-** chunk_fts is a plain FTS5 table (not external-content), so it holds its
-** own copy of every row and must be deleted from explicitly -- nothing
-** cascades. Getting this half wrong is invisible in viki_chunk yet leaves
-** the text fully searchable, which is the more dangerous half. */
+** chunk_fts must be deleted from explicitly -- nothing cascades. Getting
+** this half wrong is invisible in viki_chunk yet leaves the text fully
+** searchable, which is the more dangerous half.
+**
+** THE ORDER OF THE TWO DELETES IS LOAD-BEARING AND IT IS NOT THE OBVIOUS
+** ONE. chunk_fts is external-content (viki_db.c), so FTS5 keeps no text of
+** its own: to remove a row's tokens it re-reads that row's chunk_text from
+** viki_chunk. Delete the viki_chunk row first and the FTS delete has
+** nothing to read -- it reports success, changes nothing, and the withdrawn
+** text stays searchable forever. Measured, not reasoned: with the deletes
+** in the pre-2026-08-21 order a withdrawn chunk still matched its own
+** distinctive term. FTS FIRST, THEN viki_chunk. Do not "tidy" these into
+** one transaction-ordered-by-convenience. */
 static int gc_orphan_chunks(sqlite3 *db){
     static const char *zLive =
         " WHERE content_hash NOT IN (SELECT content_hash FROM viki_source)";
     char zSql[256];
     int nChunks = 0;
 
-    snprintf(zSql, sizeof(zSql), "DELETE FROM viki_chunk%s", zLive);
-    if( sqlite3_exec(db, zSql, NULL, NULL, NULL) == SQLITE_OK ) nChunks = sqlite3_changes(db);
-
     snprintf(zSql, sizeof(zSql), "DELETE FROM chunk_fts%s", zLive);
     sqlite3_exec(db, zSql, NULL, NULL, NULL);
+
+    snprintf(zSql, sizeof(zSql), "DELETE FROM viki_chunk%s", zLive);
+    if( sqlite3_exec(db, zSql, NULL, NULL, NULL) == SQLITE_OK ) nChunks = sqlite3_changes(db);
 
     return nChunks;
 }
