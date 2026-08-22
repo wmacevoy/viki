@@ -1155,3 +1155,46 @@ mergeable, since the pull path no longer reads inc.chunk_fts at all.
 
 VERIFIED: m1.sh 90/0/0 (H11 included), cache-probe 17/0, fragment-probe 38/0/0,
 grep-probe 35/0, muse-probe 58/0/1, fossilsee-probe 19/0.
+
+## 41. viki CANNOT FIND ITS OWN CLAIM ROT, and it has the ingredients to
+     (measured 2026-08-21, reconstructing the pre-fix corpus from commit 61d2b7e)
+
+Warren asked: if everything about this project lived in viki, would the KDF
+contradiction have been found? Measured rather than guessed. Indexed CLAUDE.md +
+FINDINGS.md + AGENTS.md exactly as they stood before the fix -- CLAUDE.md claiming
+"~0.5 s" per invocation, FINDINGS.md carrying the 333 ms / 6.4 ms table that
+refutes it -- and asked the question a reader would actually type:
+
+  viki ask "how expensive is opening an encrypted fossil repo, what does the
+            KDF cost per invocation" --k 5
+    -> ALL FIVE hits from FINDINGS.md. The contradicting CLAUDE.md chunk is
+       rank 6. One past the default cutoff.
+
+  viki grep "KDF"
+    -> CLAUDE.md#6, FINDINGS.md#5, FINDINGS.md#33, AGENTS.md#2 -- all three
+       files in the top four, adjacent, in one output.
+
+THE BIAS IS STRUCTURAL, NOT BAD LUCK. FINDINGS.md has a whole entry about KDF
+cost, so it owns every top-k slot. CLAUDE.md mentions the number ONCE, in
+passing, inside a paragraph about something else (why extraction uses counted
+framing). That is exactly where claim rot lives -- a figure restated casually in
+a doc about a different subject -- and passing mentions rank LOW by construction.
+Retrieval reliably surfaces the authoritative treatment and buries the stale
+copy. For "where else is this claimed?" that is precisely backwards, and it is
+why `viki grep` found this and `viki ask` would not have.
+
+AND NEITHER WOULD HAVE FLAGGED IT. viki has no LLM and never will (by design), so
+it returns passages and the caller does the diffing. What actually caught this was
+neither retrieval nor reading: a MEASUREMENT collided with a remembered number --
+repo opens timed for an unrelated question came back 5.99 ms against a doc saying
+~0.5 s. The physical world disagreed with the docs. That is not a workflow that
+scales, and it is luck.
+
+WHAT WOULD HAVE FOUND IT is computable from what is already in the cache, and is
+the same UNDIRECTED shape as `viki muse`: chunks with high mutual cosine (near-
+identical topic) that disagree on a number or a negation. Candidate `viki rot` --
+no query, walks the cache, reports near-duplicate chunk pairs from DIFFERENT
+sources whose numeric tokens differ. This repo has hit the same rot three times
+by CLAUDE.md's own count, four now; it is the recurring failure and there is no
+tool for it. Cheap to prototype against .viki/cache.db with no schema change.
+
