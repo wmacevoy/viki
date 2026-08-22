@@ -1190,11 +1190,94 @@ repo opens timed for an unrelated question came back 5.99 ms against a doc sayin
 ~0.5 s. The physical world disagreed with the docs. That is not a workflow that
 scales, and it is luck.
 
-WHAT WOULD HAVE FOUND IT is computable from what is already in the cache, and is
-the same UNDIRECTED shape as `viki muse`: chunks with high mutual cosine (near-
-identical topic) that disagree on a number or a negation. Candidate `viki rot` --
-no query, walks the cache, reports near-duplicate chunk pairs from DIFFERENT
-sources whose numeric tokens differ. This repo has hit the same rot three times
-by CLAUDE.md's own count, four now; it is the recurring failure and there is no
-tool for it. Cheap to prototype against .viki/cache.db with no schema change.
+WHAT WOULD HAVE FOUND IT: three designs were prototyped and MEASURED the same day.
+All three failed, and the failures are the useful part.
+
+ 1. CHUNK-LEVEL cosine + shared unit. Flagged AGENTS.md 3,367,041 bytes against
+    CLAUDE.md 3,104,768 at cos=0.681 -- a false positive (onnxruntime.dll vs the
+    cache artifact). A 40-line chunk is far too coarse to mean "same claim".
+
+ 2. CLAIM-LEVEL (number + its local context), lexical/IDF similarity. Found the KDF
+    rot ZERO times. Diagnosis is worth keeping: the chunk containing CLAUDE.md's
+    "~0.5 s" BEGINS at that number, so every word naming what it measures --
+    SQLCipher, KDF, encrypted, invocation -- sits in the PREVIOUS chunk. Fixed
+    40-line chunks with no overlap (already on CLAUDE.md's known-naive list for
+    RETRIEVAL reasons) also sever claims from their subject. Re-run over WHOLE
+    DOCUMENTS and it still missed: FINDINGS.md states the fact as a markdown TABLE
+    (`| passphrase | 333 ms |`) and CLAUDE.md as prose. They share almost no words.
+
+ 3. EMBEDDINGS of the claim neighbourhood -- the obvious fix for (2), and the one
+    that fails hardest. Indexed the two real neighbourhoods plus two distractors
+    and compared viki's own vectors:
+
+        0.268   CLAUDE.md claim  vs  FINDINGS.md claim   <-- the true contradiction
+        0.420   CLAUDE.md claim  vs  an UNRELATED note about eval timings
+        0.061   CLAUDE.md claim  vs  a note about viki serve
+
+    The distractor is CLOSER than the true match. The model matches register and
+    form -- "prose about durations in seconds" -- not REFERENT. Textual similarity
+    is the wrong instrument for "these two numbers describe the same quantity".
+
+WHAT DID WORK WAS THE NAME OF THE QUANTITY. `viki grep "KDF"` found all three sites
+immediately, because sites claiming the same quantity tend to share that quantity's
+NAME even when phrasing diverges completely. That is a lexical property, not a
+semantic one, and it is why QUEUE 42 (a literal leg in `ask`) is the higher-value
+half of this: measured on the same corpus it lifts the stale claim from rank 6 to
+rank 2 and pulls in the third site at rank 4.
+
+SO THE SHAPE IS: viki SURFACES CANDIDATES, THE AGENT ADJUDICATES. viki has no LLM
+and never will, but every caller is one -- the same reasoning that makes HyDE a
+calling convention rather than a feature (AGENTS.md, "Querying viki"). A detector
+that cannot tell a real contradiction from a coincidence is still useful if its
+output is triaged by something that can. Precision is not the binding constraint.
+
+AND IT MUST BE A BACKGROUND SWEEP, NOT A DISCIPLINE (Warren, 2026-08-21): agents
+fail, laptops lose power, connections drop. A partially-applied update is the NORMAL
+outcome of interrupted work, not a lapse in care, so it cannot be prevented by a
+convention about who owns a claim -- it has to be found after the fact, repeatedly.
+That also resolves the naming question: this is not decay, so "rot" undersells it.
+These documents are REPLICAS WITH NO COHERENCE PROTOCOL and what we are detecting is
+a TORN WRITE. The operation storage systems already have a word for is a SCRUB --
+background, continuous, finds silent corruption, reports rather than auto-repairs.
+`viki scrub`, running the same undirected no-query shape as `viki muse`.
+
+## 42. `viki ask` SHOULD HAVE A LITERAL LEG -- measured, rank 6 -> rank 2
+     (Warren's proposal, 2026-08-21; measured against the pre-fix corpus at 61d2b7e)
+
+`ask` fuses two legs by RRF: FTS5/BM25 and cosine. Both are DENSITY-BIASED -- BM25
+rewards term frequency, and the vector leg rewards topical concentration -- so a
+document that treats a subject at length wins every slot, and a document that
+mentions the same fact ONCE in passing loses. Passing mentions are exactly where a
+partially-applied update hides (QUEUE 41).
+
+MEASURED, query "how expensive is opening an encrypted fossil repo, what does the
+KDF cost per invocation", corpus = CLAUDE.md + FINDINGS.md + AGENTS.md as of
+61d2b7e (CLAUDE.md claiming ~0.5 s, FINDINGS.md holding the table that refutes it):
+
+  2-leg (today)                3-leg, adding `viki grep`'s hits at RRF k=60
+  1. FINDINGS.md               1. FINDINGS.md
+  2. FINDINGS.md               2. CLAUDE.md   <-- the stale claim
+  3. FINDINGS.md               3. FINDINGS.md
+  4. FINDINGS.md               4. AGENTS.md   <-- the third site
+  5. FINDINGS.md               5. FINDINGS.md
+
+All three sites of the claim in the top four, instead of five chunks of one file
+agreeing with themselves.
+
+COST IS GENUINELY SMALL, and this is checkable rather than hopeful: the vector leg
+ALREADY scans every chunk (ndvss has no ANN, CLAUDE.md's known-naive list), and
+`viki grep` already scans every chunk. A literal leg adds one more full scan to an
+operation that already performs one. No index, no schema change, no epoch bump.
+
+DESIGN NOTES for whoever builds it:
+- The literal leg must NOT be the raw query -- a natural-language sentence matches
+  nothing. Select the query's "hard" tokens: identifiers, ALLCAPS, things with _ or
+  :: or a file extension, quoted phrases, numbers with units. Those are precisely
+  what the porter stemmer mangles and what embeddings ignore.
+- Fuse at RRF k=60 like the other two; do not special-case the score.
+- `viki_ask_query()` in viki_ask.c is the single point -- CLI and /api/ask are both
+  thin wrappers, so both surfaces get it or neither does. Keep it that way.
+- Add a control to the eval: literal-leg-only, alongside the existing BM25-only.
+  `test/retrieval-eval.sh` is the harness and it prints a corpus fp; re-measure the
+  old binary before claiming an improvement.
 
