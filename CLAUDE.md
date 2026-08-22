@@ -140,6 +140,12 @@ bash test/m1.sh                             # "0 failed, 0 skipped" == M1 met (s
 sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliberately omits
 sh build/grep-probe.sh <empty-dir>          # `viki grep`: ERE really ERE, -i, --k, --source
 sh build/muse-probe.sh <empty-dir>          # `viki muse`: undirected recall, no query
+sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests under CONTEST:
+                                            #   a long same-topic document must bury the one
+                                            #   chunk naming the identifier, or every
+                                            #   assertion passes vacuously (an earlier draft
+                                            #   scored 7/7 against a binary with no leg).
+                                            #   REFUSES to run without a model, for that reason
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
 sh build/cache-probe.sh <empty-dir>         # the DISTRIBUTION path: push/pull. The only
                                             #   test that runs over real HTTP with a
@@ -241,11 +247,27 @@ path. `build/forum-e2e-probe.sh` is the standing proof.
 `.viki/cache.db`, relative to cwd — deliberately *not* inside the Fossil repo
 db. The repo (fossil-see) holds truth; the cache holds projections.
 
-**The retrieval core** is `viki_ask_query()` in `viki_ask.c`. It runs two legs
-into one candidate pool and fuses them by reciprocal rank (RRF, k=60):
+**The retrieval core** is `viki_ask_query()` in `viki_ask.c`. It runs **three**
+legs into one candidate pool and fuses them by reciprocal rank (RRF, k=60):
 
 - **Rung 0** — FTS5 BM25 over `chunk_fts`. Always available; free (FTS5 is
   compiled in).
+- **Rung 1** — the **literal leg**: exact substring match over `chunk_text`,
+  scored by the *rarity-weighted* sum of the query terms a chunk contains
+  (`1/df`, from one extra scan). Always available; needs no model. It exists
+  because the other two are **density-biased** — bm25() rewards term frequency
+  and cosine rewards topical concentration — so a document treating a subject
+  at length takes every slot and a document stating the same fact once, in
+  passing, is buried. Passing mentions are where a partially-applied update
+  hides. It also makes `ask` subsume a literal lookup, so the ask-or-grep
+  decision mostly disappears (`grep` remains for real regex and exhaustive
+  enumeration). Measured, corpus fp `c7e52620ae430794`, n=43: recall@1
+  0.302 → 0.372, MRR 0.418 → 0.465, and on the `identifier` class MRR
+  0.667 → 0.700 with held-out recall@1 0.500 → 1.000. recall@5 is unchanged:
+  it **reorders** the pool rather than finding new documents.
+  **The rarity weighting is load-bearing** — a plain count of matched terms
+  ties a unique identifier with the common words around it, and volume then
+  wins; `build/literal-probe.sh`'s L2 is what catches that.
 - **Rung 2** — `ndvss_cosine_similarity_f()` over `viki_chunk.embedding`,
   filtered by `model_id`. Present only when a model loads.
 

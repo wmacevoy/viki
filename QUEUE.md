@@ -1241,7 +1241,7 @@ a TORN WRITE. The operation storage systems already have a word for is a SCRUB -
 background, continuous, finds silent corruption, reports rather than auto-repairs.
 `viki scrub`, running the same undirected no-query shape as `viki muse`.
 
-## 42. `viki ask` SHOULD HAVE A LITERAL LEG -- measured, rank 6 -> rank 2
+## 42. [DONE 2026-08-21] `viki ask` HAS A LITERAL LEG -- recall@1 0.302 -> 0.372
      (Warren's proposal, 2026-08-21; measured against the pre-fix corpus at 61d2b7e)
 
 `ask` fuses two legs by RRF: FTS5/BM25 and cosine. Both are DENSITY-BIASED -- BM25
@@ -1280,4 +1280,53 @@ DESIGN NOTES for whoever builds it:
 - Add a control to the eval: literal-leg-only, alongside the existing BM25-only.
   `test/retrieval-eval.sh` is the harness and it prints a corpus fp; re-measure the
   old binary before claiming an improvement.
+
+DONE 2026-08-21, and it changed shape twice while being built. Both changes came
+from measurement, and both are worth knowing:
+
+ 1. IT WAS GATED, AND THE GATE WAS WRONG. The first draft only fired when the
+    query held a "hard" token (identifier, acronym, digit). Warren: it always
+    fires, it is inexpensive -- and the gate silently dropped the case the leg is
+    best at, a rare ALL-LOWERCASE word like `ecomment` that no capital announces.
+    Cost is genuinely small and checkable: the vector leg ALREADY scans every
+    chunk, so this adds one more scan to an operation that performs one.
+
+ 2. COUNTING MATCHED TERMS WAS NOT ENOUGH. The probe caught it. Over a corpus
+    with one long document about framing, every chunk of it matches `framing`,
+    `counted` and `parse` for a score of 3 -- and so does the single chunk that
+    contains `framed_next`. The tie breaks on volume and the unique identifier
+    loses to the document it should have beaten. Fixed by weighting each term
+    by 1/df, from one extra scan (literal_weights()). Weighting costs a little
+    aggregate (recall@1 0.395 unweighted vs 0.372 weighted) and WINS the class
+    it exists for (identifier MRR 0.647 unweighted vs 0.700 weighted), so it
+    ships weighted.
+
+MEASURED, corpus fp c7e52620ae430794, n=43, same eval corpus for all three:
+                     recall@1  recall@5  recall@k    MRR
+  base (2 legs)        0.302     0.581     0.721    0.418
+  + literal unweighted 0.395     0.581     0.721    0.484
+  + literal weighted   0.372     0.581     0.651    0.465   <- shipped
+  BM25-only control    0.256     0.558     0.651    0.381
+recall@5 is unchanged because the leg REORDERS the candidate pool rather than
+recalling new documents -- which is what a precision leg should do.
+
+NOTE FOR WHOEVER RE-MEASURES: CLAUDE.md's long-standing baseline fact, "hybrid is
+worse than BM25-only at rank 1 (0.256 vs 0.302)", carries a DIFFERENT corpus fp.
+On fp c7e52620ae430794 the ordering is the other way round (hybrid 0.302, BM25-only
+0.256). Not necessarily stale -- the harness warns the corpus is built from these
+docs and editing them moves the baseline -- but do not quote the two together.
+
+TEST: build/literal-probe.sh, 7 assertions, and it must run UNDER CONTEST. Its
+first draft scored 7 passed / 0 failed against a binary with NO literal leg,
+because the corpus was smaller than VIKI_CANDIDATE_POOL=40 and nothing was ever
+excluded. The shipped version buries the target under a 600-line same-topic
+document and scores 6/1 on that same legless binary, L2 being the discriminator.
+It REFUSES to run without a model rather than passing vacuously.
+
+ALSO CHANGED: m1's J3 asserted "the top hit scores 1/61 -- one leg, counted once".
+That ran with no model, and the literal leg needs none, so a no-model ask now has
+TWO legs and the correct value is 2/61 = 0.0328. Updated, with the arithmetic and
+the bug's NEW signature (0.0489) recorded beside it -- in the two-leg era the
+correct value and the double-count bug's value were 0.0003 apart, which is far too
+close to read by eye.
 

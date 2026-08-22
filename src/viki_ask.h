@@ -56,6 +56,7 @@
 
 #define VIKI_LEG_FTS 0x1u    /* FTS5 BM25 keyword leg */
 #define VIKI_LEG_VEC 0x2u    /* ndvss cosine-similarity vector leg */
+#define VIKI_LEG_LIT 0x4u    /* exact substring leg over the query's HARD tokens */
 
 /* FRAGMENT bits -- what a reader is NOT being shown, computed at query
 ** time and never stored. `viki index` slices a document into 40-line

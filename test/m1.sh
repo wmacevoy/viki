@@ -1215,7 +1215,7 @@ if [ "$HAVE_MODEL" = 0 ]; then
     for t in \
         "J1 SETUP: the cache really holds two epochs of the same chunk" \
         "J2 a mixed-epoch cache answers IDENTICALLY to a single-epoch one" \
-        "J3 the top hit scores 1/61 -- one leg, counted once" \
+        "J3 the top hit scores 2/61 -- two legs, each counted once" \
         "J4 no chunk appears twice in a hybrid result list"
     do
         skip_ "$t" "no embedding model at $VIKI_MODEL_DIR (cannot create a second epoch)"
@@ -1254,11 +1254,23 @@ else
 
     # The same claim as an absolute number, so a future regression that
     # broke BOTH caches the same way could not hide behind J2's
-    # comparison. Reciprocal-rank fusion with k=60 gives a single leg's
-    # rank-1 contribution as 1/(60+1) = 0.016393 -> "0.0164". Two epochs
-    # scored twice measured 0.0325 before the fix.
-    check "J3 the top hit scores 1/61 -- one leg, counted once" \
-          'head -1 "$LOG/j.mixed.out" | $GREP -qE "^\[1\] rrf=0\.0164  "' "$LOG/j.mixed.out"
+    # comparison. Reciprocal-rank fusion with k=60 gives one leg's rank-1
+    # contribution as 1/(60+1) = 0.016393.
+    #
+    # This ran with NO model, so it was "one leg, 0.0164" until 2026-08-21,
+    # when `ask` gained a third LITERAL leg (QUEUE 42) that -- unlike the
+    # vector leg -- needs no model and therefore fires here too. Two legs at
+    # rank 1, each counted once, is 2/61 = 0.032787 -> "0.0328".
+    #
+    # THE NUMBER TO WATCH IS NOT THIS ONE. The double-counting bug this
+    # assertion exists to catch scored the FTS leg once per epoch row; with
+    # three legs available it would now read 1/61 + 1/62 + 1/61 = "0.0489",
+    # not the "0.0325" it produced back when there were two. Anyone updating
+    # this figure again should recompute BOTH -- the correct value and the
+    # bug's signature -- because they were only 0.0003 apart in the two-leg
+    # era and that is far too close to read as a pass/fail by eye.
+    check "J3 the top hit scores 2/61 -- two legs, each counted once" \
+          'head -1 "$LOG/j.mixed.out" | $GREP -qE "^\[1\] rrf=0\.0328  "' "$LOG/j.mixed.out"
 
     # The vector leg goes through the same guard. With the model loaded,
     # both legs run over a cache with duplicate FTS rows; every hit in the

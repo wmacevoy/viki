@@ -246,6 +246,261 @@ static void run_vector(sqlite3 *db, const float *qvec, int dim, const char *mode
     sqlite3_finalize(st);
 }
 
+/* THE LITERAL LEG (QUEUE 42). Both existing legs are DENSITY-BIASED: bm25()
+** rewards term frequency and the vector leg rewards topical concentration, so
+** a document that treats a subject at length takes every slot and a document
+** that states the same fact ONCE, in passing, loses. Passing mentions are
+** exactly where a partially-applied update hides -- a number restated as
+** background in a doc about something else. Measured on the corpus at 61d2b7e,
+** where CLAUDE.md carried a stale "~0.5 s" that FINDINGS.md already refuted:
+** two legs put all five top hits in FINDINGS.md and the stale claim at rank 6;
+** adding this leg moves it to rank 2 and pulls the third site in at rank 4.
+**
+** It is NOT the raw query -- a natural-language sentence matches nothing
+** literally. Only the query's HARD tokens are used: identifiers, acronyms,
+** paths, versions, anything carrying a digit. Those are precisely what the
+** porter stemmer mangles and what a 384-dim embedding averages away, and they
+** are how two sites that phrase a claim completely differently (prose vs a
+** markdown table) still refer to the same quantity BY NAME.
+**
+** IT ALWAYS FIRES. An earlier version gated it on the query containing a hard
+** token, which was wrong twice: it is cheap enough not to need gating (one
+** scan, the same order as the vector leg, which already scans everything --
+** measured below), and the gate silently dropped the case it was best at. A
+** rare ALL-LOWERCASE word -- `ecomment`, `sockdrawer`, `framed_next` without
+** its underscore -- is a perfect literal anchor and no capital or digit
+** announces it. So every token competes; hard ones merely get the slots first.
+**
+** Slot order is hard-tokens-first, then longest-remaining, because the term
+** budget is small and a rare long word outranks a short common one as an
+** anchor. Tokens under 3 characters and a compact stoplist are dropped: they
+** appear in nearly every chunk, so they contribute no ordering information
+** while consuming a slot and an instr() per row. */
+#define VIKI_LIT_MAX_TERMS 8
+
+/* Strips surrounding punctuation a writer puts AROUND a token rather than in
+** it -- quotes, backticks, brackets, trailing commas -- while leaving the
+** token's own punctuation alone, because `_` and `.` and `-` are most of what
+** makes a token hard in the first place. */
+static size_t lit_trim(const char *start, size_t len, const char **pOut){
+    static const char *EDGE = "\"'`(),;:[]{}<>*!?";
+    while( len && strchr(EDGE, start[0]) ){ start++; len--; }
+    while( len && strchr(EDGE, start[len-1]) ) len--;
+    /* A trailing '.' is sentence punctuation; an interior one is a filename. */
+    while( len && start[len-1] == '.' ) len--;
+    *pOut = start;
+    return len;
+}
+
+/* A token is HARD if it carries identity rather than prose: a digit
+** (3.53.4, D-11, FTS5), an internal structural character (viki_ask.c,
+** sqlite3_blob_read, x'<64 hex>'), or two or more capitals (KDF, RRF,
+** SQLCipher). An all-lowercase word with no punctuation is ordinary prose and
+** is left to the two ranked legs, which handle it better than this one can. */
+static int lit_is_hard(const char *z, size_t n){
+    size_t i;
+    int nUpper = 0, nDigit = 0, nStruct = 0, nAlpha = 0;
+    if( n < 2 ) return 0;
+    for( i = 0; i < n; i++ ){
+        unsigned char c = (unsigned char)z[i];
+        if( c >= 'A' && c <= 'Z' ) nUpper++;
+        else if( c >= 'a' && c <= 'z' ) nAlpha++;
+        else if( c >= '0' && c <= '9' ) nDigit++;
+        else if( c=='_' || c=='-' || c=='/' || c=='.' || c==':' ) nStruct++;
+    }
+    if( nUpper + nAlpha + nDigit == 0 ) return 0;   /* pure punctuation */
+    return nDigit > 0 || nStruct > 0 || nUpper >= 2;
+}
+
+/* Words that appear in so many chunks that matching them orders nothing.
+** Deliberately SHORT: this is not a linguistic stoplist, it is a list of
+** terms whose literal presence carries no ranking information on any corpus,
+** and anything genuinely rare must survive it. */
+static int lit_is_stop(const char *z, size_t n){
+    static const char *azStop[] = {
+        "the","and","for","that","with","this","from","are","was","not","but",
+        "its","one","all","any","can","will","has","have","had","then","than",
+        "when","what","where","who","how","some","more","most","other","into",
+        "out","over","under","about","only","same","such","each","per","see",
+        "use","used","using","been","being","does","did","here","there","their",
+        "would","could","should","must","may","might","you","your","they","them",
+        "does","doing","why","which","while","also","just","like","very","much",
+        "cost","costs","get","gets", NULL
+    };
+    int i;
+    for( i = 0; azStop[i]; i++ ){
+        if( strlen(azStop[i]) == n && strncmp(azStop[i], z, n) == 0 ) return 1;
+    }
+    return 0;
+}
+
+/* Fills azOut with lowercased copies of the query's most anchoring tokens.
+** Returns the count; caller frees each entry. Lowercased here rather than in
+** SQL so the per-row cost is one instr() against an already-lowered needle.
+**
+** Two passes so the small term budget goes to the best anchors: hard tokens
+** first, then the longest of what is left. */
+static int lit_collect(const char *zQuery, char **azOut, int n, int bHardOnly,
+                        size_t minLen){
+    const char *p = zQuery;
+    while( *p && n < VIKI_LIT_MAX_TERMS ){
+        const char *start, *tok;
+        size_t len, tlen, i;
+        int dup = 0;
+        while( *p && (unsigned char)*p <= ' ' ) p++;
+        if( !*p ) break;
+        start = p;
+        while( *p && (unsigned char)*p > ' ' ) p++;
+        len = (size_t)(p - start);
+        tlen = lit_trim(start, len, &tok);
+        if( tlen < 3 ) continue;
+        if( bHardOnly ){
+            if( !lit_is_hard(tok, tlen) ) continue;
+        }else{
+            if( tlen < minLen ) continue;
+            if( lit_is_stop(tok, tlen) ) continue;
+        }
+        /* Hand-rolled rather than strncasecmp() so this file needs no
+        ** <strings.h>: viki builds under MSYS as well as POSIX, and the
+        ** stored term is already lowercased, so only the token needs folding. */
+        for( i = 0; i < (size_t)n; i++ ){
+            size_t k;
+            if( strlen(azOut[i]) != tlen ) continue;
+            for( k = 0; k < tlen; k++ ){
+                unsigned char c = (unsigned char)tok[k];
+                if( c >= 'A' && c <= 'Z' ) c = (unsigned char)(c - 'A' + 'a');
+                if( azOut[i][k] != (char)c ) break;
+            }
+            if( k == tlen ){ dup = 1; break; }
+        }
+        if( dup ) continue;
+        azOut[n] = malloc(tlen + 1);
+        if( !azOut[n] ) break;
+        for( i = 0; i < tlen; i++ ){
+            unsigned char c = (unsigned char)tok[i];
+            azOut[n][i] = (char)((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+        }
+        azOut[n][tlen] = '\0';
+        n++;
+    }
+    return n;
+}
+
+static int select_literal_terms(const char *zQuery, char **azOut){
+    int n = lit_collect(zQuery, azOut, 0, 1, 0);   /* pass 1: hard tokens */
+    size_t minLen;
+    /* pass 2: fill remaining slots longest-first, without sorting the query */
+    for( minLen = 12; minLen >= 3 && n < VIKI_LIT_MAX_TERMS; minLen-- ){
+        n = lit_collect(zQuery, azOut, n, 0, minLen);
+    }
+    return n;
+}
+
+/* Counts how many chunks each term occurs in, so run_literal can weight a
+** rare term above a common one. ONE scan with nTerm aggregates, not nTerm
+** scans. A term matching nothing, or matching everything, is given weight 0:
+** neither orders anything, and dropping them here means run_literal's
+** expression never has to special-case them.
+**
+** This exists because counting MATCHED TERMS alone is not enough, which the
+** probe caught. For "how does framed_next parse the counted framing" over a
+** corpus with one long document about framing: every chunk of that document
+** matches `framing`, `counted` and `parse` for a score of 3, and the single
+** chunk that actually contains `framed_next` also scores 3 -- so the tie
+** breaks on volume and the unique identifier is buried by the very document
+** it should have beaten. Weighting by 1/df puts a term occurring in one
+** chunk an order of magnitude above one occurring in fifteen. */
+static void literal_weights(sqlite3 *db, char **azTerm, int nTerm, double *aW){
+    sqlite3_stmt *st = NULL;
+    char *zSql = sqlite3_mprintf("SELECT count(*)");
+    int i, nTotal = 0;
+
+    for( i = 0; i < nTerm && zSql; i++ ){
+        zSql = sqlite3_mprintf("%z, sum(instr(lower(chunk_text), ?%d) > 0)", zSql, i + 1);
+    }
+    if( zSql ) zSql = sqlite3_mprintf("%z FROM viki_chunk", zSql);
+    for( i = 0; i < nTerm; i++ ) aW[i] = 0.0;
+    if( !zSql ) return;
+
+    if( sqlite3_prepare_v2(db, zSql, -1, &st, NULL) == SQLITE_OK ){
+        for( i = 0; i < nTerm; i++ ) sqlite3_bind_text(st, i + 1, azTerm[i], -1, SQLITE_STATIC);
+        if( sqlite3_step(st) == SQLITE_ROW ){
+            nTotal = sqlite3_column_int(st, 0);
+            for( i = 0; i < nTerm; i++ ){
+                int df = sqlite3_column_int(st, i + 1);
+                /* 0 orders nothing; nTotal orders nothing either -- a term in
+                ** every chunk separates no two chunks. */
+                aW[i] = (df > 0 && df < nTotal) ? 1.0 / (double)df : 0.0;
+            }
+        }
+        sqlite3_finalize(st);
+    }
+    sqlite3_free(zSql);
+    (void)nTotal;
+}
+
+/* Ranks by the RARITY-WEIGHTED sum of the terms a chunk contains, so a chunk
+** naming a one-of-a-kind identifier outranks one that merely shares the
+** query's common words. Ties break on (content_hash, chunk_ix) so a run is
+** reproducible -- three test files parse this ordering by position.
+**
+** Over-fetches by the same epoch slack as the FTS leg and for the same reason:
+** viki_chunk holds one row per (content_hash, model_id, chunk_ix), so a cache
+** carrying two model epochs of one chunk offers this leg two rows for it.
+** leg_hit()/find_or_add() merge them, but the LIMIT counts rows. */
+static void run_literal(sqlite3 *db, char **azTerm, int nTerm, int poolSize,
+                         viki_ask_result *pool, int *n){
+    sqlite3_stmt *st = NULL;
+    char *zSql = NULL;
+    int rank = 0, i;
+
+    double aW[VIKI_LIT_MAX_TERMS];
+
+    if( nTerm < 1 ) return;
+    literal_weights(db, azTerm, nTerm, aW);
+
+    zSql = sqlite3_mprintf(
+        "SELECT content_hash, chunk_ix, excerpt, cut FROM ("
+        "  SELECT content_hash, chunk_ix, substr(chunk_text,1,%d) AS excerpt,"
+        "         length(chunk_text) > %d AS cut, (0.0",
+        VIKI_VEC_EXCERPT_CHARS, VIKI_VEC_EXCERPT_CHARS);
+    for( i = 0; i < nTerm && zSql; i++ ){
+        /* Weight inlined as a literal rather than bound: it is a double this
+        ** code just computed, not user input, and it keeps the bind indices
+        ** aligned one-to-one with the terms. */
+        if( aW[i] <= 0.0 ) continue;
+        zSql = sqlite3_mprintf("%z + (instr(lower(chunk_text), ?%d) > 0) * %.17g",
+                                zSql, i + 1, aW[i]);
+    }
+    if( zSql ){
+        char *zNext = sqlite3_mprintf(
+            "%z) AS hits FROM viki_chunk) WHERE hits > 0"
+            " ORDER BY hits DESC, content_hash, chunk_ix LIMIT %d",
+            zSql, poolSize * VIKI_FTS_EPOCH_SLACK);
+        zSql = zNext;
+    }
+    if( !zSql ) return;
+
+    if( sqlite3_prepare_v2(db, zSql, -1, &st, NULL) != SQLITE_OK ){
+        sqlite3_free(zSql);
+        return;
+    }
+    sqlite3_free(zSql);
+    for( i = 0; i < nTerm; i++ ){
+        sqlite3_bind_text(st, i + 1, azTerm[i], -1, SQLITE_STATIC);
+    }
+
+    while( sqlite3_step(st) == SQLITE_ROW ){
+        const char *hash = (const char*)sqlite3_column_text(st, 0);
+        int chunk_ix = sqlite3_column_int(st, 1);
+        const char *excerpt = (const char*)sqlite3_column_text(st, 2);
+        int bCut = sqlite3_column_int(st, 3);
+        leg_hit(pool, n, VIKI_LEG_LIT, &rank, hash, chunk_ix, excerpt, bCut, VIKI_COS_NONE);
+        if( rank >= poolSize ) break;   /* poolSize distinct chunks, not rows */
+    }
+    sqlite3_finalize(st);
+}
+
 static void fill_sources(sqlite3 *db, viki_ask_result *pool, int n){
     int i;
     for( i = 0; i < n; i++ ){
@@ -344,6 +599,14 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
     if( ftsQuery ){
         run_fts(db, ftsQuery, poolSize, pool, &n);
         free(ftsQuery);
+    }
+
+    {
+        char *azTerm[VIKI_LIT_MAX_TERMS];
+        int nTerm = select_literal_terms(zQuery, azTerm);
+        int i;
+        run_literal(db, azTerm, nTerm, poolSize, pool, &n);
+        for( i = 0; i < nTerm; i++ ) free(azTerm[i]);
     }
 
     if( emb ){
