@@ -1330,3 +1330,58 @@ the bug's NEW signature (0.0489) recorded beside it -- in the two-leg era the
 correct value and the double-count bug's value were 0.0003 apart, which is far too
 close to read by eye.
 
+## 43. `viki muse` IS 80% NOISE, AND THE CAUSE IS A BIMODAL CORPUS, NOT THE BAND
+     (measured 2026-08-21 by a subagent over 22 seeded runs, 110 hits, this repo's own cache)
+
+Buckets, seeds recorded so every finding replays (1,7,11,13,23,42,88,101,256,404,
+512,777,1234,2718,3141,5150,8080,9999,31337,60606,271828,999983; k varied 4-6):
+
+  GENUINE ADJACENCY   14   12.7%
+  NEAR-DUPLICATE       8    7.3%
+  NOISE               88   80.0%
+
+THE MID-BAND HEURISTIC IS NOT THE PROBLEM -- it does what viki_muse.h claims.
+Only 7.3% of hits were restatements of the seed, and most of those were doc<->code
+pairs (viki_index.h#0 returned for a viki_index.c seed), which is arguably correct.
+NOISE is the defect, and it has one measurable cause: the corpus is BIMODAL, 378
+code/script chunks against 275 prose. MiniLM scores any two C-source chunks
+0.45-0.60 on shared syntactic texture alone -- #include blocks, sqlite3_prepare_v2,
+static int, snprintf -- which sits well ABOVE the 0.2880 floor, so the band's lower
+edge cannot exclude it. The floor is calibrated on the corpus-wide median pairwise
+cosine, which assumes ONE population.
+
+YIELD SPLITS 4:1 ON SEED GENRE:
+  prose seeds   8 runs, 40 hits -> 10 genuine = 25.0%
+  code seeds   14 runs, 70 hits ->  4 genuine =  5.7%
+Seeds 42, 2718, 31337, 60606, 88, 404, 13 returned ZERO genuine adjacencies
+between them -- 34 consecutive hits of pure C-texture matching. Seed selection is
+uniform over chunks (verified over 80 draws), so 58% of draws land in the low-yield
+genre BY CONSTRUCTION, and the longest file gets the most seeds (FINDINGS.md is 13%
+of all draws).
+
+FIX IS NOT "DROP MUSE", IT IS "STOP SEEDING IT UNIFORMLY": a genre filter on the
+seed draw, or a floor calibrated PER-POPULATION rather than on one corpus-wide
+median. Either should roughly quadruple yield without touching the band logic,
+which is already doing its job. `--from` beat random seeding in the one targeted
+run tried, which points the same way.
+
+NO CRASHES, NO ERRORS, NO EMPTY RESULTS across ~105 invocations. One degraded run
+(seed 3141, seeded on a one-line farm note in a software corpus) announced itself
+correctly and loudly: "DEGRADED: band too thin, so the cos>=0.2880 floor was
+DROPPED". That is right behaviour, not a defect. Seed 2718 is the milder
+degeneracy -- a bare #include block is a content-free seed muse cannot decline.
+
+THE UNMARKED-EXCERPT DEFECT IS REAL AND IT BIT, CONCRETELY. Muse printed a chunk
+beginning "path*, so a caller has no signal at all that it is stale. The first at
+least degrades to..." -- head truncation reads as a legitimate sentence start, so
+the reader hunts for an antecedent that lives in the previous chunk. `viki grep` on
+that same chunk prints <<document continues above>>. Two aggravators specific to
+muse: it collapses newlines into spaces, so a table or code block reads as flowing
+prose, and it prints no `chunk_ix of chunk_count`, which `viki serve` does -- no
+positional signal either. HEAD truncation is the misleading half; tail truncation
+sometimes signals itself by ending mid-word, but that is luck, not notation. The
+strings already exist as VIKI_MARK_* in viki_ask.h and three surfaces include them
+from there. Muse is the only surface marking nothing. Same patch shape as the
+fragment work; CLAUDE.md already lists this as deliberately out of scope for that
+round, so this is the entry that says it is now measured rather than assumed.
+
