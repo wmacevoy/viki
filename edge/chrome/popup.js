@@ -5,7 +5,13 @@
  * causes downstream is a ledger that looks calm while a channel is dark. That
  * is the coverage lie 2.5 forbids, and this is where it surfaces first. */
 
-const SOURCES = ['facebook', 'discord'];
+/* Read from the manifest rather than hardcoded, so adding a site to sites.json
+** and regenerating is the ONLY step. A hardcoded list here was a second place
+** the framework knew Warren's sites -- see sites/README.md. */
+const SOURCES = (chrome.runtime.getManifest().content_scripts || [])
+  .map(cs => (cs.js || []).find(f => f.startsWith('sites/')))
+  .filter(Boolean)
+  .map(f => f.replace('sites/', '').replace('.js', ''));
 
 function row(name, s) {
   const d = document.createElement('div');

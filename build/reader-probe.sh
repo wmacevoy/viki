@@ -29,7 +29,7 @@ no(){ FAIL=$((FAIL+1)); echo "  FAIL  $1"; }
 [ -d "$D" ] || { echo "no extension at $D"; exit 2; }
 
 # strip // and /* */ comments so prose about .click() is not mistaken for a call
-code(){ cat "$D"/background.js "$D"/popup.js "$D"/content/*.js 2>/dev/null \
+code(){ cat "$D"/background.js "$D"/popup.js "$D"/content/*.js "$D"/sites/*.js 2>/dev/null \
         | sed 's://.*::' | sed 's:/\*.*\*/::' | grep -v '^[[:space:]]*\*' ; }
 
 echo "== observe only: no path can act as Warren =="
@@ -47,11 +47,23 @@ if [ -z "$hosts" ]; then ok "R6 the only network destination is 127.0.0.1"
 else no "R6 non-loopback destination in code: $hosts"; fi
 
 echo "== a broken scraper must not look like a quiet day =="
-for f in facebook discord; do
-  n=$(grep -c "'blind'" "$D/content/$f.js" 2>/dev/null || echo 0)
+for f in $(ls "$D/sites"/*.js 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.js$//'); do
+  n=$(grep -c "'blind'" "$D/sites/$f.js" 2>/dev/null || echo 0)
   if [ "${n:-0}" -ge 1 ]; then ok "R7 $f reports 'blind' when its anchor is gone"
   else no "R7 $f has no blind path -- selector breakage would read as zero items"; fi
 done
+
+echo "== the boundary: viki's framework vs Warren's sites =="
+# manifest.json is GENERATED from sites.json so campus hostnames never live in
+# viki's source. If a site hostname appears in the framework, the line has been
+# crossed and the next person will not notice.
+leak=$(grep -lE 'coloradomesa|facebook\.com|discord\.com|outlook\.' \
+        "$D"/content/*.js "$D"/background.js "$D"/popup.js 2>/dev/null || true)
+if [ -z "$leak" ]; then ok "R11 no site hostname appears in the framework"
+else no "R11 a site hostname leaked into the framework: $leak"; fi
+if [ -f "$D/sites.json" ] && [ -x "$D/build-manifest.sh" ]; then
+  ok "R12 manifest is generated from sites.json, not hand-maintained"
+else no "R12 sites.json / build-manifest.sh missing"; fi
 
 echo "== manifest =="
 if command -v python3 >/dev/null 2>&1; then

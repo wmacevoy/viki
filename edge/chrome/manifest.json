@@ -11,7 +11,10 @@
     "http://127.0.0.1/*",
     "https://www.facebook.com/*",
     "https://discord.com/*",
-    "https://d2l.coloradomesa.edu/*"
+    "https://d2l.coloradomesa.edu/*",
+    "https://mavnet.coloradomesa.edu/cmu_redir/*",
+    "https://outlook.cloud.microsoft/*",
+    "https://outlook.office.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,7 +30,7 @@
       ],
       "js": [
         "content/common.js",
-        "content/facebook.js"
+        "sites/facebook.js"
       ],
       "run_at": "document_idle"
     },
@@ -37,17 +40,29 @@
       ],
       "js": [
         "content/common.js",
-        "content/discord.js"
+        "sites/discord.js"
       ],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "https://d2l.coloradomesa.edu/*"
+        "https://d2l.coloradomesa.edu/*",
+        "https://mavnet.coloradomesa.edu/cmu_redir/*"
       ],
       "js": [
         "content/common.js",
-        "content/d2l.js"
+        "sites/d2l.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://outlook.cloud.microsoft/*",
+        "https://outlook.office.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "sites/outlook.js"
       ],
       "run_at": "document_idle"
     }

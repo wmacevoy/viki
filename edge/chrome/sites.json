@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "WHICH SITES THIS BROWSER READS. Yours, not viki's.",
+    "",
+    "viki ships the FRAMEWORK -- content/common.js, background.js, the popup,",
+    "and the observe-only guarantees build/reader-probe.sh enforces. What it",
+    "reads is a deployment decision, and it is a decision about YOUR life:",
+    "these hostnames are Warren's campus and Warren's accounts, and nobody",
+    "else's install should inherit them.",
+    "",
+    "Edit this file, run build-manifest.sh, reload the extension.",
+    "Nothing in content/ or background.js needs to change to add a site."
+  ],
+  "sites": [
+    { "name": "facebook", "matches": ["https://www.facebook.com/*"] },
+    { "name": "discord",  "matches": ["https://discord.com/*"] },
+    { "name": "d2l",      "matches": ["https://d2l.coloradomesa.edu/*",
+                                      "https://mavnet.coloradomesa.edu/cmu_redir/*"] },
+    { "name": "outlook",  "matches": ["https://outlook.cloud.microsoft/*",
+                                      "https://outlook.office.com/*"] }
+  ]
+}

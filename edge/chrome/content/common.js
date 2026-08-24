@@ -31,7 +31,7 @@ const VIKI = {
   },
 
   /* SHADOW-DOM-PIERCING SEARCH, and D2L cannot be read without it.
-   * Measured live on d2l.coloradomesa.edu, 2026-08-24: 63 OPEN shadow roots,
+   * Measured live on a Brightspace/D2L instance, 2026-08-24: 63 OPEN shadow roots,
    * `document.body.innerText` yielding 364 characters for a full page, and a
    * flat `querySelectorAll('a[href]')` finding 19 links where a piercing walk
    * finds 84. A scraper that does not descend sees a page that looks almost
@@ -51,7 +51,7 @@ const VIKI = {
      * whose content lives in its own shadow root, the light-DOM query returns
      * nothing, the `*` walk below also returns nothing (there are no light
      * children to walk), and the function reports zero rows from a table full
-     * of them. Measured on D2L Quick Eval: 0 rows found where 20 exist. */
+     * of them. Measured on a live grading queue: 0 rows found where 20 exist. */
     if (root.shadowRoot) VIKI.deepAll(selector, root.shadowRoot, out, seen);
     try { root.querySelectorAll(selector).forEach(e => out.push(e)); } catch (_) {}
     let all = [];
@@ -73,7 +73,7 @@ const VIKI = {
    *
    * STYLE/SCRIPT/TEMPLATE are skipped or the "text" comes back as the
    * component's CSS -- the first attempt extracted
-   * ":host { display: block; } .d2l-activity-name-icon {..." as a notification. */
+   * ":host { display: block; } ..." as a notification. */
   deepText(node, depth) {
     depth = depth || 0;
     if (!node || depth > 12) return '';
@@ -145,8 +145,8 @@ const VIKI = {
 
   /* Poll rather than MutationObserver. An observer fires hundreds of times a
    * second on these pages and would turn a reader into a load generator on
-   * Warren's own machine; a slow poll is enough for something whose output is
-   * read once a morning. */
+   * the reader's own machine; a slow poll is enough for something whose output
+   * is read once a morning. */
   every(ms, fn) {
     const run = () => { try { fn(); } catch (e) { console.warn('viki reader:', e); } };
     run();
