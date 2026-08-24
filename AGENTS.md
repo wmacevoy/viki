@@ -882,6 +882,79 @@ this file -- against a binary missing three fixes that were sitting in
   14/35/38/59/14/72.
 
 
+- **VIKI EDGE: the retrieval core running in a browser, on an ENCRYPTED cache,
+  drawing from several tribes at once** (2026-08-23).
+  `edge/build-wasm.sh` (plain) and `edge/build-wasm-sqlcipher.sh` (codec) build
+  `viki_ask.c`/`viki_db.c`/`viki_grep.c`/`viki_note.c`/`tokenizer.c` plus SQLite
+  and sqlite-ndvss to WebAssembly, in a container so nothing lands on the host.
+  What was actually verified, not inferred:
+  - It answers. Node and Chrome both, against this repo's real 653-chunk cache.
+    `framed_next` returns `viki_index.c` at rank 1 -- the literal leg firing
+    inside wasm -- and a nowhere-token returns **0** hits rather than the 5 the
+    native build gives, because there is no vector leg to pad the pool.
+  - With the model leg wired (viki's own `tokenizer.c` in wasm, onnxruntime-web
+    running the graph in JS, pooling and L2 back in C mirroring `embed.c`) it
+    reproduces the NATIVE binary's ranking AND rrf scores EXACTLY, to four
+    decimals, on both test queries. Not approximately.
+  - On a SQLCipher cache: no key refused, wrong key refused (SQLCipher logs the
+    HMAC failure), right key opens, 653 chunks readable through the codec,
+    retrieval works, literal leg still fires. `build/verse-probe.sh` 6/0 adds
+    three real tribes with three DIFFERENT keys, and the control that matters --
+    one tribe's key does NOT open another.
+  - THE COUPLING TO ONNX IS THREE SYMBOLS. `fork`/`exec`/`socket`/`dlopen`
+    appear in exactly four files (`viki_cache.c`, `viki_index.c`,
+    `viki_serve.c`, `viki_fossilsee.c`) and none is in the read path; dropping
+    them left `viki_embed`, `viki_embedder_dim`, `viki_embedder_model_id`
+    undefined, all called behind `if( emb )`. That is the entire distance
+    between viki's read path and a phone, and it is why a dart:ffi front end
+    would inherit the same portability.
+  NOT verified: the hybrid page clicked through in a browser (the extension
+  disconnected after the model wiring; the pre-model page WAS confirmed in
+  Chrome, and a node harness exercises the identical call sequence).
+
+- **KEY CUSTODY, and it interoperates with a tool nobody here wrote**
+  (2026-08-23). `build/keywrap-probe.sh` `14 passed, 0 failed, 0 skipped`.
+  `edge/tools/viki-key-wrap.c` implements age v1 -- X25519 + HKDF +
+  ChaCha20-Poly1305 -- against the LibreSSL fossil-see already vendors, with
+  HKDF written from HMAC. Proven against stock `age` 1.3.1 in BOTH directions:
+  `age-keygen -y` derives the same public key from our secret, `age -d` reads
+  what we write, we read what age writes.
+  **The interop leg earned its keep on the first run**: an earlier build passed
+  its own round-trip perfectly while emitting secret keys real age rejected as
+  "invalid checksum" -- bech32's checksum is defined over the LOWERCASE hrp
+  even when the key is rendered upper case. A self-round-trip test cannot catch
+  that, because both sides share the bug. That is the argument for using an
+  existing format rather than inventing one, made concrete.
+  `edge/tools/viki-identity.c` holds `identity.db`: a SQLCipher container under
+  the PUBLICLY KNOWN key `"1"` -- kept for its per-page HMAC, i.e. tamper
+  detection, with W2 asserting it is not readable as plain sqlite so nobody
+  optimises that away -- and private keys each wrapped under their own
+  passphrase. The second factor is present as STRUCTURE, not function:
+  `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
+  with `device_secret` empty today and a `factors` column recording it.
+
+- **THE TRIBE REGISTRY AND THE PULLER** (2026-08-23). `identity.db` gained
+  `tribe(name, url, cache, wrapped, identity, caching, added, etag, last_pull)`.
+  `wrapped` is the tribe's SQLCipher key age-wrapped to an identity in the same
+  file, so **identity.db never holds a tribe key in the clear** -- R2 greps the
+  file to prove it. R5 is the control that gives it meaning: a tribe registered
+  to a different identity needs THAT identity's passphrase, so holding one tribe
+  grants nothing about another on the same device.
+  `viki-identity tribe pull <tribe>|--all` fetches over HTTPS via **libtls**
+  (~200 lines, no libcurl, no new dependency; certificate verification on with
+  no flag to disable it, and redirects deliberately not followed). Measured
+  against the live tribe from `build/vikiverse-up.sh`: 69,632 bytes fetched,
+  stored with a header stock `sqlite3` refuses, decrypting back to the corpus.
+  **The plaintext never touches disk** -- `sqlite3_deserialize()` makes the
+  fetched buffer a database in memory and `sqlcipher_export()` writes through
+  the codec. A repeat pull sends `If-None-Match` and prints
+  `camp unchanged (304)`; `--all` with one dead tribe reports `1 up to date,
+  1 unreachable or failed` and keeps going.
+  THIS IS A SNAPSHOT PULL, NOT A SYNC, and QUEUE 47 says so: when edge viki
+  becomes a real Fossil peer it will sync bidirectionally at artifact level.
+  Known gap, filed not fixed: `url` may embed credentials and the container key
+  is public, so those are effectively in the clear.
+
 ## Structuring captures -- the convention for agents
 
 `viki capture` records raw text offline. `viki structure` adds judgement

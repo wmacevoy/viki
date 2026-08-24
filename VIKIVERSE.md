@@ -430,3 +430,89 @@ than measured) was not.
 - **Does a custodian ever prune?** A dumb custodian cannot read what it
   stores, so it cannot know what is worth keeping. Retention has to be
   driven by a trusted reader or by policy, never by the custodian.
+
+
+## The edge, and the six-platform question (2026-08-23)
+
+Warren: *"now can dart/flutter be the portable ui for me? (mac, web, ios,
+android, windows, linux)"*. Yes — and the day's work decided the shape rather
+than leaving it open.
+
+### What the edge already is
+
+`viki edge` is the `caching = required` tier made real: viki's retrieval core
+compiled to WebAssembly, reading a SQLCipher cache someone else built, offline
+after one pull, holding several separately-keyed tribes at once. It is proven
+to reproduce the native binary's ranking and rrf scores **exactly**, because it
+IS the native code — `viki_ask.c` and friends, unmodified.
+
+### The property that must survive any UI
+
+`viki_ask_query()` is the single implementation. The CLI, `/api/ask` and the
+wasm edge are all thin wrappers, which is why they cannot drift. **A Dart
+reimplementation of retrieval would end that on day one** and no amount of
+tests would hold it together afterwards. So the rule for any Flutter work is:
+Dart draws, C retrieves.
+
+### Two integration paths, not six
+
+Flutter covers all six targets, but not by one mechanism:
+
+| target | how Dart reaches the core | can it host a real Fossil repo? |
+|---|---|---|
+| macOS, iOS, Android, Windows, Linux | `dart:ffi` → the C core, per-platform build | **yes** — filesystem and sockets |
+| web | JS interop → the wasm module already built | **no** — no sockets, no fork |
+
+`dart:ffi` does not exist on Flutter Web, so the browser leg keeps the wasm
+module. That is not duplicated work: it is the same C, reached differently, and
+one Dart interface with two implementations behind a conditional import is an
+ordinary Flutter pattern. The wasm build stops being a side quest and becomes
+the web backend.
+
+### The platform split IS the caching-tier split
+
+This is the useful coincidence. Web cannot hold a Fossil repo — no sockets, no
+fork — so it is permanently a read-only projection consumer: pull a cache, ask
+questions, never be a peer. The five native targets *can* host a repo, which is
+exactly what "edge viki will be fossil, so it should sync when it can" needs.
+
+    web            → caching=required, snapshot pull, zero install, no sync
+    native (5)     → caching=optional or required, a real Fossil peer, syncs
+
+So the snapshot puller built today is not a stopgap that gets thrown away. It
+is the permanent web tier, and the degenerate case for any native device that
+chooses not to host a repo.
+
+### What Flutter buys that the browser cannot
+
+Worth being concrete, because "it works in a browser already" is a fair
+objection:
+
+- **A real Fossil repo**, hence real sync. Decisive on its own.
+- **The OS keystore** — Secure Enclave, Android Keystore, TPM — which is the
+  `device_secret` that `identity.db` already has a slot for (QUEUE 49). WebAuthn
+  PRF gets a browser most of the way, but the native path is better and more
+  universal.
+- **Storage that is not evictable.** OPFS can be reclaimed under pressure; an
+  app's files cannot. For a `required`-tier device that is the difference
+  between offline and usually-offline.
+- Background sync, notifications, and file-system access to a checkout.
+
+### The honest cost
+
+Five native targets means cross-compiling SQLCipher, LibreSSL and ONNX Runtime
+for each. None is novel — all three ship for all five — but it is a real build
+matrix, and ONNX is the heavy one. The browser edge remains *one artifact* that
+runs everywhere with no store, no signing and no matrix, which is why it should
+stay even after Flutter exists.
+
+### Recommended order
+
+1. Keep the browser edge as the zero-install surface. Done.
+2. Flutter UI over `dart:ffi` on **one** native platform first — macOS or
+   Android — to find the FFI shape before multiplying it by five.
+3. Add the OS-keystore `device_secret`, which the identity schema already
+   accommodates without a format change.
+4. Only then the remaining natives, and only then a real Fossil peer.
+
+Step 2 is where the design risk lives. Everything after it is repetition.
