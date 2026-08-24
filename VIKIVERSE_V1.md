@@ -1,247 +1,292 @@
 # VIKIVERSE v1 — requirements
 
-**Status: DRAFT for Warren's correction.** Nothing here is settled. Where this
-touches a decision already made (`USER_STORIES.md` D-1..D-12) it says so rather
-than quietly contradicting it.
+**Status: DRAFT 2, for Warren's correction.** Draft 1 was organised around
+retrieval. Warren's answer to "what would make you use this daily" moved the
+centre, so this is a rewrite rather than a patch. Where this touches a settled
+decision (`USER_STORIES.md` D-1..D-12) it says so rather than quietly
+contradicting it.
 
-Domain: `vikiverse.net`. Scope for v1: **tribes** — a tribe is one encrypted
-Fossil repo plus the accounts that may reach it. Federation between tribes is
-out.
-
----
-
-## 0. The goal, in one sentence
-
-**A memory that spans projects, survives being offline, and can be read by a
-person or an agent through the same door** — so that neither has to remember
-where they wrote something down, and neither re-solves a problem the other
-already solved.
-
-Everything below is downstream of that sentence. If a requirement does not
-serve it, it belongs in v2.
+Domain: `vikiverse.net`. Scope: **tribes** — a tribe is one encrypted Fossil
+repo plus the accounts that may reach it. Federation between tribes is out.
 
 ---
 
-## 1. Why v1 is "> fossil"
+## 0. The goal, in Warren's words
 
-Fossil stays the transport and the truth store — that is D-4, D-6, D-9 and it
-is not being reopened. What "greater than Fossil" means concretely:
+> *"I want to wake up not nervous about what I will miss today for a promise
+> unkept, and know I have time for a friend when that friend needs that time."*
 
-- **Fossil is the substrate, the API is the product.** A consumer should never
-  need to know Fossil exists. It asks, captures and cites over HTTP.
-- **Fossil accounts remain the authorization layer** (ARCHITECTURE.md). v1 adds
-  no second identity system for *access*; `identity.db` handles keys at rest,
-  which is a different problem (QUEUE 48/49).
-- **The corpus spans repos.** This is the actual v1 delta. Fossil is per-repo by
-  nature; a memory that is per-repo is the failure mode described in §2.1.
+Everything below is downstream of those two clauses. The first is about **not
+dropping things**. The second is about **believing the answer when it says you
+are free** — a harder property, and the one the product lives or dies on.
+
+**viki is the substrate, not the product.** The product is an assistant that
+uses it. viki has no LLM and never will; the assistant is where judgment lives,
+in one place that can be inspected.
+
+---
+
+## 1. What changed from draft 1
+
+| draft 1 assumed | actually |
+|---|---|
+| the unit is a chunk | **the unit is a promise** |
+| the interface is a query | **the interface is a clock** — you should not have to ask |
+| calendar is out of scope (D-2, later) | **calendar noise is the presenting complaint** |
+| agent memory is a separate feature | **it is the same store as Warren's promises** |
+| coverage is a nice-to-have | **coverage is the trust property** |
+
+The substrate is closer than draft 1 assumed. `viki_note` already models
+commitment, not just text:
+
+```
+who   due   state   closes
+claimed      -- ISO when --who was set
+lease        -- ISO when the holder's declared availability lapses
+challenge    -- "<who> <ISO>": an unanswered are-you-still-on-this
+stolen_from  -- a steal is a supersession, not an overwrite
+```
+
+That is most of a promise ledger already. What is missing is not schema — it is
+ingest, a clock, and the honesty to say what it cannot see.
 
 ---
 
 ## 2. Requirements
 
-Each is written so it can be falsified. `MUST` blocks v1; `SHOULD` is v1 if
-cheap, v1.1 otherwise.
+`MUST` blocks v1. `SHOULD` is v1 if cheap, v1.1 otherwise. Each is written so it
+can be falsified.
 
-### 2.1 Cross-project recall — MUST
+### 2.1 The promise is a first-class object — MUST
 
-The corpus spans every repo the owner registers, and an answer says which one
-it came from.
+Every commitment — made by Warren, made *to* Warren, or made by the assistant on
+his behalf — is one row with an owner, a due time, a state, and a supersession
+link. Nothing is edited; things are superseded (M-2/M-3).
 
-> *Why this is #1:* on 2026-08-23 an agent proposed building SQLCipher-for-wasm
-> that already existed one directory over, and its build recipe was sitting in a
-> CI file in the same tree. Measured afterwards: 80 files from three sibling
-> projects, one index, and the missed prior art returns at **rank 1**. Ninety
-> seconds of work against hours lost. That is QUEUE 47, and it is the single
-> highest-value thing in this document. Coverage dominates ranking: the literal
-> leg bought recall@1 0.302→0.372, while cross-project indexing turned a **0%
-> into a rank-1 hit**, because the document was not ranked badly — it was not in
-> the corpus.
+*Acceptance:* "what did I promise, to whom, by when, and which of those are at
+risk today" is answerable in one query, over every source that has been
+ingested.
+
+**Status:** schema mostly exists (`viki_note`). Not exercised as a ledger.
+
+### 2.2 The assistant is a party, not a tool — MUST
+
+The assistant's own commitments live in the same ledger as Warren's, under its
+own identity, and are distinguishable at a glance.
+
+> *Why this is #2 and not an ethics footnote:* if the assistant says "I'll watch
+> for that invoice" and then forgets, that is the exact failure being designed
+> against — a promise unkept — except now the system that was supposed to
+> prevent it caused it. And Warren must be able to tell at 6am which promises he
+> owes and which the machine owes him.
+
+*Acceptance:* `who` distinguishes Warren from an agent identity; a morning
+briefing separates "yours" from "mine"; a broken agent promise is as visible as
+a broken human one.
+
+**Status:** `identity.db` mints agent identities (age keypairs, per-identity
+passphrases). Not wired to notes.
+
+### 2.3 Ingest: calendar and notifications — MUST
+
+Events and messages arrive from many places and become either a promise, a
+scheduled fact, or noise. **Noise reduction is the product**, not a filter
+setting.
+
+*Acceptance:* a week of real calendar entries and a day of real notifications
+reduce to a briefing Warren agrees with — measured by how often he disagrees,
+not by a heuristic.
+
+> D-2 settles calendar as queryable ticket-style artifacts plus a local
+> projection. That decision stands; draft 1 was wrong to defer it. "My calendar
+> is full of noise" is the presenting complaint.
+
+**Status:** not built. This is the largest new surface in v1.
+
+### 2.4 The clock, not the query — MUST
+
+The assistant speaks unprompted and only when it matters: a morning brief, a
+warning before something is missed, silence otherwise.
+
+*Acceptance:* Warren's first interaction of the day is *reading*, not asking. A
+day with nothing at risk produces a short, honest "nothing at risk" — not
+silence, which is indistinguishable from a broken job.
+
+**Status:** not built. viki stays pull; this is the assistant tier above it.
+
+### 2.5 Coverage, and knowing what it cannot see — MUST
+
+Every answer that implies completeness — "you are free Thursday", "nothing is
+due" — carries what it looked at.
+
+> *Why this is the hardest requirement:* "I have time for a friend" is a
+> *trust* claim, not a capacity calculation. A calendar not connected, a channel
+> not read, a promise made verbally and never captured — each makes silence
+> unreliable, and one wrong "you're clear" costs more trust than ten useful
+> briefings earn. This is the partial-view problem VIKIVERSE.md already raises,
+> promoted from an open question to a MUST.
+
+*Acceptance:* every completeness claim names its sources and their staleness; an
+unreachable or never-connected source degrades the claim explicitly rather than
+silently narrowing it.
+
+**Status:** not built anywhere. Nothing in viki reports corpus coverage.
+
+### 2.6 Capture that cannot be lost — MUST
+
+One gesture, no filing decisions, zero connectivity, never silently dropped.
+
+*Acceptance:* pocket-to-logged under 15 s with no signal (US-3); visible in
+search on that device immediately, marked if not yet indexed; reaches the tribe
+on the next successful sync with nothing to remember.
+
+**Status:** PWA does the local half. **The join is missing** — captures on a
+read-only edge never reach a tribe (QUEUE 36). Largest hole in the killer story.
+
+### 2.7 Cross-project recall — MUST
+
+The corpus spans every repo registered, and an answer says which one it came
+from.
+
+> Kept from draft 1, and Warren's correction is why it stays a MUST rather than
+> sliding to SHOULD: *"your problems are mine. by enabling you i am enabling
+> me."* The measured case is that an agent proposed rebuilding SQLCipher-for-wasm
+> that existed one directory over, with its build recipe in a CI file in the same
+> tree — hours lost, recovered in 90 seconds once the corpus spanned projects
+> (QUEUE 47). An assistant that re-solves solved problems spends Warren's time,
+> not its own.
 
 *Acceptance:* a question whose answer lives in project B, asked while working in
-project A, returns it in the top 5 with project B named on the hit.
+project A, returns it in the top 5 with B named.
 
-**Status:** built and proven for the edge (`build/verse-probe.sh`, 6/0). Missing
-on the **native CLI**, which is where most work actually happens.
+**Status:** proven on the edge (`build/verse-probe.sh` 6/0); **missing on the
+native CLI**, where the work happens.
 
-### 2.2 Capture that cannot be lost — MUST
+### 2.8 Provenance queries — MUST
 
-One gesture, no filing decisions, works with zero connectivity, and is never
-silently dropped.
+"When did this first appear", "what landed together", "what changed since I last
+looked".
 
-*Acceptance:* pocket-to-logged under 15 s with no signal (US-3); the capture is
-visible in search on the same device *immediately*, marked as not-yet-indexed if
-that is what it is; it reaches the tribe on the next successful sync without the
-user remembering to do anything.
+> Same rationale as 2.7. The best defects found in this codebase came from
+> `git log -S`, not similarity — including a claim that was **false on arrival**,
+> which no vector search can find because there is no revision where it was true.
+> It is also how "what did I miss while I was away" gets answered honestly.
 
-**Status:** the PWA does this locally. **The join is missing** — captures made on
-a read-only edge never reach a tribe. That is QUEUE 36 and it is the largest
-hole in the killer story.
+*Acceptance:* `viki when "<claim>"` names the check-in that introduced it;
+`viki since <marker>` lists what changed. Both on an encrypted repo, no
+re-index.
 
-### 2.3 Provenance queries — MUST
+**Status:** not built. It is a join over `mlink`/`event`, already open. No model,
+no epoch bump.
 
-"When did this claim first appear", "what landed together", "what changed since
-I last looked".
-
-> *Why this is #2 and not a nice-to-have:* the highest-value defects found in
-> this codebase were found by `git log -S`, not by similarity search. One claim
-> in `test/retrieval-corpus.sh` was **false on arrival** — `git log -S` resolves
-> the claim and its own refutation to the same commit — and no vector search can
-> find that, because there is no revision where the claim was true. viki indexes
-> check-in *text* today but cannot answer a single one of these questions, and
-> they are the questions an agent asks most.
-
-*Acceptance:* `viki when "<claim text>"` names the check-in that introduced it;
-`viki since <marker>` lists what changed since. Both must work on an encrypted
-repo without a full re-index.
-
-**Status:** not built. The data is in Fossil's `mlink`/`event` tables, already
-open. This is a join, not a model.
-
-### 2.4 Honest failure — MUST
+### 2.9 Honest failure — MUST
 
 No surface may fail silently or indistinguishably.
 
 *Acceptance:* "the cache never arrived", "sync is a week stale", "I never wrote
-that down" and "the model is missing" produce four different messages. A stale
-cache says how stale.
+that down" and "the model is missing" are four different messages.
 
-> This keeps being violated by *me*, not in theory: `viki cache push` exited 0
-> having published nothing; the PWA hung on "loading…" forever; `(no matches)`
-> covers four distinct causes. It is a requirement because it is a recurring
-> defect class, not because it is a virtue.
+> A recurring defect class, not a virtue: `viki cache push` exited 0 having
+> published nothing; the PWA hung on "loading…" forever with the reason only in
+> a console. Under 2.5 this stops being hygiene and becomes load-bearing.
 
-**Status:** partially. QUEUE 36 gap 3 is open.
+### 2.10 Encrypted at rest, per tribe — MUST
 
-### 2.5 Encrypted at rest, per tribe — MUST
+A device holding two tribes cannot open the second by virtue of holding the
+first.
 
-Every cache and every repo is encrypted. A device holding two tribes cannot open
-the second by virtue of holding the first.
+**Status:** done. `build/keywrap-probe.sh` 14/0, `verse-probe.sh` V3. Listed so
+it cannot regress.
 
-*Acceptance:* `build/keywrap-probe.sh` (14/0) and `build/verse-probe.sh`'s V3
-already assert this. It stays a MUST because it must not regress.
+### 2.11 One API, several consumers — MUST
 
-**Status:** done — SQLCipher end to end, age-wrapped tribe keys, per-identity
-passphrases.
+`ask`, `capture`, `cite`, `since`, `promises` over HTTP with a stable contract —
+usable by a person, this assistant, or openclaw/nanoclaw/MCP-shaped tools, with
+no knowledge of Fossil or SQLite required.
 
-### 2.6 One API, several consumers — MUST
+*Acceptance:* a third-party tool that has never seen this codebase asks a
+question and gets citable results from a written contract alone.
 
-`ask`, `capture`, `cite`, `since` over HTTP with a stable contract, reachable by
-a person, by this agent, or by openclaw/nanoclaw/MCP-shaped tools, with no
-knowledge of Fossil or SQLite required.
-
-*Acceptance:* a third-party tool that has never seen this codebase can ask a
-question and get citable results from a written contract alone.
-
-**Status:** `/api/ask` exists and is loopback-only with no auth. **Auth and a
-frozen contract are the v1 work**, and they should be designed deliberately
-rather than accreted.
-
-### 2.7 Agent memory with attribution — SHOULD
-
-Agents may write findings; every written claim carries who wrote it, when, and
-whether it was verified.
-
-> *Why attribution is load-bearing:* on 2026-08-23 a sweep produced 103 candidate
-> findings; 12 survived adjudication and 5 were kept. **Unattributed, the other
-> 91 would have been indistinguishable from the 5.** An agent memory without
-> "who claimed this and was it checked" fills with confident guesses and becomes
-> worse than no memory.
-
-*Acceptance:* every agent-written note has an author identity and a verified
-flag; `ask` can exclude unverified claims; a retracted claim supersedes rather
-than deletes (M-2/M-3, `--closes` already ships).
-
-**Status:** the note model exists; identity and verification do not.
-
-### 2.8 Sync when it can — SHOULD
-
-Opportunistic, partial-progress-tolerant, cheap when nothing changed.
-
-*Acceptance:* a repeat pull with no change costs one 304; one unreachable tribe
-does not prevent the reachable ones from updating; the device can always say
-when it last succeeded.
-
-**Status:** built for pull (`tribe pull --all`, etag/304). Bidirectional sync
-arrives when the edge is a real Fossil peer, which is post-v1.
+**Status:** `/api/ask` exists, loopback-only, no auth. **The contract and auth
+are the v1 work.**
 
 ---
 
 ## 3. Explicitly OUT of v1
 
-Named so they do not creep in:
-
-- **Federation between tribes.** Warren: "lets stick to tribes for now".
-- **Any LLM inside viki.** viki returns passages; the caller reasons. This is not
-  a resource constraint, it is the design (D-10 in spirit).
-- **Images as searchable content.** Descriptions are indexed as text — one model,
-  one epoch, D-11 unchanged. Image *embedding* is a second model and a second
-  epoch; out.
-- **Calendar, voice, big binaries.** D-2, D-3, D-7 are settled for later.
-- **Revocation.** Removing a member is a re-key of the tribe. v1 must SAY this
+- **Federation between tribes.** "Let's stick to tribes for now."
+- **Any LLM inside viki.** viki returns passages; the assistant reasons. Design,
+  not resource constraint.
+- **Images as searchable content.** Descriptions index as text — one model, one
+  epoch, D-11 unchanged. Image embedding is a second model; out.
+- **Voice, big binaries.** D-7, D-3 settled for later.
+- **Revocation.** Removing a member is a re-key of the tribe. v1 must SAY so
   rather than imply a delete button (QUEUE 48).
-- **ANN / vector index.** A speed fix for a scale not yet reached; a better model
-  is the quality fix. Do not conflate (QUEUE 45).
+- **ANN / vector index.** Speed fix for a scale not reached; a better model is
+  the quality fix (QUEUE 45).
 
 ---
 
 ## 4. The tension worth naming: D-5 says Flutter
 
-`D-5` settles mobile as **Flutter over `dart:ffi`**. v1 as drafted leads with an
-installable **PWA**, and that is a real divergence, not an oversight:
+D-5 settles mobile as Flutter over `dart:ffi`. This draft leads with an
+installable **PWA**, and that is a real divergence.
 
-- viki's UI is a text box, a citation list and a compose field. Flutter means
+- viki's UI is a text box, a citation list, a compose field. Flutter means
   cross-compiling SQLCipher, LibreSSL and ONNX for five platforms to render a
   list.
-- The wasm edge already exists and reproduces the native binary's ranking and
-  rrf scores **exactly**.
-- One artifact covers all six targets with no store, no signing, no matrix.
+- The wasm edge exists and reproduces the native binary's ranking and rrf scores
+  **exactly**.
+- One artifact, six targets, no store, no signing, no matrix.
 
-**Flutter becomes right at a specific line**, not a vague later: when the edge
-hosts a real Fossil repo. That needs sockets and a filesystem a browser will
-never have, and it is also when the OS keystore (`identity.db`'s empty
-`device_secret` slot) and non-evictable storage arrive. All three land together.
+**Flutter becomes right at a specific line:** when a device hosts a real Fossil
+repo. That needs sockets and a filesystem a browser will never have, and it is
+also when the OS keystore (`identity.db`'s empty `device_secret` slot) and
+non-evictable storage arrive. All three land together.
 
-**Proposed amendment to D-5, for Warren's ruling:** *PWA is the v1 UI on all six
+**Proposed amendment for Warren's ruling:** *PWA is the v1 UI on all six
 targets; Flutter over `dart:ffi` is how a device becomes a real Fossil peer, and
 that is v2.* D-5 is not wrong — it is aimed at the peer, and v1 is not building
-a peer.
+one.
 
-The iOS caveats are real and are designed around, not waved at: no share target
-(an iOS Shortcut posts to the same `?capture=` route), no install prompt, and
-~7-day eviction of script-writable storage unless the PWA is installed to the
-home screen — which is why install is presented there as *what makes offline
-durable*, not as a nicety.
+iOS specifics are designed around, not waved at: no share target (an iOS
+Shortcut posts to the same `?capture=` route), no install prompt, and ~7-day
+eviction of script-writable storage unless installed to the home screen — which
+is why install is presented there as what makes offline *durable*.
 
 ---
 
-## 5. Priority order — for Warren's correction
+## 5. Priority order — for correction
 
-Ordered by *value per unit of work*, not by dependency:
+By value per unit of work, not dependency:
 
-1. **§2.1 cross-project on the native CLI.** Highest value, mostly built. This
-   is the one that pays for itself immediately.
-2. **§2.3 provenance queries.** No model, no schema epoch; a join over tables
-   Fossil already keeps. Answers the questions agents actually ask.
-3. **§2.2 close the capture loop.** The killer story is broken at the last hop.
-4. **§2.6 API contract + auth.** Gates all interop; design deliberately.
-5. **§2.4 honest failure.** Ongoing; cheapest when done alongside each of the
-   above.
-6. **§2.7 attribution.** Needed before agents write at volume, not before they
-   write at all.
+1. **§2.1 + §2.2 the promise ledger, with agent identity.** Schema mostly
+   exists; this is the spine everything else hangs on.
+2. **§2.3 calendar ingest.** The presenting complaint. Notifications follow.
+3. **§2.4 the clock.** Small once 1–2 exist, and it is the first thing Warren
+   would actually *feel*.
+4. **§2.5 coverage reporting.** Ships alongside 3 or the briefing cannot be
+   trusted.
+5. **§2.7 cross-project on the native CLI.** Mostly built; pays immediately.
+6. **§2.6 close the capture loop.**
+7. **§2.8 provenance**, **§2.11 API contract + auth**, **§2.9 honest failure**
+   (continuous).
 
 ---
 
 ## 6. Questions only Warren can answer
 
-1. **Is `vikiverse.net` a hub, a directory, or a download?** It changes the trust
-   model completely: one hub Warren runs, a place to find tribes, or just where
-   the PWA is served from.
+1. **Is `vikiverse.net` a hub, a directory, or a download?** Changes the trust
+   model: one hub Warren runs, a place to find tribes, or where the PWA is
+   served.
 2. **Who else is in a tribe in v1** — only Warren's devices and agents, or other
-   people? Multi-person makes attribution and revocation urgent rather than
-   SHOULD.
-3. **Does the API authenticate as Fossil users, or does it get its own tokens?**
-   Reusing Fossil accounts is less machinery and keeps one authorization story;
-   tokens are more ergonomic for third-party tools.
+   people? Multi-person makes revocation urgent rather than deferred.
+3. **Does the API authenticate as Fossil users, or get its own tokens?** Reusing
+   Fossil accounts is less machinery and one authorization story; tokens are
+   more ergonomic for third-party tools.
 4. **Amend D-5?** See §4.
-5. **What is the smallest thing that would make you use this daily?** Everything
-   above is inference from watching the work; that answer would reorder §5.
+5. **Which calendar and which notification sources, concretely?** §2.3 cannot be
+   scoped without the actual list, and §2.5's coverage claim is defined by it.
+6. **What does the assistant do when it is not sure?** Ask, guess and mark, or
+   stay silent. This is the single biggest determinant of whether it is
+   trusted — and it is a values question, not a technical one.
