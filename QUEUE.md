@@ -1596,7 +1596,39 @@ back to OPFS. A phone that has pulled once never needs the hub again.
   in memory or is written to. This cache is read-only and a few MB. Revisit when it
   outgrows memory; the piece is already sitting there.
 
-GAP 2, ENCRYPTED AT REST -- STILL OPEN, AND IT IS THE SHARPER ONE. The cache is a
+### CORRECTION, same day, Warren: "um - this is an encrypted blob - what's sqlite doing here?"
+
+He is right and gap 2 as first written below contains a LAYERING ERROR. It says OPFS
+is a BYTE STORE and not a VFS, and then says SQLCipher is the fix. THOSE DO NOT
+COMPOSE. In the byte-store design the flow is fetch blob -> keep blob -> load the
+WHOLE thing into wasm memory -> SQLite reads from MEMFS. SQLCipher's codec encrypts
+pages AS SQLITE READS THEM FROM STORAGE; here SQLite is reading from memory, so the
+codec would be encrypting bytes that were decrypted a moment earlier by construction.
+It buys nothing.
+
+THE CODEC AND THE VFS ARE THE SAME DECISION. There are two coherent designs:
+
+  A. BLOB + WebCrypto -- encrypt the whole cache as one blob (AES-GCM) before it goes
+     to OPFS, decrypt into memory on open. ~20 lines of JS. NO SQLCipher, NO
+     LibreSSL-for-wasm, NO new build step. Plaintext exists only in wasm memory for
+     the life of the tab. CORRECT FOR A READ-ONLY FEW-MB CACHE, which is what the
+     edge has.
+
+  B. OPFS VFS + SQLCipher -- SQLite reads pages on demand from OPFS and the codec
+     decrypts each one. Page-level encryption is now exactly right because pages
+     genuinely come off storage. Needs opfs_vfs.c AND the LibreSSL-wasm libcrypto.a.
+     Earns its keep when the cache outgrows memory, and only then.
+
+DO A. It closes gap 2 with no build dependency at all, and it deletes the
+LibreSSL-under-emscripten unknown from the critical path. Reach for B at the same
+moment the cache stops fitting in memory -- not before, and never separately.
+
+What survives from the original writeup below: the vendored machinery inventory (it
+is all real and it is what B needs), and the key-custody question, which is
+IDENTICAL under A and B and is the actual open problem.
+
+GAP 2, ENCRYPTED AT REST -- STILL OPEN. (Original writeup, kept for the inventory;
+read the correction above first, the SQLCipher recommendation in it is superseded.) The cache is a
 COMPLETE PLAINTEXT COPY OF THE CORPUS (QUEUE 35). Persisting it to OPFS therefore
 leaves the whole corpus in the clear in a phone's browser storage. Everything needed
 to fix it exists next door and Warren was right that it is vendored:
@@ -1615,9 +1647,10 @@ to fix it exists next door and Warren was right that it is vendored:
   links (`${LIBRESSL_WASM}/lib/libcrypto.a`). It is not on disk and LIBRESSL_WASM is
   unset. Building LibreSSL under emscripten is the only unknown in the chain.
 
-  WORK, once that exists: compile viki's retrieval core against SQLCipher's
-  amalgamation instead of the plain one (same flags plus the codec ones), call
-  sqlite3_key() with the tribe key, and keep the OPFS byte store or move to the VFS.
+  WORK, once that exists (design B ONLY -- see the correction above): compile viki's
+  retrieval core against SQLCipher's amalgamation instead of the plain one (same flags
+  plus the codec ones), call sqlite3_key() with the tribe key, and move to the VFS.
+  Keeping the OPFS byte store while adding the codec is the incoherent combination.
   Nothing in viki_ask.c changes -- it only ever sees an sqlite3*.
 
   THE UNANSWERED DESIGN QUESTION IS KEY CUSTODY, not crypto. Where does a phone get

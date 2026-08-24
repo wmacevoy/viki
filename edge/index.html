@@ -125,9 +125,12 @@ async function embedQuery(text) {
 //
 // NOT ENCRYPTED AT REST. The cache is a complete plaintext copy of the corpus
 // (QUEUE 35), so this leaves it in the browser's origin-private storage in the
-// clear. SQLCipher-in-wasm is the fix and the recipe exists next door; it needs
-// LibreSSL built for wasm, which is not yet on disk. Do not put a tribe's real
-// corpus on a shared device until that lands.
+// clear. The fix here is WebCrypto AES-GCM over the whole blob, NOT SQLCipher:
+// with a byte store the database is fully in memory before SQLite touches it,
+// so a page-level codec would be encrypting bytes that were just decrypted.
+// The codec belongs with the VFS, and the VFS belongs to the day this cache
+// stops fitting in memory (QUEUE 46). Do not put a tribe's real corpus on a
+// lose-able device until the blob is encrypted.
 const OPFS_NAME = 'viki-cache.db';
 
 async function opfsRead() {
