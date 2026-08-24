@@ -42,26 +42,27 @@
       return;
     }
 
-    const main = document.querySelector('[role="main"]');
-    if (!main) {
-      /* Not ready and not-there look identical for the first few polls. */
-      if (VIKI.settle(SOURCE, false)) {
-        VIKI.report(SOURCE, 'blind', [], 'no [role=main] on /notifications');
-      }
-      return;
-    }
-
-    let rows = VIKI.findAll(main, '[role="listitem"]');
+    /* NO [role="main"] AND NO <main> ON THIS PAGE -- measured on a logged-in
+     * account, 2026-08-24. Facebook's landmark roles are banner/navigation/
+     * grid, and the notification rows sit in a plain DIV. The first version
+     * required a main region before looking for rows, so it reported `blind`
+     * while THIRTY perfectly good [role="listitem"] rows sat right there.
+     *
+     * The lesson generalises: scope to the narrowest anchor that actually
+     * identifies the content, and do not gate it behind a broader one you
+     * merely expect to exist. Searching the whole document costs nothing here
+     * and removes a failure mode. */
+    let rows = VIKI.findAll(document, '[role="listitem"]');
     if (rows.length === 0) {
-      /* Fall back once to any link-bearing row, then give up LOUDLY. Two
-       * anchors rather than one because a single selector is a single point of
-       * silent failure; more than two would be guessing. */
-      rows = VIKI.findAll(main, 'a[href*="/notifications/"]');
+      /* One fallback, then give up LOUDLY. Two anchors rather than one because
+       * a single selector is a single point of silent failure; more than two
+       * would be guessing. */
+      rows = VIKI.findAll(document, 'a[href*="/notifications/"]');
     }
     if (rows.length === 0) {
       if (VIKI.settle(SOURCE, false)) {
         VIKI.report(SOURCE, 'blind', [],
-          'main region found but no listitem rows -- markup probably changed');
+          'no [role=listitem] rows on /notifications -- markup probably changed');
       }
       return;
     }
@@ -69,9 +70,13 @@
 
     const items = rows
       .map(r => VIKI.text(r))
-      /* Drop chrome: single words, timestamps alone, and anything too short to
-       * carry a commitment. */
-      .filter(t => t && t.length > 12 && t.split(' ').length > 2)
+      /* Strip the unread badge Facebook prefixes to every row: it is state, not
+       * content, and it would make the same notification fingerprint
+       * differently once read. Measured: every row begins "Unread ". */
+      .map(t => t.replace(/^Unread\s+/, ''))
+      /* Drop chrome: nav labels, single words, and anything too short to carry
+       * a commitment. Measured examples: "New", "All", "Unread". */
+      .filter(t => t && t.length > 20 && t.split(' ').length > 3)
       .slice(0, 50);
 
     VIKI.report(SOURCE, 'ok', items, items.length + ' row(s) on /notifications');

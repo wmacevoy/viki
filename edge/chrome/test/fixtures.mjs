@@ -99,17 +99,16 @@ function facebookScan() {
   if (atLoginUrl(FB_LOGIN) || document.querySelector('form[action*="login"], input[name="pass"]')) {
     return VIKI.report('facebook', 'loggedout', [], 'signed out -- redirected to ' + location.pathname);
   }
-  const main = document.querySelector('[role="main"]');
-  if (!main) { if (VIKI.settle('facebook', false)) VIKI.report('facebook','blind',[],'no [role=main] on /notifications'); return; }
-  let rows = VIKI.findAll(main, '[role="listitem"]');
-  if (rows.length === 0) rows = VIKI.findAll(main, 'a[href*="/notifications/"]');
+  let rows = VIKI.findAll(document, '[role="listitem"]');
+  if (rows.length === 0) rows = VIKI.findAll(document, 'a[href*="/notifications/"]');
   if (rows.length === 0) {
-    if (VIKI.settle('facebook', false)) VIKI.report('facebook','blind',[],'main region found but no listitem rows -- markup probably changed');
+    if (VIKI.settle('facebook', false)) VIKI.report('facebook','blind',[],'no [role=listitem] rows on /notifications -- markup probably changed');
     return;
   }
   VIKI.settle('facebook', true);
   const items = rows.map(r => VIKI.text(r))
-    .filter(t => t && t.length > 12 && t.split(' ').length > 2).slice(0, 50);
+    .map(t => t.replace(/^Unread\s+/, ''))
+    .filter(t => t && t.length > 20 && t.split(' ').length > 3).slice(0, 50);
   VIKI.report('facebook', 'ok', items, items.length + ' row(s) on /notifications');
 }
 
@@ -137,25 +136,32 @@ const t = (name, cond) => { cond ? pass++ : fail++; console.log(`  ${cond ? 'PAS
 
 console.log('== facebook ==');
 {
+  /* SHAPED FROM THE LIVE PAGE, 2026-08-24: rows sit in a plain DIV with NO
+   * [role=main] and NO <main> anywhere, each prefixed "Unread". Measured on a
+   * logged-in account: 30 rows, 28 real, 2 chrome. */
   const root = new El('body', {}, '', [
-    new El('div', { role: 'main' }, '', [
-      new El('div', { role: 'listitem' }, 'Karl commented on your post about the fence line'),
-      new El('div', { role: 'listitem' }, 'Sara invited you to the roundup on Saturday'),
-      new El('div', { role: 'listitem' }, 'ok')     // too short: chrome, not content
+    new El('div', {}, '', [
+      new El('div', { role: 'listitem' }, 'New'),                    // chrome
+      new El('div', { role: 'listitem' }, 'Unread Karl commented on your post about the fence line. 4d'),
+      new El('div', { role: 'listitem' }, 'Unread Sara invited you to the roundup on Saturday. 1d'),
+      new El('div', { role: 'listitem' }, 'All')                     // chrome
     ])
   ]);
   const sent = mount(root, '/notifications');
+  VIKI._misses = {};
   facebookScan();
   const m = sent[0];
-  t('F1 a healthy page reports ok', m.status === 'ok');
-  t('F2 real rows are captured, chrome is dropped', m.items.length === 2);
+  t('F1 a healthy page reports ok WITHOUT any [role=main]', m.status === 'ok');
+  t('F2 real rows are captured, nav chrome is dropped', m.items.length === 2);
+  t('F2b the "Unread" state prefix is stripped, so a read row still matches',
+    m.items.every(i => !/^Unread/.test(i.text)));
   t('F3 fingerprints are distinct per item', m.items[0].fp !== m.items[1].fp);
 }
 {
-  const sent = mount(new El('body', {}, '', [new El('div', { role: 'main' })]), '/notifications');
+  const sent = mount(new El('body', {}, '', [new El('div', {})]), '/notifications');
   VIKI._misses = {};
   facebookScan(); facebookScan(); facebookScan();
-  t('F4 main present but NO rows is BLIND, not zero items', sent[0] && sent[0].status === 'blind');
+  t('F4 page present but NO listitem rows is BLIND, not zero items', sent[0] && sent[0].status === 'blind');
 }
 {
   const sent = mount(new El('body', {}, '', [new El('div', { id: 'x' })]), '/notifications');

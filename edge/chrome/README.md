@@ -73,6 +73,23 @@ report immediately, since those are positive findings.
 
 All three are regression fixtures now (`test/fixtures.mjs` F8, D8, D9, D10).
 
+### Then, signed in, a fourth — and it was the anchor itself
+
+**Facebook has no `[role="main"]` and no `<main>` on `/notifications`.** Its
+landmark roles are `banner`, `navigation`, `grid`. The extractor required a main
+region *before* looking for rows, so it reported `blind` while **thirty perfectly
+good `[role="listitem"]` rows sat right there.**
+
+The lesson generalises past this one selector: **scope to the narrowest anchor
+that actually identifies the content, and do not gate it behind a broader one
+you merely expect to exist.** Searching the whole document costs nothing here and
+removes a failure mode.
+
+Measured on a live logged-in account: **30 rows found, 28 captured, 2 dropped**
+as navigation chrome ("New", "All"). Every row is prefixed `Unread ` — that is
+*state*, not content, so it is stripped; otherwise the same notification would
+fingerprint differently once read and be captured twice.
+
 ## Limits, stated rather than discovered
 
 - **Discord reads only the channel you have open.** It does not enumerate
