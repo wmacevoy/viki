@@ -67,8 +67,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const s = await state();
 
     /* Status is recorded even when there is nothing to send -- `blind` with
-     * zero items is the case that must never look like a quiet day. */
-    s.sources[msg.source] = { status: msg.status, at: msg.at, note: msg.note };
+     * zero items is the case that must never look like a quiet day.
+     *
+     * `lastOk` is kept SEPARATELY from `at`, and that separation is the point:
+     * under a morning-login model a channel goes stale simply because the
+     * session expired, and stale is not broken. `at` says when the reader last
+     * looked; `lastOk` says when it last actually SAW anything. A brief that
+     * reports "Teams: last read Tuesday" is honest; one that reports only
+     * "Teams: loggedout" tells Warren nothing about how much he is missing. */
+    const prev = s.sources[msg.source] || {};
+    s.sources[msg.source] = {
+      status: msg.status,
+      at: msg.at,
+      note: msg.note,
+      lastOk: msg.status === 'ok' ? msg.at : (prev.lastOk || null)
+    };
 
     let queue = s.queue;
     if (s.enabled && msg.status === 'ok') {

@@ -490,6 +490,51 @@ WhatsApp."* That is not a degraded version of the feature. It is the honest
 version, and §2.5 already requires it: every completeness claim names its
 sources.
 
+### THE LOGIN TAX IS THE DISEASE, NOT THE OBSTACLE (2026-08-24)
+
+> Warren: *"SSO with MFA is already brutal — welcome to my life and why I miss
+> so many things. This may be mitigated by a morning routine of logging in for
+> 5-10 minutes. I am sure I am not alone."*
+
+This document had authentication filed as friction *the reader* must survive.
+That is backwards. **MFA friction is why Warren misses things in the first
+place** — six systems, each demanding a phone tap, so they do not get checked,
+so a promise made in Teams on Tuesday is found on Friday. The product is not
+working around his auth problem; it is working around the *same* problem that
+creates the need for it.
+
+**That makes the morning login a feature rather than a concession.** If he signs
+in once, deliberately, for five or ten minutes, that window is when every
+browser-only channel is readable. Which turns the whole shape inside out:
+
+    before:  log into six systems, and check each one, all day, forever
+    after:   log into six systems ONCE, and be told for the rest of the day
+
+Three consequences, and they are design changes rather than sentiment:
+
+1. **Harvest hard during a live window, not lazily on a timer.** A 120-second
+   poll is right for an always-open tab and wrong for a ten-minute session — it
+   might sample a page twice before the tab closes. The reader should sweep
+   immediately when a page becomes visible, and again shortly after, because the
+   session is *known to be short*.
+
+2. **Coverage must report FRESHNESS, not just status.** "Teams: last read
+   Tuesday" is the sentence that makes the brief honest. §2.5 says a
+   completeness claim names its sources; under a login-window model it must also
+   name *when* each was last actually seen, because a stale channel and a broken
+   one fail identically from the reader's side and differently for Warren.
+
+3. **"These need you to sign in" is itself a promise.** It has an owner (him), a
+   due time (this morning), and a cost if skipped (a channel goes dark). Putting
+   it in the ledger turns the login routine from an open-ended chore into a
+   bounded, checkable task — and one that shrinks on days when three of the six
+   sessions are still alive.
+
+**"I am sure I am not alone" is the generalisable part.** MFA fatigue in
+institutional settings is near-universal, and the usual response is either to
+weaken the auth or to nag the user. This does neither: it makes the login the
+user already performs pay for the entire day.
+
 ### THE BROWSER IS THE PRIMARY PATH, NOT A FALLBACK (corrected 2026-08-24)
 
 > Warren: *"the only way to reach office 365 or teams is through the web. Also

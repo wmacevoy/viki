@@ -6,13 +6,53 @@ roughly half of Warren's notification channels have no API — so the only hones
 way to see them is the way he already sees them: rendered in his own
 authenticated browser session.
 
+## Why this exists at all
+
+> *"SSO with MFA is already brutal — welcome to my life and why I miss so many
+> things. This may be mitigated by a morning routine of logging in for 5–10
+> minutes. I am sure I am not alone."* — Warren, 2026-08-24
+
+MFA friction is not an obstacle this reader works around. **It is the reason the
+things get missed** — six systems, each demanding a phone tap, so they do not
+get checked, so a promise made in Teams on Tuesday surfaces on Friday.
+
+Which makes the morning login a **feature**, not a concession:
+
+```
+before:  log into six systems, and check each one, all day, forever
+after:   log into six systems ONCE, and be told for the rest of the day
+```
+
+Three things follow, and they are why this reader behaves the way it does:
+
+1. **It harvests in bursts, not on a lazy timer.** A sweep the moment a tab
+   becomes visible, again at 4s and 12s once the app has rendered, and on SPA
+   route changes — because a login round *is* mostly route changes
+   (`/mail` → `/calendar`, `/d2l/home` → `/quickeval`). A flat two-minute poll
+   is tuned for a tab left open all day and would sample a ten-minute session
+   maybe twice.
+2. **It tracks freshness separately from status.** `lastOk` says when a channel
+   was last actually *seen*; `at` says when it was last *looked at*. Under a
+   login-window model a channel goes stale because a session expired, and
+   **stale is not broken** — they fail identically from the reader's side and
+   very differently for you. "Teams: signed out · last read 3d ago" is the
+   honest sentence.
+3. **"Sign in to these" is itself a promise** — an owner, a due time, a cost if
+   skipped. The popup names them, so the morning routine is a bounded list that
+   shrinks on a good day rather than an open-ended chore.
+
 ## Install
 
 1. `chrome://extensions` → enable **Developer mode**
 2. **Load unpacked** → choose this directory (`edge/chrome`)
-3. Start viki: `viki serve` (it listens on `127.0.0.1:8080`)
-4. Open `facebook.com/notifications` or a Discord channel, then click the
-   extension icon to see what it can and cannot read.
+3. **Use a dedicated Chrome profile** holding only the accounts this reads.
+   An extension in your everyday browser can see every tab, including banking;
+   observe-only blocks the *action* half of that risk and a separate profile
+   blocks the *reach* half. Five minutes, and it removes a whole class of
+   exposure (QUEUE 51).
+4. Start viki: `viki serve` (it listens on `127.0.0.1:8080`)
+5. Open the sites during your morning sign-in round, then click the extension
+   icon to see what it read and what has gone stale.
 
 ## What it does, and what it deliberately cannot
 

@@ -143,13 +143,35 @@ const VIKI = {
     return patterns.some(p => u.indexOf(p) >= 0);
   },
 
-  /* Poll rather than MutationObserver. An observer fires hundreds of times a
-   * second on these pages and would turn a reader into a load generator on
-   * the reader's own machine; a slow poll is enough for something whose output
-   * is read once a morning. */
+  /* THE SESSION IS SHORT AND DELIBERATE, SO HARVEST LIKE IT.
+   *
+   * Warren signs into six SSO-with-MFA systems once in a morning, for five or
+   * ten minutes, because doing it repeatedly is why things get missed at all.
+   * A flat 120-second poll is tuned for a tab left open all day and is exactly
+   * wrong here -- it might sample a page twice before the tab closes.
+   *
+   * So: sweep the moment a page becomes visible, again a few seconds later
+   * once the app has rendered, and then settle into the slow poll for a tab
+   * that does stay open. `visibilitychange` catches the tab-switch that a
+   * ten-minute login round consists of.
+   *
+   * Poll rather than MutationObserver throughout: an observer fires hundreds of
+   * times a second on these pages and would turn a reader into a load generator
+   * on the user's own machine. */
   every(ms, fn) {
     const run = () => { try { fn(); } catch (e) { console.warn('viki reader:', e); } };
-    run();
-    setInterval(run, ms);
+    const burst = () => { run(); setTimeout(run, 4000); setTimeout(run, 12000); };
+
+    burst();                                    /* the window may already be open */
+    setInterval(run, ms);                       /* a tab that stays open */
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) burst();            /* he just switched to this tab */
+    });
+    /* SPA route changes do not reload the page, and a login round is mostly
+     * route changes -- /mail -> /calendar, /d2l/home -> /quickeval. */
+    let lastPath = location.pathname;
+    setInterval(() => {
+      if (location.pathname !== lastPath) { lastPath = location.pathname; burst(); }
+    }, 2000);
   }
 };

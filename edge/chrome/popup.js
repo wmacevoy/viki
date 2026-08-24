@@ -23,14 +23,26 @@ function row(name, s) {
   nm.textContent = name;
   const note = document.createElement('span');
   note.className = 'note';
+  /* FRESHNESS, not just status. Under a morning-login model the useful question
+   * is not "is it working" but "how long since it actually saw anything" --
+   * a channel signed out three days ago is three days of missed promises, and
+   * one signed out an hour ago is nothing. */
+  const ago = iso => {
+    if (!iso) return 'never';
+    const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (mins < 2) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    if (mins < 60 * 24) return Math.round(mins / 60) + 'h ago';
+    return Math.round(mins / 1440) + 'd ago';
+  };
   if (!s) {
-    note.textContent = 'not seen yet — open the site';
+    note.textContent = 'never read — sign in and open it';
   } else if (s.status === 'ok') {
-    note.textContent = (s.note || 'reading') + ' · ' + s.at.slice(11, 16);
+    note.textContent = (s.note || 'reading') + ' · ' + ago(s.at);
   } else if (s.status === 'loggedout') {
-    note.textContent = 'signed out — nothing readable';
+    note.textContent = 'signed out · last read ' + ago(s.lastOk);
   } else {
-    note.textContent = 'BLIND: ' + (s.note || 'page changed') + ' · ' + s.at.slice(11, 16);
+    note.textContent = 'BLIND: ' + (s.note || 'page changed') + ' · last read ' + ago(s.lastOk);
   }
   d.append(dot, nm, note);
   return d;
@@ -44,8 +56,18 @@ async function draw() {
   for (const s of SOURCES) host.appendChild(row(s, sources[s]));
 
   const n = (d.queue || []).length;
+  /* "These need you to sign in" is itself a promise -- an owner, a due time,
+   * and a cost if skipped. Naming the stale ones turns the morning login from
+   * an open-ended chore into a bounded list that shrinks on a good day. */
+  const stale = SOURCES.filter(name => {
+    const s = sources[name];
+    if (!s) return true;
+    if (s.status === 'ok') return false;
+    return !s.lastOk || (Date.now() - Date.parse(s.lastOk)) > 12 * 3600 * 1000;
+  });
   document.getElementById('queue').textContent =
-    n ? n + ' waiting for viki' : 'nothing waiting';
+    stale.length ? 'sign in: ' + stale.join(', ')
+                 : (n ? n + ' waiting for viki' : 'all channels fresh');
 
   const on = d.enabled !== false;
   document.getElementById('toggle').textContent = on ? 'Pause reading' : 'Resume reading';
