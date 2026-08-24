@@ -1840,3 +1840,54 @@ SHAPE, if built:
   browser                      WebCrypto non-extractable device key; unwrap on unlock
   D-8 stays as-is for servers (systemd credential); this is the human/agent/phone tier.
 
+## 49. identity.db: keep the trivial container, fix the FACTOR COUNT, not the format
+     (Warren, 2026-08-23: "identity.db is trivially encrypted (key: 1) these are the
+      private keys encrypted with user pass phrases. can you think of better with
+      offline access?")
+
+MEASURED FIRST: the LibreSSL already linked exposes PBKDF2 ONLY. No scrypt, no Argon2,
+no bcrypt_pbkdf in vendor/libressl-build-out/include/openssl. That matters because
+PBKDF2 is currently carrying the entire security budget.
+
+KEEP THE key:1 CONTAINER, AND WRITE DOWN WHY, or someone will "simplify" it to a plain
+SQLite file and quietly lose a property: SQLCipher applies a PER-PAGE HMAC even under a
+publicly known key, so the container gets TAMPER DETECTION for free. Offline by
+construction and one code path for every db are the other two reasons. The trivial key
+is obfuscation, the HMAC is not.
+
+THE WEAKNESS IS THE FACTOR COUNT, NOT THE FORMAT. One factor carries everything, and it
+is attackable offline at unlimited speed the moment identity.db is copied. PBKDF2 has no
+memory hardness, so GPUs parallelise it cheaply; a memorable passphrase is ~40 bits and
+SQLCipher's 256k iterations (~345ms/guess on this machine, FINDINGS.md) is a rounding
+error to rented hardware.
+
+TWO FIXES, NEITHER OF WHICH COSTS OFFLINE ACCESS -- which is the counterintuitive part
+and the reason to say it out loud:
+
+ 1. BIND TO THE DEVICE (the categorical win). Combine the passphrase with a secret from
+    a platform keystore: Secure Enclave / Keychain, Android Keystore, TPM, and IN THE
+    BROWSER the WebAuthn PRF extension -- a passkey deriving a stable 32-byte secret,
+    biometric-gated, fully offline, no network anywhere in it.
+        K = HKDF( PBKDF2(passphrase, salt) || device_secret )
+    LibreSSL has HKDF, so the combination costs nothing. This changes the attack from
+    "offline, parallel, unlimited" to "must physically possess the device". Stolen file
+    alone is useless; stolen device alone is useless. That is a change of kind, not
+    degree, and it is worth more than any KDF tuning.
+
+ 2. ARGON2ID FOR THE PASSPHRASE LEG. Not free -- LibreSSL lacks it -- but it is ONE
+    vendored public-domain file (~1200 lines), which is exactly how this project already
+    carries sha256.c and tokenizer.c. Idiomatic here, not a new dependency. Raises the
+    per-guess cost by orders of magnitude for anyone who does get the file.
+
+SMALLER, BOTH WORTH DOING:
+ 3. SESSION-CACHE the unwrapped key with a timeout. An Argon2 unlock is ~1s; paying it
+    per operation makes people choose a weaker passphrase, which loses more than the KDF
+    gained.
+ 4. RECOVERY VIA QUEUE 48's WRAPPING. Wrap the identity key to a recovery recipient -- a
+    printed age key in a safe, or a second device. One wrap tool then serves both tribe
+    keys and identity recovery. Without it a forgotten passphrase is total, silent loss,
+    and that will happen to someone.
+
+DO NOT INVENT A SCHEME. Every piece above is standard construction; the only thing being
+designed here is which factors are required, and the answer is two.
+
