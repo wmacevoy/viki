@@ -149,8 +149,15 @@ sh edge/build-wasm.sh                       # viki edge: the READ-ONLY tier comp
                                             #   aborting stubs (edge/edge_noembed.c) -- that
                                             #   three-symbol coupling is the whole distance
                                             #   between viki's read path and a phone.
-                                            #   BM25 + literal only: the chunk vectors are in
-                                            #   the cache, but embedding a QUERY needs the model
+                                            #   HYBRID: the query is tokenized by viki's OWN
+                                            #   tokenizer.c inside wasm, onnxruntime-web runs the
+                                            #   graph in JS, and pooling/L2 happen back in C
+                                            #   mirroring embed.c. Verified to reproduce the
+                                            #   NATIVE binary's ranking AND rrf scores exactly.
+                                            #   Falls back to BM25+literal with no model.
+                                            #   IT NEEDS NO FOSSIL: the hub already serves
+                                            #   /uv/viki-cache.db and /uv/viki-model/* over plain
+                                            #   HTTP, so `cache pull` on the edge is a fetch()
 sh build/vikiverse-up.sh <dir> [tribe] [--lan]  # stands up a WORKING vikiverse: one
                                             #   encrypted hub served over real HTTP, a
                                             #   `laptop` peer that has the model and does

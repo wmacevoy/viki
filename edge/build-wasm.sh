@@ -33,14 +33,14 @@ docker run --rm -v "$ROOT":/src -w /src emscripten/emsdk:latest \
     -I src -I "$SQ" -I vendor/sqlite-ndvss \
     -DSQLITE_ENABLE_FTS5 -DSQLITE_CORE -DSQLITE_THREADSAFE=0 \
     -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 \
-    edge/edge_wasm.c edge/edge_noembed.c \
-    src/viki_ask.c src/viki_db.c src/viki_grep.c src/viki_note.c \
+    edge/edge_wasm.c edge/edge_embed_js.c \
+    src/viki_ask.c src/viki_db.c src/viki_grep.c src/viki_note.c src/tokenizer.c \
     "$SQ/sqlite3.c" vendor/sqlite-ndvss/sqlite-ndvss.c \
     -o edge/dist/viki-edge.js \
     -sMODULARIZE=1 -sEXPORT_NAME=VikiEdge \
     -sALLOW_MEMORY_GROWTH=1 -sFORCE_FILESYSTEM=1 \
-    -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","UTF8ToString"]' \
-    -sEXPORTED_FUNCTIONS='["_edge_open","_edge_ask","_edge_chunk_count","_edge_free","_malloc","_free"]' \
+    -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","UTF8ToString","HEAP32","HEAPF32","HEAPU8"]' \
+    -sEXPORTED_FUNCTIONS='["_edge_open","_edge_ask","_edge_chunk_count","_edge_free","_edge_vocab_load","_edge_tokenize","_edge_set_query_from_hidden","_edge_clear_query_vector","_malloc","_free"]' \
     -sSTACK_SIZE=1048576
 
 ls -la "$ROOT/edge/dist/"

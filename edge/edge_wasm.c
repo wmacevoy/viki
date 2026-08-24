@@ -30,8 +30,13 @@
 #include <string.h>
 #include "viki_db.h"
 #include "viki_ask.h"
+#include "embed.h"
 
 static sqlite3 *g_db = NULL;
+
+/* Supplied by edge_embed_js.c: the JS-backed embedder, or NULL when no query
+** vector has been set. Passing NULL is the degraded path, not an error. */
+extern viki_embedder *edge_embedder(void);
 
 /* Appends z to a growing buffer as a JSON string body, escaping what RFC 8259
 ** requires. Indexed content is untrusted text -- it is this project's own
@@ -110,10 +115,13 @@ char *edge_ask(const char *zQuery, int k){
         buf = malloc(64); if( buf ) strcpy(buf, "{\"error\":\"no cache open\"}");
         return buf;
     }
-    /* emb = NULL: the degraded path. BM25 + the literal leg. */
-    n = viki_ask_query(g_db, zQuery, k, NULL, res, 20);
-
-    json_raw(&buf, &len, &cap, "{\"mode\":\"bm25+literal\",\"results\":[");
+    {
+        viki_embedder *emb = edge_embedder();
+        n = viki_ask_query(g_db, zQuery, k, emb, res, 20);
+        json_raw(&buf, &len, &cap, emb
+                 ? "{\"mode\":\"hybrid\",\"results\":["
+                 : "{\"mode\":\"bm25+literal\",\"results\":[");
+    }
     for( i = 0; i < n; i++ ){
         if( i ) json_raw(&buf, &len, &cap, ",");
         json_raw(&buf, &len, &cap, "{\"rank\":");

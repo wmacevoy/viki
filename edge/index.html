@@ -26,14 +26,15 @@
   .status{color:var(--dim);font-size:.85rem;padding:.5rem 0}
 </style>
 <h1>viki edge</h1>
-<div class="sub">read-only tier — no model, no fossil, no network once loaded</div>
+<div class="sub">read-only tier — pulls its cache and model, then works offline</div>
 <div class="bar">
   <button id="pick">load cache.db</button>
   <input type="file" id="file" accept=".db" hidden>
   <span class="status" id="status">no cache loaded</span>
 </div>
-<input type="search" id="q" placeholder="ask…  (BM25 + literal, no query embedding)" disabled>
+<input type="search" id="q" placeholder="ask…" disabled>
 <div id="out"></div>
+<script src="ort.min.js"></script>
 <script src="viki-edge.js"></script>
 <script>
 // The fragment markers are viki_ask.h's VIKI_MARK_* strings. They are applied
@@ -59,20 +60,73 @@ async function openBytes(buf, label) {
   return true;
 }
 
+// THE MODEL LEG. This is the part that makes the edge a real peer rather than
+// a keyword box, and the division of labour is deliberate:
+//   - the QUERY is tokenized by viki's OWN WordPiece implementation, inside
+//     wasm. Not a JS reimplementation: D-11 makes an embedding a deterministic
+//     function of (content_hash, model_id, chunk_params), so a query tokenized
+//     differently from the corpus is simply in a different space.
+//   - onnxruntime-web runs the graph. ORT ships no static wasm library to link
+//     against, and there is no reason to link one -- the model is a pure
+//     function and JS can drive it.
+//   - pooling and L2-normalization happen back in C, mirroring embed.c, so
+//     that arithmetic exists once.
+// Verified: this path reproduces the NATIVE binary's ranking and rrf scores
+// exactly, not approximately.
+let session = null, MODEL_ID = '';
+
+async function loadModel() {
+  try {
+    const man = await (await fetch('viki-manifest.json', {cache:'force-cache'})).json();
+    MODEL_ID = man.model_id;
+    const vocab = new Uint8Array(await (await fetch('vocab.txt', {cache:'force-cache'})).arrayBuffer());
+    M.FS.writeFile('/vocab.txt', vocab);
+    if (!M.ccall('edge_vocab_load','number',['string'],['/vocab.txt'])) return false;
+    session = await ort.InferenceSession.create('model.onnx');
+    return true;
+  } catch (e) { return false; }
+}
+
+async function embedQuery(text) {
+  if (!session) return false;
+  const MAXL = 256;
+  const p = M._malloc(MAXL * 4);
+  const n = M.ccall('edge_tokenize','number',['string','number','number'],[text, p, MAXL]);
+  const ids = Array.from(new Int32Array(M.HEAP32.buffer, p, n));
+  M._free(p);
+  if (!n) return false;
+  const big = BigInt64Array.from(ids.map(BigInt));
+  const out = await session.run({
+    input_ids:      new ort.Tensor('int64', big, [1, n]),
+    attention_mask: new ort.Tensor('int64', BigInt64Array.from(ids.map(()=>1n)), [1, n]),
+    token_type_ids: new ort.Tensor('int64', BigInt64Array.from(ids.map(()=>0n)), [1, n]),
+  });
+  const hidden = out[session.outputNames[0]];
+  const [, seqLen, dim] = hidden.dims;
+  const hp = M._malloc(hidden.data.length * 4);
+  M.HEAPF32.set(hidden.data, hp >> 2);
+  const ok = M.ccall('edge_set_query_from_hidden','number',
+                     ['number','number','number','string'],[hp, seqLen, dim, MODEL_ID]);
+  M._free(hp);
+  return !!ok;
+}
+
 VikiEdge().then(async mod => {
   M = mod;
-  setStatus('runtime ready — fetching cache…');
-  // A cache served next to this page is the hosted-hub flow: the phone pulls
-  // the projection once and is then self-contained. Falling back to the file
-  // picker covers the sideloaded/offline case.
+  setStatus('runtime ready — pulling cache…');
+  // Served next to this page is the hosted-hub flow. On a real hub these are
+  // Fossil's own unversioned endpoints -- /uv/viki-cache.db and
+  // /uv/viki-model/* -- which it already serves over HTTP, which is why the
+  // edge needs no Fossil of its own. The file picker covers the sideloaded case.
   try {
     const r = await fetch('cache.db', { cache: 'no-store' });
-    if (r.ok) {
-      const buf = new Uint8Array(await r.arrayBuffer());
-      if (await openBytes(buf, 'cache.db')) return;
-    }
+    if (r.ok) await openBytes(new Uint8Array(await r.arrayBuffer()), 'cache.db');
   } catch (_) {}
-  setStatus('runtime ready — load a cache.db');
+  if (!ready) { setStatus('runtime ready — load a cache.db'); return; }
+  setStatus($('status').textContent + ' · loading model…');
+  const okModel = await loadModel();
+  setStatus($('status').textContent.replace(' · loading model…',
+    okModel ? ' · hybrid' : ' · BM25+literal (no model)'));
 });
 
 $('pick').onclick = () => $('file').click();
@@ -86,11 +140,12 @@ $('file').onchange = async e => {
 let timer = null;
 $('q').oninput = () => { clearTimeout(timer); timer = setTimeout(run, 180); };
 
-function run() {
+async function run() {
   if (!ready) return;
   const q = $('q').value.trim();
   const out = $('out'); out.textContent = '';
   if (!q) return;
+  if (session) { if (!await embedQuery(q)) M.ccall('edge_clear_query_vector', null, [], []); }
   const p = M.ccall('edge_ask', 'number', ['string','number'], [q, 8]);
   const json = M.UTF8ToString(p);
   M.ccall('edge_free', null, ['number'], [p]);
@@ -100,6 +155,9 @@ function run() {
     d.className = 'status'; d.textContent = '(no matches)';
     out.appendChild(d); return;
   }
+  const modeline = document.createElement('div');
+  modeline.className = 'status'; modeline.textContent = 'mode: ' + r.mode;
+  out.appendChild(modeline);
   for (const h of r.results) {
     const div = document.createElement('div'); div.className = 'hit';
     const meta = document.createElement('div'); meta.className = 'meta';
