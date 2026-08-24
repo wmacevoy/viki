@@ -942,8 +942,22 @@ check "C13 the wiki page is retrievable from the pulled cache, at rank 1 (wiki: 
       'head -1 "$LOG/c.wiki.out" | $GREP -qE "${RANK1}wiki:PumpMaintenance\$"' "$LOG/c.wiki.out"
 ( cd "$F" && VIKI_MODEL_DIR="$PUSH_MODEL" "$VIKI_BIN" ask "gearbox rattles metallic knock" \
     >"$LOG/c.tkt.out" 2>"$LOG/c.tkt.err" </dev/null ) || true
-check "C14 the ticket is retrievable from the pulled cache, at rank 1 (ticket: virtual path)" \
-      'head -1 "$LOG/c.tkt.out" | $GREP -qE "${RANK1}ticket:[0-9a-f]+\$"' "$LOG/c.tkt.out"
+# C14 asserts TOP TWO, not rank 1, and the reason is measured rather than a
+# concession. A ticket and its CHANGE RECORD (tchg:) carry near-identical text
+# -- the change record quotes the comment and title verbatim -- so they are
+# always adjacent in any ranking. Before `viki ask` had a literal leg the two
+# legs happened to order them ticket-first; with three legs they score
+# 0.0487 vs 0.0489, a 0.4% margin that flips run to run. Measured 2026-08-24:
+# the same binary produced 90/0/0 once and 89/1/0 twice.
+#
+# Rank 1 was never the claim worth making here. The DoD property is that TICKET
+# CONTENT SURVIVES THE PUSH/PULL ROUND TRIP into a fresh clone, which top-two
+# proves exactly as well -- and the control below is what keeps it honest: a
+# `ticket:` path must appear at all, and D-series still proves the cache was
+# never indexed locally. Asserting a coin flip is not a stronger test, it is a
+# flaky one.
+check "C14 the ticket is retrievable from the pulled cache, top 2 (ticket: virtual path)" \
+      '$GREP -E "^\[[12]\] rrf=" "$LOG/c.tkt.out" | $GREP -qE "ticket:[0-9a-f]+\$"' "$LOG/c.tkt.out"
 
 if [ "$HAVE_MODEL" = 1 ]; then
     # The pulled VECTORS are usable, not merely present -- and proved the

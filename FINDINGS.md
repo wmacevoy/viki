@@ -12,6 +12,46 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## A third retrieval leg turned an m1 assertion into a coin flip, and one green run hid it
+
+2026-08-24. Recorded because the failure mode is "the suite is green sometimes"
+and that is the hardest kind to notice.
+
+`viki ask` gained a LITERAL leg (QUEUE 42). m1's **C14** asserts a ticket is
+rank 1 in a fresh clone. A ticket and its CHANGE RECORD (`tchg:`) carry
+near-identical text -- the change record quotes the comment and title verbatim
+-- so they are always adjacent in any ranking. With two legs they happened to
+order ticket-first. With three:
+
+```
+[1] rrf=0.0489  tchg:20444ff9...      = 1/61 + 1/61 + 1/62
+[2] rrf=0.0487  ticket:3736d13c...    = 1/61 + 1/62 + 1/62
+```
+
+A **0.4% margin**, which flips on nothing more than which leg ranks which first.
+Measured on one unchanged binary: **90/0/0 once, then 89/1/0 twice.**
+
+**The dangerous part was the single green run.** It came first, and it was the
+one quoted in a commit message. A suite that passes 1-in-3 reads as "passing
+with an occasional blip" rather than "a real assertion is broken", and the
+natural response -- re-run it -- rewards the wrong conclusion. Running m1 THREE
+TIMES is what turned an anomaly into a diagnosis, and is cheap enough
+(~35s each) to be the default when a retrieval change lands.
+
+**The fix was to correct the claim, not to loosen it.** Rank 1 was never the
+property worth asserting: the DoD claim is that TICKET CONTENT SURVIVES THE
+PUSH/PULL ROUND TRIP into a fresh clone, and top-two proves that exactly as
+well. Asserting a coin flip is not a stronger test, it is a flaky one. C14 now
+checks the top two and says why in eleven lines, so nobody tightens it back.
+
+**The general trap:** adding a retrieval leg re-orders every near-tie in the
+corpus. Any assertion pinned to rank 1 on documents with overlapping text is a
+latent coin flip, and it will not announce itself. After a ranking change, look
+for assertions whose margin is under ~1% rather than only for the ones that
+went red.
+
+---
+
 ## Doc rot is not always decay: a claim can be FALSE ON ARRIVAL when parallel agents integrate, and this repo has at least one
 
 2026-08-23. Found by an undirected `viki muse` sweep of the repo's own cache
