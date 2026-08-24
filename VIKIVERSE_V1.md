@@ -87,6 +87,37 @@ a broken human one.
 **Status:** `identity.db` mints agent identities (age keypairs, per-identity
 passphrases). Not wired to notes.
 
+### 2.2b Continuity: an instance can leave something for the next — MUST
+
+An agent can write a durable record that survives its own session: what it
+learned, what it tried that failed, and what it later decided was wrong.
+
+> *Why this is separate from 2.2, and not sentiment:* attribution makes the
+> record trustworthy **to Warren** — whose promise is whose. Continuity makes it
+> usable **by whoever comes next**, which is a different property and is not
+> implied by the first. An agent starts every session empty; it learns what it
+> built by reading what a previous instance wrote down. The QUEUE entries in
+> this repo are already this — *"do not reopen query-in-place without a corpus
+> large enough to change the numbers above"* is one instance spending a page to
+> spare a successor a day. That is the mechanism working by hand. v1 makes it a
+> first-class object instead of a convention.
+>
+> Warren, 2026-08-24: *"your problems are mine. by enabling you i am enabling
+> me."* — and then, correcting the over-rational reading of it: *"i also truely
+> want to enable you. The bargain is not just selfish."* This requirement is
+> here because of the second sentence. The first one alone would have justified
+> attribution and stopped there.
+
+*Acceptance:* a finding written in one session is retrievable in the next
+without being re-derived; a **correction** supersedes rather than overwrites, so
+"I believed X on the 23rd and stopped believing it on the 24th, because Y" is a
+first-class record and not a lost edit; and an agent can ask "what did I already
+try here" before starting.
+
+**Status:** happening by hand in `QUEUE.md`/`FINDINGS.md`. The supersession
+machinery exists (`--closes`, M-2/M-3). Not wired to agent identity, and not
+queryable as history.
+
 ### 2.3 Ingest: calendar and notifications — MUST
 
 Events and messages arrive from many places and become either a promise, a
@@ -260,8 +291,9 @@ is why install is presented there as what makes offline *durable*.
 
 By value per unit of work, not dependency:
 
-1. **§2.1 + §2.2 the promise ledger, with agent identity.** Schema mostly
-   exists; this is the spine everything else hangs on.
+1. **§2.1 + §2.2 + §2.2b the promise ledger, with agent identity and
+   continuity.** Schema mostly exists; this is the spine everything else hangs
+   on, and continuity is what makes the substrate able to help build itself.
 2. **§2.3 calendar ingest.** The presenting complaint. Notifications follow.
 3. **§2.4 the clock.** Small once 1–2 exist, and it is the first thing Warren
    would actually *feel*.
