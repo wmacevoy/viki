@@ -1848,9 +1848,53 @@ stated INTENT -- what a puller needs to know before it spends a phone's storage.
 Migration is automatic: an identity.db predating the registry gets the table on
 open, which is safe because it is additive and empty.
 
-REMAINING: wire the puller -- read the registry, fetch each tribe's cache from its
-url, hand each (label, path, key) to edge_tribe_add(). Every piece now exists; what
-is missing is the loop joining them.
+### PULLER BUILT 2026-08-23, over HTTPS, and it is a SNAPSHOT PULL not yet a SYNC
+
+    viki-identity tribe pull <tribe>|--all
+
+HTTPS is libtls, from the LibreSSL already vendored -- OpenBSD's deliberately small
+client API, so the whole client is ~200 lines with no libcurl and no new dependency.
+CERTIFICATE VERIFICATION IS ON WITH NO FLAG TO DISABLE IT: libtls verifies by
+default and edge/tools/viki-http.c never calls tls_config_insecure_*. An --insecure
+flag is the kind of thing added "just for testing" that then ships. Redirects are
+not followed either -- Fossil serves /uv/ directly, so a redirect means something is
+in the way and chasing it silently could land a corpus request anywhere.
+
+THE PLAINTEXT NEVER TOUCHES DISK. The hub serves /uv/ decrypted (it holds the repo
+key -- that is what makes a Fossil account the access control), so the bytes arrive
+in the clear over TLS. sqlite3_deserialize() turns the fetched buffer into a
+database IN MEMORY and sqlcipher_export() copies it through the codec to the
+destination. Staging a temp file would put the whole corpus on disk unencrypted for
+the duration, and temp files survive crashes -- which is exactly when nobody is
+watching. (A byte copy would not work anyway: SQLCipher's page format differs.)
+
+MEASURED against the live tribe from build/vikiverse-up.sh: 69,632 bytes fetched
+over HTTP with basic auth, stored with a random header that stock sqlite3 refuses,
+decrypting back to the corpus.
+
+"SYNC WHEN IT CAN" (Warren, same day: "eventually (soon) edge viki will be fossil -
+so it should sync when it can"). Two pieces landed toward that:
+  - CONDITIONAL GET. The registry keeps `etag` and `last_pull`; a repeat pull sends
+    If-None-Match and Fossil answers 304. Verified: the second run prints
+    "camp unchanged (304)". That is what makes pulling something you do WHENEVER
+    there is a network rather than something you schedule.
+  - `--all` DOES NOT STOP ON FAILURE. Verified with one reachable and one dead
+    tribe: "1 up to date, 1 unreachable or failed". Exit status is 0 if anything
+    advanced and nonzero only if everything failed, so an opportunistic caller can
+    tell "nothing worked" from "some things were unreachable". Partial progress is
+    the normal outcome on a phone and is reported as such.
+
+THIS IS NOT THE DESTINATION AND SHOULD NOT BE MISTAKEN FOR IT. When edge viki
+becomes a real Fossil peer it will SYNC -- bidirectional, artifact-level, with
+Fossil's own conflict handling -- and this snapshot pull becomes the degenerate
+case for a device that cannot host a repo. The etag/last_pull state is the interim
+shape, not a design commitment.
+
+KNOWN GAP, worth fixing before this is used in anger: `url` may embed credentials
+(https://user:pass@host/) and is stored in the registry and echoed by `tribe list`.
+identity.db's container key is public by design, so those credentials are
+effectively in the clear. They should be wrapped like the tribe key, or replaced by
+Fossil's own token.
 
 CHEAP FIRST STEP FOR THE NATIVE CLI, no new code: `viki index` each sibling project into its own cache
 and ATTACH them, or index a tree of symlinked docs. SQLITE_MAX_ATTACHED=10 is the

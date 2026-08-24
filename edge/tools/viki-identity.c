@@ -42,6 +42,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include "sqlite3.h"
+#include "viki-http.h"
 
 #define VIKI_AGE_NO_MAIN 1
 #include "viki-key-wrap.c"
@@ -87,7 +88,14 @@ static const char *SCHEMA =
     "  wrapped  BLOB NOT NULL,"   /* the tribe key, age-wrapped to `identity` */
     "  identity TEXT NOT NULL,"   /* which identity unwraps it */
     "  caching  TEXT NOT NULL DEFAULT 'optional',"
-    "  added    TEXT NOT NULL"
+    "  added    TEXT NOT NULL,"
+    /* SYNC STATE, so pulling is something you can do WHENEVER rather than
+    ** something you schedule. `etag` turns a repeat pull into a conditional
+    ** request the hub answers 304 to, and `last_pull` is what a device can
+    ** show instead of pretending it is current. Both are advisory: losing
+    ** them costs one extra download, never correctness. */
+    "  etag      TEXT,"
+    "  last_pull TEXT"
     ");";
 
 static sqlite3 *open_db(const char *zPath, int bCreate){
@@ -109,8 +117,14 @@ static sqlite3 *open_db(const char *zPath, int bCreate){
     sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS tribe("
                      "  name TEXT PRIMARY KEY, url TEXT, cache TEXT,"
                      "  wrapped BLOB NOT NULL, identity TEXT NOT NULL,"
-                     "  caching TEXT NOT NULL DEFAULT 'optional', added TEXT NOT NULL)",
+                     "  caching TEXT NOT NULL DEFAULT 'optional', added TEXT NOT NULL,"
+                     "  etag TEXT, last_pull TEXT)",
                  NULL, NULL, NULL);
+    /* Additive columns for a registry that predates sync state. Duplicate-
+    ** column errors are the expected outcome and are discarded, same idiom as
+    ** viki_db.c's migration list. */
+    sqlite3_exec(db, "ALTER TABLE tribe ADD COLUMN etag TEXT", NULL, NULL, NULL);
+    sqlite3_exec(db, "ALTER TABLE tribe ADD COLUMN last_pull TEXT", NULL, NULL, NULL);
     return db;
 }
 
@@ -307,18 +321,172 @@ static int cmd_tribe_list(const char *zDb){
     sqlite3 *db = open_db(zDb, 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(db,
-        "SELECT name,caching,identity,coalesce(url,''),coalesce(cache,'') "
-        "FROM tribe ORDER BY name", -1, &st, NULL);
+        "SELECT name,caching,identity,coalesce(url,''),coalesce(cache,''),"
+        "coalesce(last_pull,'never') FROM tribe ORDER BY name", -1, &st, NULL);
     while( sqlite3_step(st) == SQLITE_ROW ){
-        printf("%-20s %-9s via %-14s %s%s%s\n",
+        printf("%-20s %-9s via %-12s pulled %-21s %s\n",
                sqlite3_column_text(st,0), sqlite3_column_text(st,1),
-               sqlite3_column_text(st,2), sqlite3_column_text(st,3),
-               sqlite3_column_text(st,4)[0] ? "  cache=" : "",
-               sqlite3_column_text(st,4));
+               sqlite3_column_text(st,2), sqlite3_column_text(st,5),
+               sqlite3_column_text(st,3));
     }
     sqlite3_finalize(st);
     sqlite3_close(db);
     return 0;
+}
+
+/* Pulls a tribe's cache from its hub and stores it ENCRYPTED, without the
+** plaintext ever touching disk.
+**
+** The hub serves /uv/ decrypted -- it holds the repo key, and that is what
+** makes a Fossil account the access control (ARCHITECTURE.md). So the bytes
+** arrive in the clear over TLS, and this is where they become encrypted at
+** rest under the tribe key.
+**
+** THE PLAINTEXT IS NEVER WRITTEN OUT. sqlite3_deserialize() turns the fetched
+** buffer into a database in memory, and sqlcipher_export() copies it through
+** the codec into the destination. Staging it as a temp file first would put
+** the whole corpus on disk unencrypted for the duration -- and temp files
+** survive crashes, which is exactly when nobody is watching.
+**
+** A byte copy would not work even if it were safe: SQLCipher's page format
+** differs, so the conversion has to go through the codec. */
+static int cmd_pull(const char *zDb, const char *zName){
+    sqlite3 *db = open_db(zDb, 0), *mem = NULL;
+    sqlite3_stmt *st;
+    char url[1024] = "", cache[512] = "", ident[128] = "";
+    unsigned char wrapped[8192], sk[X25519_LEN], key[512];
+    unsigned char *body = NULL;
+    int wlen = 0, klen = 0, nBody = 0, found = 0, status, rc = 1;
+    char full[2048], *zSql = NULL, *err = NULL;
+    char etag[256] = "", newEtag[256] = "", iso[32];
+    time_t now;
+
+    if( sqlite3_prepare_v2(db,
+        "SELECT coalesce(url,''),coalesce(cache,name),wrapped,identity,coalesce(etag,'') "
+        "FROM tribe WHERE name=?1",
+        -1, &st, NULL) != SQLITE_OK ) die("prepare failed");
+    sqlite3_bind_text(st, 1, zName, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) == SQLITE_ROW ){
+        const unsigned char *w = sqlite3_column_blob(st, 2);
+        wlen = sqlite3_column_bytes(st, 2);
+        snprintf(url, sizeof(url), "%s", (const char*)sqlite3_column_text(st, 0));
+        snprintf(cache, sizeof(cache), "%s", (const char*)sqlite3_column_text(st, 1));
+        snprintf(ident, sizeof(ident), "%s", (const char*)sqlite3_column_text(st, 3));
+        snprintf(etag, sizeof(etag), "%s", (const char*)sqlite3_column_text(st, 4));
+        if( wlen > 0 && wlen <= (int)sizeof(wrapped) ){ memcpy(wrapped, w, (size_t)wlen); found = 1; }
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    if( !found ){ fprintf(stderr, "viki-identity: no such tribe: %s\n", zName); return 1; }
+    if( !url[0] ){ fprintf(stderr, "viki-identity: %s has no --url\n", zName); return 1; }
+
+    /* The tribe key is needed to WRITE the encrypted copy, so the passphrase
+    ** is paid before the network call rather than after a long download. */
+    load_secret(zDb, ident, sk);
+    if( !age_unwrap_mem(sk, wrapped, wlen, key, &klen, (int)sizeof(key) - 1) ){
+        memset(sk, 0, sizeof(sk));
+        die("the wrapped tribe key did not open with that identity");
+    }
+    memset(sk, 0, sizeof(sk));
+    key[klen] = 0;
+
+    {   /* Fossil serves unversioned content at /uv/<name> */
+        size_t n = strlen(url);
+        snprintf(full, sizeof(full), "%s%suv/viki-cache.db", url, (n && url[n-1] == '/') ? "" : "/");
+    }
+    fprintf(stderr, "viki-identity: GET %s\n", full);
+    status = viki_http_get_cond(full, etag, &body, &nBody, newEtag, sizeof(newEtag));
+    if( status < 0 ){ fprintf(stderr, "viki-identity: fetch failed\n"); goto done; }
+    if( status == 304 ){
+        /* The hub says nothing moved. This is the case that makes "pull
+        ** whenever there is a network" cheap enough to actually do. */
+        printf("%s unchanged (304)\n", zName);
+        rc = 0; goto done;
+    }
+    if( status != 200 ){
+        fprintf(stderr, "viki-identity: hub answered HTTP %d\n", status);
+        if( status == 401 ) fprintf(stderr, "  (the url needs credentials: https://user:pass@host/)\n");
+        goto done;
+    }
+    if( nBody < 16 || memcmp(body, "SQLite format 3", 15) != 0 ){
+        fprintf(stderr, "viki-identity: that is not a plaintext SQLite cache "
+                        "(%d bytes) -- wrong url, or a login page\n", nBody);
+        goto done;
+    }
+
+    /* In-memory, so nothing unencrypted is ever written. SQLITE_DESERIALIZE_-
+    ** READONLY: this side is only ever read from. */
+    if( sqlite3_open(":memory:", &mem) != SQLITE_OK ) die("cannot open memory db");
+    if( sqlite3_deserialize(mem, "main", body, nBody, nBody,
+                            SQLITE_DESERIALIZE_READONLY) != SQLITE_OK )
+        die("the fetched bytes are not a usable database");
+
+    remove(cache);
+    zSql = sqlite3_mprintf("ATTACH DATABASE %Q AS enc KEY %Q;", cache, (const char*)key);
+    if( sqlite3_exec(mem, zSql, NULL, NULL, &err) != SQLITE_OK ){
+        fprintf(stderr, "viki-identity: %s\n", err ? err : "attach failed"); goto done;
+    }
+    sqlite3_free(zSql); zSql = NULL;
+    if( sqlite3_exec(mem, "SELECT sqlcipher_export('enc');", NULL, NULL, &err) != SQLITE_OK ){
+        fprintf(stderr, "viki-identity: %s\n", err ? err : "export failed"); goto done;
+    }
+    sqlite3_exec(mem, "DETACH DATABASE enc;", NULL, NULL, NULL);
+    {   /* Record sync state only after the export succeeded: a half-written
+        ** cache must not be remembered as current. */
+        sqlite3 *w = open_db(zDb, 0);
+        sqlite3_stmt *u;
+        now = time(NULL);
+        strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+        if( sqlite3_prepare_v2(w, "UPDATE tribe SET etag=?1, last_pull=?2 WHERE name=?3",
+                               -1, &u, NULL) == SQLITE_OK ){
+            sqlite3_bind_text(u, 1, newEtag, -1, SQLITE_STATIC);
+            sqlite3_bind_text(u, 2, iso, -1, SQLITE_STATIC);
+            sqlite3_bind_text(u, 3, zName, -1, SQLITE_STATIC);
+            sqlite3_step(u); sqlite3_finalize(u);
+        }
+        sqlite3_close(w);
+    }
+    printf("%s -> %s (%d bytes fetched, stored encrypted)\n", zName, cache, nBody);
+    rc = 0;
+
+done:
+    sqlite3_free(zSql); sqlite3_free(err);
+    memset(key, 0, sizeof(key));
+    if( body ){ memset(body, 0, (size_t)nBody); free(body); }
+    if( mem ) sqlite3_close(mem);
+    return rc;
+}
+
+/* Pulls every registered tribe, and DOES NOT STOP ON FAILURE.
+**
+** That is the whole difference between "pull" and "sync when it can". A phone
+** on a bad connection, a hub that is down, a tribe whose passphrase the user
+** declines -- none of those should prevent the tribes that ARE reachable from
+** coming up to date. Partial progress is the normal outcome, so the summary
+** reports it plainly rather than exiting on the first error.
+**
+** Exit status is 0 when at least one tribe advanced or was already current,
+** and nonzero only when every tribe failed -- so a cron/opportunistic caller
+** can tell "nothing worked" from "some things were unreachable". */
+static int cmd_pull_all(const char *zDb){
+    sqlite3 *db = open_db(zDb, 0);
+    sqlite3_stmt *st;
+    char names[64][128];
+    int n = 0, i, okCount = 0, failCount = 0;
+    if( sqlite3_prepare_v2(db, "SELECT name FROM tribe WHERE url IS NOT NULL AND url<>'' "
+                               "ORDER BY name", -1, &st, NULL) == SQLITE_OK ){
+        while( sqlite3_step(st) == SQLITE_ROW && n < 64 )
+            snprintf(names[n++], sizeof(names[0]), "%s", (const char*)sqlite3_column_text(st, 0));
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    if( n == 0 ){ fprintf(stderr, "viki-identity: no tribes with a url\n"); return 1; }
+    for( i = 0; i < n; i++ ){
+        fprintf(stderr, "-- %s\n", names[i]);
+        if( cmd_pull(zDb, names[i]) == 0 ) okCount++; else failCount++;
+    }
+    fprintf(stderr, "viki-identity: %d up to date, %d unreachable or failed\n", okCount, failCount);
+    return okCount > 0 ? 0 : 1;
 }
 
 int main(int argc, char **argv){
@@ -332,6 +500,7 @@ int main(int argc, char **argv){
           "       viki-identity tribe add <tribe> -r <identity> [--key-file f]\n"
           "                           [--url U] [--cache C] [--caching none|optional|required]\n"
           "       viki-identity tribe key <tribe>        (prints it; costs a passphrase)\n"
+          "       viki-identity tribe pull <tribe>|--all (https; stores it encrypted)\n"
           "       viki-identity tribe list\n"
           "Public keys are age recipients; files are age v1 (`age -d` reads them).\n");
         return 2;
@@ -350,15 +519,20 @@ int main(int argc, char **argv){
             else if( !strcmp(argv[j], "--url") && j+1 < argc ) zUrl = argv[++j];
             else if( !strcmp(argv[j], "--cache") && j+1 < argc ) zCache = argv[++j];
             else if( !strcmp(argv[j], "--caching") && j+1 < argc ) zCaching = argv[++j];
+            else if( !strcmp(argv[j], "--all") ) zTribe = "--all";
             else if( argv[j][0] != '-' && !zTribe ) zTribe = argv[j];
         }
         if( !strcmp(sub, "list") ) return cmd_tribe_list(zDb);
-        if( !zTribe ) die("tribe add/key needs a <name>");
+        if( !zTribe && strcmp(sub, "pull") != 0 ) die("tribe add/key needs a <name>");
         if( !strcmp(sub, "add") ){
             if( !zIdent ) die("tribe add needs -r <identity>");
             return cmd_tribe_add(zDb, zTribe, zIdent, zKeyFile, zUrl, zCache, zCaching);
         }
         if( !strcmp(sub, "key") ) return cmd_tribe_key(zDb, zTribe);
+        if( !strcmp(sub, "pull") ){
+            if( zTribe && !strcmp(zTribe, "--all") ) zTribe = NULL;
+            return zTribe ? cmd_pull(zDb, zTribe) : cmd_pull_all(zDb);
+        }
         die("tribe: expected add | key | list");
     }
     for( i = 2; i < argc; i++ ){

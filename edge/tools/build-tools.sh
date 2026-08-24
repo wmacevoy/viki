@@ -26,9 +26,12 @@ cc -O2 -I "$LR/include" "$ROOT/edge/tools/viki-key-wrap.c" \
    "$LR/lib/libcrypto.a" -o "$OUT/viki-key-wrap"
 
 echo "==> viki-identity"
+# libtls for the puller's HTTPS. It must precede libcrypto on the link line:
+# libtls depends on libssl/libcrypto, not the other way round.
 cc -O2 $CODEC -I "$ROOT/edge/tools" -I "$SQLC" -I "$LR/include" \
-   "$ROOT/edge/tools/viki-identity.c" "$SQLC/sqlite3.c" \
-   "$LR/lib/libcrypto.a" -lpthread -ldl -lm -o "$OUT/viki-identity"
+   "$ROOT/edge/tools/viki-identity.c" "$ROOT/edge/tools/viki-http.c" "$SQLC/sqlite3.c" \
+   "$LR/lib/libtls.a" "$LR/lib/libssl.a" "$LR/lib/libcrypto.a" \
+   -lpthread -ldl -lm -o "$OUT/viki-identity"
 
 echo "==> viki-cache-encrypt"
 cc -O2 $CODEC -I "$SQLC" -I "$LR/include" \
