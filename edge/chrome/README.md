@@ -48,6 +48,31 @@ Anchors are chosen from `role` and `aria` attributes rather than class names:
 class names on these sites are per-build hashes, while the screenreader contract
 changes rarely because real people depend on it.
 
+## What loading it in Chrome actually broke
+
+Three bugs, all the same shape, all found on first contact (2026-08-24) and all
+in the **signed-out** path — which is exactly where a reader must not go quiet.
+
+1. **Facebook redirects `/notifications` → `/login.php` when signed out.** The
+   first version guarded on *being at* `/notifications`, so it went **silent**.
+   Silence is indistinguishable from "no notifications" — false calm, the one
+   failure this thing exists to prevent.
+2. **Discord redirects `/channels/@me` → `/login`,** and the manifest matched
+   only `/channels/*`, so the content script never ran at all. Same false calm,
+   different cause.
+3. **A mid-load SPA looks exactly like broken markup.** Measured: three seconds
+   after navigating to `/channels/@me`, the message list did not exist *and* the
+   login form had not rendered. The first version called that `blind` — so it
+   would have cried wolf on every single page load.
+
+Fixes: login URLs are checked **first** (a redirect is immediate; the form is
+rendered by JS and arrives late), both content scripts now match the whole site,
+and `blind` requires **three consecutive misses** — a first miss is "not ready",
+only a persistent one is "I cannot see any more". `ok` and `loggedout` still
+report immediately, since those are positive findings.
+
+All three are regression fixtures now (`test/fixtures.mjs` F8, D8, D9, D10).
+
 ## Limits, stated rather than discovered
 
 - **Discord reads only the channel you have open.** It does not enumerate

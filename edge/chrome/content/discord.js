@@ -21,29 +21,48 @@
 (function () {
   const SOURCE = 'discord';
 
+  /* Signed out, /channels/@me redirects to /login -- measured live,
+   * 2026-08-24. The manifest originally matched only /channels/*, so the
+   * content script never ran on the login page and the source went silent
+   * rather than saying "signed out". The match is now discord.com/* and the
+   * URL is what decides. */
+  const LOGIN_URLS = ['/login', '/register'];
+
   function loggedOut() {
-    return !!document.querySelector('form[class*="authBox"], input[name="email"]');
+    return VIKI.atLoginUrl(LOGIN_URLS)
+        || !!document.querySelector('input[name="email"], input[name="password"]');
   }
 
   function scan() {
     if (loggedOut()) {
-      VIKI.report(SOURCE, 'loggedout', [], 'sign-in wall');
+      VIKI.report(SOURCE, 'loggedout', [], 'signed out -- at ' + location.pathname);
       return;
     }
+    /* Off the app entirely (marketing pages, /app, /developers): not ours,
+     * and reporting on it would be noise. */
+    if (location.pathname.indexOf('/channels/') !== 0) return;
 
     const list = document.querySelector('[data-list-id="chat-messages"]')
               || document.querySelector('main [role="list"]');
     if (!list) {
-      VIKI.report(SOURCE, 'blind', [], 'no chat-messages list -- markup probably changed');
+      /* Measured: three seconds after navigating to /channels/@me the list did
+       * not exist AND the login form had not rendered -- a transient that the
+       * first version reported as `blind` on every single load. */
+      if (VIKI.settle(SOURCE, false)) {
+        VIKI.report(SOURCE, 'blind', [], 'no chat-messages list -- markup probably changed');
+      }
       return;
     }
 
     let rows = VIKI.findAll(list, 'li[id^="chat-messages-"]');
     if (rows.length === 0) rows = VIKI.findAll(list, '[role="listitem"]');
     if (rows.length === 0) {
-      VIKI.report(SOURCE, 'blind', [], 'message list found but no rows');
+      if (VIKI.settle(SOURCE, false)) {
+        VIKI.report(SOURCE, 'blind', [], 'message list found but no rows');
+      }
       return;
     }
+    VIKI.settle(SOURCE, true);
 
     /* A mention renders as a <span> the app marks for highlight, and the
      * accessible name of the message contains the mention text. Both are

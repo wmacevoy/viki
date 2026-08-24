@@ -59,6 +59,31 @@ const VIKI = {
     } catch (_) { /* the worker may be asleep; the next poll will retry */ }
   },
 
+  /* AN SPA THAT HAS NOT RENDERED YET LOOKS EXACTLY LIKE BROKEN MARKUP.
+   * Measured on a live Discord load: three seconds after navigation the URL
+   * was still /channels/@me, the message list did not exist, and the login
+   * form had not rendered either -- a state that reports `blind` and would cry
+   * wolf on every single page load.
+   *
+   * So `blind` requires CONSECUTIVE misses. A first miss is "not ready"; only
+   * a persistent one is "I cannot see any more". `ok` and `loggedout` report
+   * immediately, because those are positive findings and waiting on them would
+   * just delay good news. */
+  _misses: {},
+  settle(source, found, threshold) {
+    if (found) { VIKI._misses[source] = 0; return true; }
+    VIKI._misses[source] = (VIKI._misses[source] || 0) + 1;
+    return VIKI._misses[source] >= (threshold || 3);
+  },
+
+  /* A redirect to a sign-in URL IS the signal, and is more reliable than
+   * sniffing for a form: the form is rendered by JS and arrives late, while
+   * the URL changes at once. Checked FIRST for that reason. */
+  atLoginUrl(patterns) {
+    const u = location.pathname + location.search;
+    return patterns.some(p => u.indexOf(p) >= 0);
+  },
+
   /* Poll rather than MutationObserver. An observer fires hundreds of times a
    * second on these pages and would turn a reader into a load generator on
    * Warren's own machine; a slow poll is enough for something whose output is

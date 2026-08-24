@@ -15,28 +15,39 @@
 (function () {
   const SOURCE = 'facebook';
 
-  function onNotificationsPage() {
-    return location.pathname.indexOf('/notifications') === 0;
+  /* A signed-out visit to /notifications REDIRECTS to /login.php -- measured
+   * live, 2026-08-24. The first version guarded on being at /notifications and
+   * therefore went SILENT in exactly that case, which is false calm: the one
+   * failure this reader exists to prevent. Login URLs are checked first and
+   * count as ours. */
+  const LOGIN_URLS = ['/login', '/checkpoint', '/recover'];
+
+  function ourPage() {
+    return location.pathname.indexOf('/notifications') === 0
+        || VIKI.atLoginUrl(LOGIN_URLS);
   }
 
   function loggedOut() {
-    /* A sign-in wall renders a login form and no main region. Distinguished
-     * from `blind` because the fix is different: log in, versus fix a
-     * selector. */
-    return !!document.querySelector('form[action*="login"], input[name="pass"]');
+    /* URL first: a redirect is immediate, while the form is rendered by JS and
+     * arrives late enough to be missed. */
+    return VIKI.atLoginUrl(LOGIN_URLS)
+        || !!document.querySelector('form[action*="login"], input[name="pass"]');
   }
 
   function scan() {
-    if (!onNotificationsPage()) return;      /* silent: not our page, not a failure */
+    if (!ourPage()) return;      /* silent: not our page, and not a failure */
 
     if (loggedOut()) {
-      VIKI.report(SOURCE, 'loggedout', [], 'sign-in wall on /notifications');
+      VIKI.report(SOURCE, 'loggedout', [], 'signed out -- redirected to ' + location.pathname);
       return;
     }
 
     const main = document.querySelector('[role="main"]');
     if (!main) {
-      VIKI.report(SOURCE, 'blind', [], 'no [role=main] on /notifications');
+      /* Not ready and not-there look identical for the first few polls. */
+      if (VIKI.settle(SOURCE, false)) {
+        VIKI.report(SOURCE, 'blind', [], 'no [role=main] on /notifications');
+      }
       return;
     }
 
@@ -48,10 +59,13 @@
       rows = VIKI.findAll(main, 'a[href*="/notifications/"]');
     }
     if (rows.length === 0) {
-      VIKI.report(SOURCE, 'blind', [],
-        'main region found but no listitem rows -- markup probably changed');
+      if (VIKI.settle(SOURCE, false)) {
+        VIKI.report(SOURCE, 'blind', [],
+          'main region found but no listitem rows -- markup probably changed');
+      }
       return;
     }
+    VIKI.settle(SOURCE, true);
 
     const items = rows
       .map(r => VIKI.text(r))

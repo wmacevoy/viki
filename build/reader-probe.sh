@@ -69,6 +69,17 @@ else
   echo "  SKIP  R9 (no python3)"
 fi
 
+echo "== extraction logic (fixtures) =="
+if command -v node >/dev/null 2>&1; then
+  if node "$D/test/fixtures.mjs" >/dev/null 2>&1; then
+    ok "R10 the status machine passes its fixtures (blind vs quiet vs signed-out)"
+  else
+    no "R10 fixtures FAILED -- run: node edge/chrome/test/fixtures.mjs"
+  fi
+else
+  echo "  SKIP  R10 (no node)"
+fi
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]
