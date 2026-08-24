@@ -27,3 +27,7 @@ vendor/download-cache/
 # COPY OF THE CORPUS (QUEUE 35) -- committing it would publish everything the
 # cache holds to anyone who can read the git repo.
 edge/dist/
+# Vendored wasm build inputs: a 2MB LibreSSL static lib, SQLCipher's 9MB
+# amalgamation and the openssl headers. All reproducible by
+# edge/build-wasm-sqlcipher.sh from the sibling repos; none of it is ours.
+edge/vendor-wasm/

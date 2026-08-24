@@ -1648,7 +1648,59 @@ What survives from the original writeup below: the vendored machinery inventory 
 is all real and it is what B needs), and the key-custody question, which is
 IDENTICAL under A and B and is the actual open problem.
 
-GAP 2, ENCRYPTED AT REST -- STILL OPEN. (Original writeup, kept for the inventory;
+### GAP 2 CLOSED 2026-08-23, design B, end to end
+
+Warren: "libressl is already vendored in the fossil dependency ... slow is better
+than non-existent" and then, decisively, "the build is in the github actions."
+
+THE BLOCKER WAS NEVER THE BUILD, IT WAS NOT LOOKING WHERE THE BUILD LIVED. My first
+attempt drove LibreSSL's autoconf and got "configure: WARNING: unsupported platform:
+emscripten" followed by a Makefile regeneration failure. The working recipe was
+sitting in ../sqlcipher-libressl/.github/workflows/build-test.yml, the `wasm` job,
+and differs in three ways none of which are guessable:
+  - emcmake CMAKE, not autoconf
+  - `emmake make crypto` only, not the whole tree
+  - -DHAVE_TIMEGM -DHAVE_GETENTROPY -D__STDC_NO_ATOMICS__
+  - and emsdk pinned at 3.1.74, not :latest
+That CI file also packages sqlcipher-wasm-static.tar.gz -- sqlite3.c, sqlcipher_wasm.c,
+opfs_vfs.c, libcrypto-wasm.a, openssl headers -- explicitly "for custom WASM builds",
+which is precisely what viki edge needed. BUILD KNOWLEDGE IN CI CONFIG IS A PLACE
+DEPENDENCIES GET LOST; see QUEUE 47, of which this is the second instance in one day.
+
+BUILT AND PROVEN:
+  libcrypto.a (wasm)               2,235,484 bytes, via the CI recipe
+  viki-edge-sqlcipher.wasm         1,458,300 bytes -- viki's retrieval core on
+                                   SQLCipher + LibreSSL-wasm + the OPFS VFS
+  edge/tools/viki-cache-encrypt.c  the PUSHING peer's converter, native, via
+                                   sqlcipher_export(). The edge opens READ-ONLY and
+                                   cannot encrypt, which is what makes
+                                   SQLITE_OPEN_READONLY a structural guarantee.
+  edge/build-wasm-sqlcipher.sh     the whole thing, reproducible, in a container
+
+E-SERIES, all passing with real controls (node harness over the wasm module):
+  E1 opening WITHOUT a key is refused
+  E2 opening with the WRONG key is refused    (SQLCipher logs the HMAC failure)
+  E3 opening with the RIGHT key succeeds
+  E4 the corpus is readable through the codec (653 chunks)
+  E5 retrieval works on the encrypted cache
+  E6 the literal leg still fires through the codec (framed_next -> viki_index.c)
+Plus: the encrypted file's header is random bytes, and stock sqlite3 refuses it with
+"file is not a database (26)".
+
+ONE REAL BUG FOUND BY DOING IT. edge_open() routed through viki_db_open(), which
+executes schema SQL immediately -- so the connection was already in "file is not a
+database" before any key could be applied. SQLCipher requires the key between
+sqlite3_open() and the first statement. Replaced by edge_open_keyed(), which opens
+SQLITE_OPEN_READONLY, keys, and then probes sqlite_schema to prove the key took
+(sqlite3_key() itself reads no page, so a wrong key is otherwise not detected until
+the first real query). CONSEQUENCE: migrations cannot run on the edge, so a cache
+pulled from a peer on an older schema fails rather than upgrading -- correct for a
+read-only tier, and it makes schema currency the PUSHING peer's responsibility.
+
+STILL OPEN: key custody on a phone. Unchanged by any of this, and still the actual
+problem (see below).
+
+GAP 2, ENCRYPTED AT REST -- (Original writeup, kept for the inventory;
 read the correction above first, the SQLCipher recommendation in it is superseded.) The cache is a
 COMPLETE PLAINTEXT COPY OF THE CORPUS (QUEUE 35). Persisting it to OPFS therefore
 leaves the whole corpus in the clear in a phone's browser storage. Everything needed

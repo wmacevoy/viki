@@ -77,12 +77,74 @@ static void json_raw(char **buf, size_t *len, size_t *cap, const char *z){
     *len += n;
 }
 
+/* Opens the cache READ-ONLY, applying zKey (may be NULL/empty on a plaintext
+** cache) BEFORE any SQL runs.
+**
+** It deliberately does NOT go through viki_db_open(), for two reasons that
+** both point the same way. SQLCipher requires the key to be set between
+** sqlite3_open() and the first statement, and viki_db_open() executes its
+** schema SQL immediately -- so routing through it puts the connection into
+** "file is not a database" before a key can be supplied. And the edge is a
+** READ-ONLY consumer of a cache someone else built: it has no business
+** creating tables or running migrations, and SQLITE_OPEN_READONLY makes that
+** structural rather than a promise.
+**
+** CONSEQUENCE WORTH KNOWING: because migrations cannot run here, a cache
+** pulled from a peer on an older schema will fail queries rather than
+** silently upgrade. That is the honest behaviour for a read-only tier, but it
+** means the PUSHING peer is responsible for schema currency. */
 EMSCRIPTEN_KEEPALIVE
-int edge_open(const char *zPath){
+int edge_open_keyed(const char *zPath, const char *zKey){
     if( g_db ){ sqlite3_close(g_db); g_db = NULL; }
     viki_db_register_ndvss();
-    if( viki_db_open(zPath, &g_db) != SQLITE_OK ){ g_db = NULL; return 0; }
+    if( sqlite3_open_v2(zPath, &g_db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK ){
+        if( g_db ){ sqlite3_close(g_db); g_db = NULL; }
+        return 0;
+    }
+#ifdef SQLITE_HAS_CODEC
+    if( zKey && zKey[0] ){
+        if( sqlite3_key(g_db, zKey, (int)strlen(zKey)) != SQLITE_OK ){
+            sqlite3_close(g_db); g_db = NULL; return 0;
+        }
+    }
+#endif
+    /* Prove the key took (or that a plaintext db really is one) before
+    ** reporting success: sqlite3_key() itself does not read a page, so a
+    ** wrong key is not detected until the first real query. */
+    if( sqlite3_exec(g_db, "SELECT count(*) FROM sqlite_schema", NULL, NULL, NULL) != SQLITE_OK ){
+        sqlite3_close(g_db); g_db = NULL; return 0;
+    }
     return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int edge_open(const char *zPath){ return edge_open_keyed(zPath, NULL); }
+
+/* Present only in the SQLCipher build; harmless in the plain one, where
+** sqlite3_key is absent -- guarded by the macro the codec build defines. */
+#ifdef SQLITE_HAS_CODEC
+EMSCRIPTEN_KEEPALIVE
+int edge_key(const char *zKey){
+    if( !g_db || !zKey ) return 0;
+    /* A raw x'<64 hex>' literal is used directly by SQLCipher; a passphrase
+    ** goes through PBKDF2. FINDINGS.md measured 5.99ms vs 345.93ms per open
+    ** natively -- on a phone the passphrase cost is paid once per session,
+    ** but the raw form is what a synced tribe key should be. */
+    return sqlite3_key(g_db, zKey, (int)strlen(zKey)) == SQLITE_OK;
+}
+#endif
+
+/* Escape hatch for setup SQL the retrieval core does not do -- notably
+** SQLCipher's ATTACH ... KEY + sqlcipher_export() conversion. Not a general
+** query surface: results are discarded. */
+EMSCRIPTEN_KEEPALIVE
+int edge_exec(const char *zSql){
+    char *err = NULL;
+    int rc;
+    if( !g_db ) return 0;
+    rc = sqlite3_exec(g_db, zSql, NULL, NULL, &err);
+    if( err ){ fprintf(stderr, "edge_exec: %s\n", err); sqlite3_free(err); }
+    return rc == SQLITE_OK;
 }
 
 EMSCRIPTEN_KEEPALIVE
