@@ -140,6 +140,17 @@ bash test/m1.sh                             # "0 failed, 0 skipped" == M1 met (s
 sh build/forum-e2e-probe.sh <empty-dir>     # the forum leg, which m1.sh deliberately omits
 sh build/grep-probe.sh <empty-dir>          # `viki grep`: ERE really ERE, -i, --k, --source
 sh build/muse-probe.sh <empty-dir>          # `viki muse`: undirected recall, no query
+sh edge/build-wasm.sh                       # viki edge: the READ-ONLY tier compiled to
+                                            #   WebAssembly, via a CONTAINER (emscripten/emsdk)
+                                            #   so nothing lands on the host. -> edge/dist/.
+                                            #   Builds ONLY the files with no fork/exec/socket/
+                                            #   dlopen: viki_ask/db/grep/note + SQLite + ndvss.
+                                            #   The three ONNX symbols viki_ask.c references are
+                                            #   aborting stubs (edge/edge_noembed.c) -- that
+                                            #   three-symbol coupling is the whole distance
+                                            #   between viki's read path and a phone.
+                                            #   BM25 + literal only: the chunk vectors are in
+                                            #   the cache, but embedding a QUERY needs the model
 sh build/vikiverse-up.sh <dir> [tribe] [--lan]  # stands up a WORKING vikiverse: one
                                             #   encrypted hub served over real HTTP, a
                                             #   `laptop` peer that has the model and does

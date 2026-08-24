@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>viki edge</title>
+<style>
+  :root { --bg:#fbfaf7; --fg:#1a1a19; --dim:#6b6b66; --line:#e3e0d8; --accent:#7a5c3e; }
+  @media (prefers-color-scheme:dark){
+    :root { --bg:#16171a; --fg:#e8e6e1; --dim:#9a978f; --line:#2c2e33; --accent:#c9a227; } }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       padding:1rem;max-width:46rem;margin-inline:auto}
+  h1{font-size:1.05rem;letter-spacing:.02em;margin:0 0 .15rem;font-weight:600}
+  .sub{color:var(--dim);font-size:.8rem;margin-bottom:1rem}
+  input[type=search]{width:100%;padding:.7rem .8rem;font-size:1rem;border:1px solid var(--line);
+       border-radius:.5rem;background:var(--bg);color:var(--fg)}
+  .bar{display:flex;gap:.5rem;align-items:center;margin:.6rem 0 1rem;flex-wrap:wrap}
+  button{padding:.5rem .8rem;font-size:.85rem;border:1px solid var(--line);border-radius:.4rem;
+       background:transparent;color:var(--fg)}
+  .hit{border-top:1px solid var(--line);padding:.8rem 0}
+  .meta{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
+       word-break:break-all;margin-bottom:.35rem}
+  .rrf{color:var(--accent)}
+  .snip{white-space:pre-wrap;font-size:.9rem}
+  .mark{color:var(--dim);font-style:italic;font-size:.8rem}
+  .status{color:var(--dim);font-size:.85rem;padding:.5rem 0}
+</style>
+<h1>viki edge</h1>
+<div class="sub">read-only tier — no model, no fossil, no network once loaded</div>
+<div class="bar">
+  <button id="pick">load cache.db</button>
+  <input type="file" id="file" accept=".db" hidden>
+  <span class="status" id="status">no cache loaded</span>
+</div>
+<input type="search" id="q" placeholder="ask…  (BM25 + literal, no query embedding)" disabled>
+<div id="out"></div>
+<script src="viki-edge.js"></script>
+<script>
+// The fragment markers are viki_ask.h's VIKI_MARK_* strings. They are applied
+// HERE rather than baked into `snippet`, exactly as /api/ask does: a client
+// parsing the snippet must never receive marker words it cannot tell apart
+// from indexed content.
+const MARK_HEAD = "<<document continues above>>";
+const MARK_TAIL = "<<document continues below>>";
+const MARK_CUT  = "<<excerpt truncated>>";
+
+let M = null, ready = false;
+const $ = id => document.getElementById(id);
+const setStatus = t => { $('status').textContent = t; };
+
+async function openBytes(buf, label) {
+  try { M.FS.unlink('/cache.db'); } catch (_) {}
+  M.FS.writeFile('/cache.db', buf);
+  const ok = M.ccall('edge_open', 'number', ['string'], ['/cache.db']);
+  if (!ok) { setStatus('could not open ' + label + ' as a viki cache'); return false; }
+  const n = M.ccall('edge_chunk_count', 'number', [], []);
+  ready = true; $('q').disabled = false;
+  setStatus(n + ' chunks from ' + label + ' — offline from here');
+  return true;
+}
+
+VikiEdge().then(async mod => {
+  M = mod;
+  setStatus('runtime ready — fetching cache…');
+  // A cache served next to this page is the hosted-hub flow: the phone pulls
+  // the projection once and is then self-contained. Falling back to the file
+  // picker covers the sideloaded/offline case.
+  try {
+    const r = await fetch('cache.db', { cache: 'no-store' });
+    if (r.ok) {
+      const buf = new Uint8Array(await r.arrayBuffer());
+      if (await openBytes(buf, 'cache.db')) return;
+    }
+  } catch (_) {}
+  setStatus('runtime ready — load a cache.db');
+});
+
+$('pick').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f || !M) return;
+  setStatus('loading ' + (f.size/1048576).toFixed(1) + ' MB…');
+  const buf = new Uint8Array(await f.arrayBuffer());
+  await openBytes(buf, f.name);
+};
+
+let timer = null;
+$('q').oninput = () => { clearTimeout(timer); timer = setTimeout(run, 180); };
+
+function run() {
+  if (!ready) return;
+  const q = $('q').value.trim();
+  const out = $('out'); out.textContent = '';
+  if (!q) return;
+  const p = M.ccall('edge_ask', 'number', ['string','number'], [q, 8]);
+  const json = M.UTF8ToString(p);
+  M.ccall('edge_free', null, ['number'], [p]);
+  let r; try { r = JSON.parse(json); } catch (_) { setStatus('bad response'); return; }
+  if (!r.results || !r.results.length) {
+    const d = document.createElement('div');
+    d.className = 'status'; d.textContent = '(no matches)';
+    out.appendChild(d); return;
+  }
+  for (const h of r.results) {
+    const div = document.createElement('div'); div.className = 'hit';
+    const meta = document.createElement('div'); meta.className = 'meta';
+    const rrf = document.createElement('span'); rrf.className = 'rrf';
+    rrf.textContent = '[' + h.rank + '] rrf=' + h.rrf.toFixed(4) + '  ';
+    meta.appendChild(rrf);
+    // content_hash is the citable identity -- the CLI prints it and the
+    // serve page notoriously does not (CLAUDE.md). This surface does.
+    meta.appendChild(document.createTextNode(
+      h.hash.slice(0,12) + '…#' + h.chunk_ix +
+      (h.chunk_count ? ' of ' + h.chunk_count : '') + '  ' + h.source));
+    div.appendChild(meta);
+    if (h.fragment_head) div.appendChild(markEl(MARK_HEAD));
+    const s = document.createElement('div');
+    s.className = 'snip';
+    s.textContent = h.snippet;          // textContent: indexed content is untrusted
+    div.appendChild(s);
+    if (h.snippet_truncated) div.appendChild(markEl(MARK_CUT));
+    if (h.fragment_tail) div.appendChild(markEl(MARK_TAIL));
+    out.appendChild(div);
+  }
+}
+function markEl(t){ const d = document.createElement('div'); d.className='mark'; d.textContent=t; return d; }
+</script>
