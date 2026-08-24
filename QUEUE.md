@@ -1792,3 +1792,51 @@ and ATTACH them, or index a tree of symlinked docs. SQLITE_MAX_ATTACHED=10 is th
 first wall (QUEUE 39), and QUEUE 39's measurement already showed that at this scale
 opening is free -- 3.4ms for three caches -- so the cost objection does not apply.
 
+## 48. KEY CUSTODY: wrap the tribe key to member public keys. LibreSSL already has all of it.
+     (Warren, 2026-08-23: "gpg on the vikiverse - authorized agents/humans can decrypt the
+      key --- is there something suitable in libressl so no no dependencies?")
+
+ANSWER: yes, completely, and it closes QUEUE 46's one remaining open item. Checked in
+vendor/libressl-build-out/include/openssl -- X25519 (EVP_PKEY_X25519), HKDF (kdf.h),
+ChaCha20-Poly1305, AES-256-GCM, EVP_PKEY_derive, and the raw-key API
+(EVP_PKEY_new_raw_private_key / new_raw_public_key / get_raw_public_key) that 32-byte
+keys need. LibreSSL is ALREADY LINKED by fossil-see and by edge/tools, so a native
+key-wrapping tool costs zero new dependencies.
+
+DO NOT IMPLEMENT GPG. OpenPGP (RFC 4880) is packet framing, a dozen algorithms,
+subkeys and a trust model -- implementing it is a project, and a security-sensitive
+one. AGE's format is about a page and is EXACTLY the primitives above: ephemeral
+X25519 -> HKDF -> ChaCha20-Poly1305 wrap of the file key. Being wire-compatible with
+age means the age/rage CLIs interoperate and ssh-ed25519 recipients work, so members
+use keys they already have instead of this project minting a PKI.
+
+ON THE PHONE, USE WebCrypto, NOT WASM CRYPTO -- and the reason is a security property,
+not convenience. WebCrypto has X25519, HKDF and AES-GCM already (zero bytes shipped),
+and it can store a CryptoKey with extractable:false in IndexedDB, which JavaScript
+CANNOT read out. A wasm implementation must hold the private key in linear memory
+where any script on the page can read it. Device key in WebCrypto non-extractable;
+tribe key unwrapped into wasm memory only for the session, never persisted.
+
+CHICKEN-AND-EGG TO DECIDE DELIBERATELY: if the wraps live as uv: blobs INSIDE the
+tribe repo, reading them needs K -- circular. Either the wraps are the one plaintext
+thing on the hub, or they live in a separate plaintext repo. Note that Fossil's /uv/
+endpoint already serves decrypted content gated by Fossil login (measured, QUEUE 46),
+and ARCHITECTURE.md already says "Fossil accounts are the auth". So the wrap is NOT
+really solving distribution -- Fossil accounts do that. It solves K AT REST ON THE
+DEVICE, which is the actual phone problem and the only thing QUEUE 46 left open.
+
+THIS GIVES DISTRIBUTION, NOT REVOCATION, and that should be written down before it is
+discovered. Wrapping K to N public keys means removing a member requires a NEW K,
+re-encrypting the repo, and re-wrapping to everyone remaining. Fossil revokes hub
+access instantly via capabilities, but anyone who ever held K and kept a copy of the
+cache reads it forever. Not a flaw in the scheme -- the nature of at-rest keys -- but
+it means "remove a member" is a re-key operation with a real cost, and the vikiverse
+should say so rather than implying a delete button.
+
+SHAPE, if built:
+  edge/tools/viki-key-wrap.c   age-compatible: wrap/unwrap the tribe key to a set of
+                               X25519 recipients, LibreSSL only, ~150 lines
+  keys/<member>.age            one wrap per member, plaintext-readable location
+  browser                      WebCrypto non-extractable device key; unwrap on unlock
+  D-8 stays as-is for servers (systemd credential); this is the human/agent/phone tier.
+
