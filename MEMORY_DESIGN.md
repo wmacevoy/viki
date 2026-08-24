@@ -144,6 +144,38 @@ a note tagged `viki-memory kind-negative about-strtok_r`, edited without
 `SELECT … WHERE tagname='sym-viki-memory'` stopped returning it. The memory
 fell out of its own namespace.
 
+> **RECONCILIATION WITH SHIPPED CODE, added 2026-08-23 (QUEUE 44).** This
+> document is ~870 lines and contained zero occurrences of `viki_note`,
+> `closes`, `viki capture` or `viki structure`, and no source file referenced
+> it — the design and the shipped tree had no cross-reference in either
+> direction. Three things a reader needs before implementing any of it:
+>
+> 1. **Supersession already ships, under another name.** `viki structure
+>    --closes` writes a supersession edge today, and `viki_note.h` describes it
+>    in the same terms this document uses for M-3 — including M-3's own
+>    justification that the link must be walkable from the superseded side,
+>    which is why `viki notes --closes` was added ("the link was write-only").
+>    Whoever implements `viki remember --supersedes` must state whether it
+>    **replaces, migrates from, or sits beside** `viki_note.closes`. The shapes
+>    genuinely differ: `closes` is a single-valued TEXT column; M-3 proposes a
+>    repeatable edge table with a separate retracts relation.
+>
+> 2. **M-3's immutable-edge rule is already violated by the shipped path.**
+>    M-3 argues the edge must be immutable because "edges converge under
+>    set-union; values do not". `src/viki_note.c:611` also MUTATES the target,
+>    recursing to write `state:closed` into the target's capture file, with a
+>    warning path that can leave the edge recorded and the target unclosed.
+>    Either M-3 is a deliberate departure from what ships, or what ships is a
+>    bug — this document should say which.
+>
+> 3. **M-1's chosen timestamp cannot reach `viki muse`.** A memory's own
+>    `event.mtime` is invisible to `muse --bias old`: `viki_chunk` carries no
+>    timestamp column, and `viki_source.mtime` must stay 0 for every virtual
+>    source or the fast-skip rule serves pre-amend text forever
+>    (`viki_index.c`). A separate column is required; `viki_source.mtime`
+>    cannot be reused. QUEUE's muse-audit item asserts the opposite in passing
+>    ("viki_source.mtime gives AGE") and is wrong.
+
 **Decision M-2: memories are append-only. Never edit a memory; supersede it.**
 Both traps vanish, and — the deeper reason, §"Supersession" — an append-only
 set of immutable artifacts converges under sync in any arrival order, while an

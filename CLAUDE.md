@@ -172,20 +172,27 @@ bash test/retrieval-eval.sh                 # retrieval QUALITY + index COVERAGE
 
 **None of the tests above says anything about retrieval quality.** They
 prove an answer *comes back*; `test/retrieval-eval.sh` measures whether it
-comes back **first**. It builds a 114-chunk encrypted corpus from this
+comes back **first**. It builds an encrypted corpus from this
 repo's own docs plus check-in comments, wiki, tickets, forum posts, a tech
 note, an attachment, tags and an unversioned file
 (`test/retrieval-corpus.sh`), runs 59 questions (`test/retrieval-queries.tsv`,
 six classes, 31% held out), and prints recall@1/@5/@k, MRR, a per-class and
 per-artifact breakdown, a **BM25-only control**, and a per-query failure
 taxonomy. It prints numbers and gates nothing; exit 0 means it produced
-them. Two baseline facts worth knowing before you change retrieval code:
-hybrid is **worse than BM25-only at rank 1** (0.256 vs 0.302) while better
-at recall@5, and 0 of 16 questions whose answer lives in a check-in comment
-or other un-indexed artifact are answerable at all. Both in FINDINGS.md,
-with repros. Re-measure the old binary before claiming a new one improved
-anything, and quote the harness's `corpus fp` with any number -- the corpus
-is built from these docs, so editing them moves the baseline.
+them.
+
+**Do not transcribe its numbers into this file.** Corpus size, recall and the
+per-artifact coverage figures all move whenever these docs are edited — which
+is what the harness's `corpus fp` exists to pin — so a figure copied here goes
+stale silently and then gets quoted as current. Two paragraphs of exactly that
+were removed on 2026-08-23 (QUEUE 44): a frozen "114-chunk" that AGENTS.md
+already contradicted with 138, and "0 of 16 questions whose answer lives in a
+check-in comment or other un-indexed artifact are answerable at all" — which
+stopped being true once `ckin:`/`note:`/`tchg:`/`attach:`/`uv:` were wired in,
+leaving only historical file versions and tags unindexed. **Run the harness and
+read report 2** rather than believing any number in prose here. Re-measure the
+old binary before claiming a new one improved anything, and quote the `corpus
+fp` with any number you do report.
 
 The two selftests are hidden subcommands (not in `usage()`) and both run
 automatically at the end of `build/build.sh`.
@@ -306,7 +313,15 @@ if `(content_hash, model_id)` is absent. **Nine** content types share one
 | unversioned files | `fossil sql`; content is zlib-compressed when `encoding=1` | `uv:NAME` |
 
 Each non-file class costs **one** `fossil sql` subprocess, not one per
-artifact, using a counted framing parsed by `framed_next()`. That is not
+artifact, using a counted framing parsed by `framed_next()` — **with one
+unavoidable exception, `uv:`**. `index_unversioned()` uses framed SQL for the
+NAMES and then forks `fossil unversioned cat` per file
+(`src/viki_index.c:1724`), because `unversioned.content` is zlib-compressed
+behind a 4-byte big-endian length prefix when `encoding=1`, and `unversioned
+cat` is the only extraction path that does not require linking zlib. So a hub
+with many uv blobs really does pay O(blobs) subprocesses. Both this file and
+AGENTS.md stated the rule without that exception until 2026-08-23 (QUEUE 44).
+That is not
 tidiness: every `fossil` invocation costs a process spawn plus repo open, so
 per-artifact extraction is O(artifacts) subprocesses where this is O(1).
 **The magnitude depends on the key form and the old figure here was the

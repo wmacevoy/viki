@@ -1385,3 +1385,75 @@ from there. Muse is the only surface marking nothing. Same patch shape as the
 fragment work; CLAUDE.md already lists this as deliberately out of scope for that
 round, so this is the entry that says it is now measured rather than assumed.
 
+## 44. THE FIRST TIME viki FOUND A DEFECT IN viki -- one muse sweep, five real findings
+     (2026-08-23; 111 agents, 7.7M tokens, 69 min. Four of five findings are ROT, not connections)
+
+The sweep was built to find CONNECTIONS. It mostly found claims that are false in
+the tree, which is Warren's "interesting includes simplifying" arriving on its own.
+
+FUNNEL, and the tiering earned its keep:
+  1500 muse hits -> 103 elevated (Sonnet) -> 12 judged real (Opus) -> 5 kept
+  buckets: 6.9% genuine, 12.6% near-duplicate, 80.5% NOISE
+  verdicts: 58 already-known, 33 coincidence, 12 real  (Opus rejected 88%)
+
+TWO NUMBERS WORTH KEEPING. The 80.5% noise replicates QUEUE 43's 80.0% at 68x the
+scale, so that figure is now solid rather than one sample. And ALREADY-KNOWN (58)
+beat COINCIDENCE (33) as the top rejection class: more than half of everything that
+looked novel was already written down somewhere. That is the replication surface
+measured, and it is the argument for having fewer copies of each claim.
+
+FIXED IN THIS COMMIT (each verified independently before editing -- agent findings
+are not evidence):
+ - AGENTS.md contradicted ITSELF on in-process Fossil: ":1289 not started / every
+   Fossil operation is a subprocess" against ":852 libfossilsee EQUIVALENT, 19
+   passed". src/viki_fossilsee.c landed in 2f9ccea whose AGENTS.md hunks never
+   revisited that bullet -- a same-commit-rule violation. Its cited evidence was
+   falsified too: the doc promised `nm build/dist/viki | grep -i fossil` prints
+   "exactly three symbols"; the shipped binary prints EIGHT. Re-measured and
+   corrected, with a note to re-measure rather than transcribe.
+ - `uv:` IS O(artifacts) SUBPROCESSES and both docs claimed O(1) with no exception.
+   index_unversioned() forks `fossil unversioned cat` per file (viki_index.c:1724)
+   because framed SQL returns zlib-compressed bytes. Code right, docs wrong;
+   excepted in both. Not a correctness bug -- that path checks its exit status.
+ - THE EVAL CORPUS'S RATIONALE WAS FALSE ON ARRIVAL. See FINDINGS.md. Corrected in
+   test/retrieval-corpus.sh, AGENTS.md and CLAUDE.md; CLAUDE.md's transcribed
+   figures were DELETED rather than updated, replaced by a pointer at the harness.
+ - MEMORY_DESIGN.md (~870 lines) had zero occurrences of viki_note / closes /
+   viki capture / viki structure, and no source referenced it. Reconciliation
+   block added covering the three concrete collisions.
+ - viki_muse.h called ckin:/note:/tchg: "proposed"; they shipped 2026-08-13.
+
+STILL OPEN, AND IT NEEDS A DECISION RATHER THAN AN EDIT:
+
+  `viki muse` SHIPPED WITHOUT ITS OWN LANDING GATE. RETRIEVAL_PLAN.md:420 is
+  titled "C4. Measurement, and muse does not land without it" and names
+  test/muse-eval.py as an owned deliverable with three quantified bars:
+    M1  one-hop recovery >= 0.30 AND >= +0.10 over a re-ask baseline
+    M2  non-vacuity > 0.5
+    M3  the vocab-mismatch thesis
+  `git log --oneline --all -- 'test/muse-eval*'` is EMPTY: never written, not
+  deleted. Muse shipped on build/muse-probe.sh, whose own header scopes it to
+  STRUCTURAL properties (rank arithmetic, --from error path, floor sentinel,
+  source diversity) and explicitly not recall quality. QUEUE 15 records doc debt
+  for this plan's B4 and B7 gates and never mentions C4, so the gap was nowhere
+  in the tree until now.
+
+  WHY THIS IS LIVE, NOT ACADEMIC. The plan's own words are "If muse cannot beat
+  re-asking, muse is ceremony." QUEUE 43 independently measured muse at 12.7%
+  genuine / 80% noise, and this section measured 6.9% / 80.5% -- results
+  CONSISTENT WITH CEREMONY that nobody can compare against M1, because M1 was
+  never run. QUEUE 43's proposed fix (per-population floor, genre-filtered seed
+  draw) would be tuned against no metric at all, which CLAUDE.md's own rule
+  forbids: re-measure the old binary before claiming a new one improved anything.
+
+  RECOMMENDATION: write M1's re-ask baseline FIRST -- the cheap half is just
+  "for a held-out chunk, does muse from a related seed recover it more often
+  than re-asking the original query?" -- and only then act on 43's fix. If M1
+  comes out below the bar, that is a real answer and the honest move is to say
+  muse is ceremony rather than tune it.
+
+COST OF THE SWEEP: ~1.5M tokens per surviving finding. That is the price of
+undirected search over a corpus this size, and it is why the tiering (cheap
+scouts, expensive judges, one aggregation permitted to conclude "nothing
+interesting") is the shape rather than 111 Opus agents.
+

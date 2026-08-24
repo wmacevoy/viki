@@ -105,7 +105,7 @@ src/            viki CLI source (C)
   viki.c          subcommand dispatch (index / ask / muse / grep / capture / structure / notes / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
   viki_ask.c/.h `viki ask`: THREE legs into one RRF pool (k=60) -- BM25 over `chunk_fts`, a LITERAL substring leg over `chunk_text` scored by rarity-weighted term overlap (`1/df`, one extra scan; no model needed), and the ndvss cosine leg (model only). The literal leg landed 2026-08-21 (QUEUE 42) because the other two are density-biased and bury a fact stated once in passing; it also makes `ask` subsume a literal lookup. Measured on corpus fp `c7e52620ae430794`, n=43: recall@1 0.302 -> 0.372, MRR 0.418 -> 0.465, `identifier` class MRR 0.667 -> 0.700, held-out identifier recall@1 0.500 -> 1.000; recall@5 unchanged because it reorders rather than recalls. The RARITY WEIGHTING is the load-bearing part -- an unweighted count ties a unique identifier against the common words beside it and volume wins. `build/literal-probe.sh` is the proof and it must be run UNDER CONTEST; its first draft scored 7/7 against a binary with no leg at all, because a corpus smaller than VIKI_CANDIDATE_POOL never excludes anything
-  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: each `fossil` invocation costs a process spawn plus repo open, so the per-artifact idiom is O(artifacts) subprocesses where this is O(1). The KDF justification once given here was the PASSPHRASE figure -- measured 2026-08-21, a raw `x'<64 hex>'` key opens an encrypted repo in 5.99 ms vs 5.71 ms plaintext (a passphrase costs 345.93 ms), because SQLCipher skips PBKDF2 for a raw key. The framing is still right; the ~0.5 s number is not (FINDINGS.md). Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
+  viki_index.c/.h `viki index <dir>`: walk+chunk+hash+embed checkout files, plus subprocess extraction of EIGHT virtual namespaces -- `wiki:Name`, `ticket:UUID`, `forum:UUID`, `ckin:UUID` (check-in comments), `note:ID` (tech notes), `tchg:UUID` (ticket change history), `attach:UUID`, `uv:NAME`. Every non-file class is read with ONE `fossil sql` call using a counted framing (`framed_next()`), not one subprocess per artifact: each `fossil` invocation costs a process spawn plus repo open, so the per-artifact idiom is O(artifacts) subprocesses where this is O(1). **`uv:` IS THE ONE EXCEPTION AND IT IS UNAVOIDABLE** (corrected 2026-08-23, QUEUE 44): `index_unversioned()` uses framed SQL to fetch NAMES only, then forks `fossil unversioned cat` per file inside its loop (`src/viki_index.c:1724`), because `unversioned.content` is zlib-compressed behind a 4-byte big-endian length prefix when `encoding=1` and `unversioned cat` is the only extraction path that does not require linking zlib. The code is right and this claim was wrong; a hub with many uv blobs pays one fork+exec plus a full repo open per blob. It is not a correctness bug -- unlike `fossil sql`, that path checks its exit status and treats failure conservatively as a failure to OBSERVE rather than a withdrawal. The KDF justification once given here was the PASSPHRASE figure -- measured 2026-08-21, a raw `x'<64 hex>'` key opens an encrypted repo in 5.99 ms vs 5.71 ms plaintext (a passphrase costs 345.93 ms), because SQLCipher skips PBKDF2 for a raw key. The framing is still right; the ~0.5 s number is not (FINDINGS.md). Also INVALIDATES: retires stale `viki_source` rows, then deletes chunks nothing references from `viki_chunk` + `chunk_fts`. Read `sweep_sources()`'s scoping comment before touching that -- it is what keeps a subdirectory index, or a machine with no `fossil`, from wiping the cache. New namespaces MUST be added to `VIRTUAL_NS[]`; `looks_like_namespace()` is the lexical safety net that stops an unknown `scheme:` key from being treated as a filesystem path and swept
   viki_muse.c/.h  `viki muse`: undirected recall, NO query. Picks a seed chunk and returns chunks from the calibrated MIDDLE of that seed's cosine band -- close enough to be about something, far enough that `ask` would never surface them. Vector-only (an unembedded cache is refused, not faked with BM25), but needs no model FILE: a cache pulled from a peer muses with no `model.onnx` on disk. Rejected scorers (|cos|, sum|xi*yi|, random subspace, anti-search) are recorded in `viki_muse.h` WITH the numbers that killed them, against a uniform-random control
   build/since-probe.sh   `viki index --since` coverage (14 checks). S5/S5b are the ones that matter: an incremental run must retire NOTHING even with a source deleted, and S5c is the control that a FULL pass still does, so "never retires" is a property of the incremental path rather than a broken sweep
   viki_fossilsee.c/.h  OPTIONAL in-process fossil SQL, dlopen'd at RUNTIME -- never linked. `fossil_sql_framed()` tries it first and falls back to the `fossil sql` subprocess when the library is absent, damaged or ABI-mismatched, so the four-platform standalone build is untouched (probe assertion S1 pins that viki links no fossil library). The point is NOT speed: it is the AUTHORITY signal. `fossil sql` exits 0 whether a query returned no rows or failed to prepare, which is the ambiguity that once let sweep_sources() delete every forum: row; in-process a failed prepare is a real error. Repository discovered by reading `.fslckout`'s vvar.repository with plain sqlite3 (that file is UNENCRYPTED even for a .efossil repo), key via FOSSIL_SEE_KEY as usual. `viki fossilsee-status` (hidden) reports which path is live -- without it a two-path comparison passes trivially when both legs are the subprocess
@@ -270,8 +270,11 @@ test/
                   under 14 real ported check-in comments, plus wiki pages, tickets (one with
                   a REPLACING change, one with an APPENDING one), forum thread/reply/edit, a
                   tech note, an attachment, tags, an unversioned file, and a file whose earlier
-                  text survives only in history. The non-file artifacts are there because
-                  `viki index` cannot read them -- that gap is the measurement.
+                  text survives only in history. The non-file artifacts are there to exercise
+                  every extractor, NOT because `viki index` cannot read them -- it reads all
+                  nine classes. Only historical file versions and tags/branch names remain
+                  unindexed. This line said "that gap is the measurement" until 2026-08-23
+                  and contradicted this same file's "Mostly closed" entry below (QUEUE 44).
   retrieval-queries.tsv  59 questions an agent would ask in a LATER session, six classes,
                   18 held out. Ground truth is an anchor SUBSTRING, not a content_hash#chunk_ix,
                   so it survives a doc edit or a re-chunk; anchors must not span a line break
@@ -1286,27 +1289,50 @@ the hardest thing for a later agent to recover is why something was NOT done.
   retire their rows -- correct for the local view, but it discards the
   peer's compute-once work, so do not `viki index` in a fresh clone you
   only meant to query.
-- **In-process Fossil (FFI) is not started -- and KICKOFF.md's
+- **In-process Fossil is PARTLY started as of 2026-08-21 -- and KICKOFF.md's
   `experiments/harness.c` regression gate is CLOSED BY REFERENCE, not
   outstanding.** Judgment call made 2026-08-13; this is the resolution, so
   do not re-open it as a failing definition-of-done item.
+
+  **CORRECTED 2026-08-23.** This bullet said "In-process Fossil (FFI) is not
+  started" and "Every Fossil operation is a subprocess" until today, which
+  contradicted this same file's "Verified working end to end" entry (see the
+  `libfossilsee` equivalence entry above, `19 passed, 0 failed`). `src/viki_fossilsee.c`
+  landed in `2f9ccea`, whose AGENTS.md hunks never revisited this paragraph --
+  a same-commit-rule violation, and the exact defect CLAUDE.md's orientation
+  section warns about. Found by an undirected `viki muse` sweep, QUEUE 44.
+
   KICKOFF.md's definition of done says "Re-run `experiments/harness.c`
   against your fossil-see build -- still ALL PASS (regression gate)". It
   is satisfied as follows:
-  1. **viki has no in-process Fossil to regress.** Every Fossil operation
-     is a subprocess resolved by `viki_fossil_binary()`
-     (`$VIKI_FOSSIL_BIN` -> `fossil-see` on PATH -> `fossil`), used in
-     `viki_cache.c` and `viki_index.c`. Measured, not asserted from
-     design -- and measured over the **full** symbol table, because
-     `nm -u` lists only *undefined* symbols and statically linked code
-     contributes *defined* ones, so an empty `nm -u` would prove nothing
-     about static linking (see FINDINGS.md):
-     `nm build/dist/viki | grep -i fossil` prints exactly three symbols,
-     all viki's own -- `_unquote_fossil` (local), `_viki_fossil_binary`,
-     `_viki_fossil_user`. No Fossil implementation is present in the
-     binary in any linkage form, and it contains neither
-     `fossil_cli_main` nor `fossil_embed_init`. Nothing that harness
-     covers is on viki's critical path.
+  1. **viki has no LINKED Fossil to regress, and its one in-process path is
+     an optional `dlopen`.** `fossil_sql_framed()` runs its SQL through
+     `libfossilsee` when that library is loadable and falls back to the
+     subprocess silently when it is not (`src/viki_fossilsee.c`; `viki
+     fossilsee-status` says which path is live). **Everything else Fossil-related
+     is still a subprocess** resolved by `viki_fossil_binary()`
+     (`$VIKI_FOSSIL_BIN` -> `fossil-see` on PATH -> `fossil`) -- `uv add/sync/export`,
+     `wiki`, `ticket`, `unversioned cat`. That boundary is narrow and easy to
+     misread; it is why `viki cache push` dies with `exec fossil failed` when
+     `$VIKI_FOSSIL_BIN` is unset even though indexing works.
+
+     NOTHING IS LINKED AT BUILD TIME, which is the actual invariant and is
+     what `build/fossilsee-probe.sh`'s S1 asserts. Measured over the **full**
+     symbol table, because `nm -u` lists only *undefined* symbols and
+     statically linked code contributes *defined* ones, so an empty `nm -u`
+     would prove nothing about static linking (see FINDINGS.md).
+     `nm build/dist/viki | grep -i fossil` prints **eight** symbols, all
+     viki's own -- `_fossil_sql_framed`, `_unquote_fossil`,
+     `_viki_fossil_binary`, `_viki_fossil_user`, `_viki_fossilsee_available`,
+     `_viki_fossilsee_shutdown`, `_viki_fossilsee_sql_framed`,
+     `_viki_fossilsee_status`. (This said "exactly three" until 2026-08-23 and
+     had been false since `2f9ccea`; anyone re-running it to check the claim
+     got 8 and would reasonably read that as a linkage regression rather than
+     doc rot. Re-measure rather than transcribing this list -- it moves
+     whenever a `viki_fossilsee_*` entry point is added.) No Fossil
+     implementation is present in the binary in any linkage form, and it
+     contains neither `fossil_cli_main` nor `fossil_embed_init`. Nothing that
+     harness covers is on viki's critical path.
   2. **The live harness IS all-pass, in the repo that owns it.** It moved
      to the sibling `fossil-sqlcipher-libressl` repo's `embed/` directory;
      `embed/README.md` records `harness.c --net URL` (local phase, then a

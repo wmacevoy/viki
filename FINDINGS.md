@@ -12,6 +12,53 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## Doc rot is not always decay: a claim can be FALSE ON ARRIVAL when parallel agents integrate, and this repo has at least one
+
+2026-08-23. Found by an undirected `viki muse` sweep of the repo's own cache
+(QUEUE 44), which is the first time this project's own tool found a defect in
+this project.
+
+`test/retrieval-corpus.sh` told its reader that check-in comments are "NOT
+indexed ... the single largest coverage gap in `viki index`" and carried a
+two-column table listing five classes as un-indexed. All of them were indexed.
+The interesting part is WHEN:
+
+```
+$ git log -S "NOT indexed by viki today" --oneline -- test/retrieval-corpus.sh
+$ git log -S "index_unversioned" --oneline -- src/viki_index.c
+# both resolve to the SAME commit: 4292a0a
+```
+
+One agent wrote the corpus while another closed the coverage gap, and the two
+halves were integrated in one commit without reconciling. **The comment was
+never true.** There is no revision of this tree in which it described reality.
+
+**Why that matters more than an ordinary stale claim.** Every rot-detection
+instinct this repo has is time-shaped: check the date, re-measure, "entries are
+dated snapshots". None of that finds a claim that was wrong at birth, because
+there is no before-state where it was right and no edit that made it wrong.
+`git log -S` on the claim text is what finds it, and the tell is that the claim
+and its own refutation land in the same commit.
+
+**It spread, which is the ordinary part.** By the time it was found the same
+false premise sat in AGENTS.md ("the non-file artifacts are there because
+`viki index` cannot read them -- that gap is the measurement") and in CLAUDE.md
+("0 of 16 questions ... are answerable at all"), while AGENTS.md ELSEWHERE said
+the gap was "Mostly closed". A doc that contradicts itself is the signature.
+
+**The structural lesson, and it is uncomfortable.** This repo's defence against
+rot is to write everything down in the same commit as the code. That discipline
+is also the mechanism: more replicas means more places for a torn write to land,
+and parallel agents make torn writes normal rather than exceptional. The fix
+applied here was to DELETE the transcribed figures rather than update them --
+CLAUDE.md now points at `test/retrieval-eval.sh`'s report instead of restating
+its numbers, because a number that can be regenerated should not be replicated
+into prose at all. **The cheapest way to stop a claim rotting is to have one
+copy of it, and the second cheapest is to have none and a command that prints
+it.**
+
+---
+
 
 
 

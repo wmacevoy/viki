@@ -157,7 +157,8 @@
 ** viki_chunk carries no timestamp column at all, and viki_source.mtime is
 ** 0 for every virtual artifact by construction (viki_index.c's
 ** index_text_blob is called with mtime 0 for wiki:/ticket:/forum:, and the
-** proposed ckin:/note:/tchg: classes would inherit that) -- 8 of the 18
+** ckin:/note:/tchg: classes -- SHIPPED since 2026-08-13, this comment said
+** "proposed" until 2026-08-23 -- inherit it) -- 8 of the 18
 ** sources in the eval corpus have mtime=0. For real files it is the LOCAL
 ** filesystem mtime, i.e. when this machine last wrote the file, which
 ** after a fresh clone or a `viki cache pull` (D-11/D-12) is checkout time

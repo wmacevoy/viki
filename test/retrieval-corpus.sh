@@ -9,8 +9,8 @@ set -euo pipefail
 # `test/retrieval-eval.py` measures how well `viki ask` recalls things an
 # agent would want to remember from an EARLIER session. It needs a corpus
 # that is (a) a real agent-episodic record and (b) exercises every kind of
-# state a Fossil repository can hold, not just the four kinds `viki index`
-# happens to cover today.
+# state a Fossil repository can hold -- which since 2026-08-23 means MORE
+# than `viki index` covers, not the reverse. See the table below.
 #
 # This script builds that corpus, once, into a work directory:
 #
@@ -23,9 +23,14 @@ set -euo pipefail
 # CLAUDE.md, VIKI_DESIGN.md, KICKOFF.md, USER_STORIES.md, ARCHITECTURE.md,
 # ENCRYPTION.md), committed under CHECK-IN COMMENTS ported verbatim from
 # viki's own git log. Those comments are rich episodic prose -- they say why
-# a thing was done and what was rejected -- and NOTHING IN VIKI INDEXES THEM
-# TODAY. That is not an accident of this script; it is the single largest
-# coverage gap in `viki index`, and the eval scores it as its own number.
+# a thing was done and what was rejected. This comment used to say NOTHING IN
+# VIKI INDEXES THEM TODAY and call it the single largest coverage gap. THAT WAS
+# NEVER TRUE: `git log -S` resolves this comment and `index_unversioned()` to
+# the SAME commit 4292a0a -- one agent wrote this corpus while another closed
+# the gap, and the two halves were integrated without reconciling. Check-in
+# comments are indexed as `ckin:` and have been since that commit. The eval
+# still scores per-artifact recall as its own number, which is the part that
+# was always worth doing.
 #
 # The pairing of a ported message with the files that commit touches is
 # arbitrary, and that is fine: viki has no link from a check-in comment to a
@@ -37,13 +42,21 @@ set -euo pipefail
 #
 #   indexed by viki today        | NOT indexed by viki today
 #   -----------------------------+--------------------------------------
-#   checkout files (./*.md)      | check-in comments / the timeline
-#   wiki pages   (wiki:Name)     | tech notes (event.type='e')
-#   tickets      (ticket:UUID)   | ticket CHANGE history (ticketchng)
-#   forum posts  (forum:UUID)    | historical file versions
-#                                | attachments
-#                                | tags and branch names
-#                                | unversioned (uv) file content
+#   checkout files (./*.md)      | historical file versions
+#   wiki pages   (wiki:Name)     | tags and branch names
+#   tickets      (ticket:UUID)   |
+#   forum posts  (forum:UUID)    |
+#   check-in comments (ckin:)    |
+#   tech notes   (note:)         |
+#   ticket changes (tchg:)       |
+#   attachments  (attach:)       |
+#   unversioned  (uv:)           |
+#
+#   The right column had SEVEN entries until 2026-08-23 and five of them were
+#   already indexed. Do not read a large right column as "the measurement" and
+#   go add more un-indexed classes -- check `VIRTUAL_NS[]` in src/viki_index.c
+#   against this table first. The authoritative count is whatever
+#   test/retrieval-eval.sh's per-artifact report prints, not this comment.
 #
 # USAGE
 #   bash test/retrieval-corpus.sh [work-dir]
@@ -721,9 +734,9 @@ EOF
     printf 'retrieval-corpus.sh: WARN: attachment add failed (see logs)\n' >&2
 
 # --------------------------------------------------- 7. unversioned content --
-# uv blobs are latest-wins, no history, and nothing in `viki index` reads
-# them -- `viki cache push/pull` writes and reads uv, but only its own
-# viki-cache.db / viki-model/* names.
+# uv blobs are latest-wins and carry no history. `viki index` DOES read them
+# (index_unversioned(), as `uv:NAME`), skipping viki's own viki-cache.db /
+# viki-model/* names. This comment claimed the opposite until 2026-08-23.
 cat > "$WORK/uv-runbook.txt" <<'EOF'
 Hub runbook, unversioned because it changes faster than the repo does.
 
