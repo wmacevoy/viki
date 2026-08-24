@@ -2114,3 +2114,96 @@ across a reload, `navigator.storage.persist()`, the iOS install banner, and the
 `?capture=` share path. All of it is plausible and none of it is proven. Do not
 call this working until an actual install-and-fly-mode test has been done on a
 real iPhone.
+
+## 51. INGEST: adapt, do not invent -- researched 2026-08-24
+     (Warren: "i also worry about authentication ... nanoclaw is a lightweight alternative.
+      many depend on mcp, but many tools require web instead of mcp for --- reasons.")
+
+### The correction first: WhatsApp is not impossible, it is FORBIDDEN
+
+QUEUE 47/VIKIVERSE_V1 5c say WhatsApp has "no personal API". That is right about
+SANCTIONED access and wrong as stated. **Baileys** is a TypeScript library that
+impersonates a WhatsApp Web companion device and automates a real account as a
+linked device -- and nanoclaw ships it. So the channel is reachable.
+
+The cost is not technical. WhatsApp's terms prohibit unofficial clients
+outright; the ban risk is described as real, escalated through 2025, and
+permanent without warning, with Meta detecting on device fingerprinting and
+session anomalies rather than on volume alone. Sources call it appropriate for
+"personal automation on a number you own" and inappropriate for anything at
+scale.
+
+**That is Warren's call, not a technical judgement**: it trades a small,
+unbounded risk of losing his WhatsApp number against reading one channel. The
+honest framing is that this is the one channel where coverage costs something
+other than effort.
+
+### nanoclaw covers most of the channel list, already
+
+~4,000 lines of TypeScript against OpenClaw's ~500,000, container-isolated per
+agent group, built on Anthropic's Agents SDK, with adapters for WhatsApp,
+Telegram, Discord, Slack, Gmail, Teams, iMessage, Matrix, Google Chat, GitHub
+and email. Credentials are injected per-request via a vault rather than held by
+the agent.
+
+**That is most of VIKIVERSE_V1 5c's list, built and auditable.** viki should not
+write channel adapters. Concretely: Discord and Gmail extractors are wasted
+effort, and Teams may be too.
+
+### Authentication splits three ways, and it is the whole design
+
+  TOKEN AVAILABLE      -> MCP. Gmail, Google Calendar, GitHub. ms-365-mcp-server
+                          does O365 via MSAL device-code with an OS-keyring
+                          token cache.
+  TOKEN GATED BY AN
+  INSTITUTION          -> browser. D2L's API needs an ADMIN to register an app
+                          through Manage Extensibility; an instructor cannot
+                          self-serve. This is the "--- reasons" Warren means: not
+                          technical, institutional.
+  NO SANCTIONED CLIENT -> browser, or an unofficial protocol client with a ban
+                          risk (WhatsApp).
+
+One footnote worth keeping: Anthropic's bundled M365 connector REJECTS personal
+Microsoft accounts (signInAudience is work/school only). Warren's is a work
+account so it does not bite him -- but it does mean the path runs through his
+institution's Azure tenant, which may itself be gated.
+
+### Session-riding is the mainstream pattern now, and that is reassuring
+
+The Chrome reader's approach -- act inside the session that already exists -- is
+not a hack. agent-browser reuses a Chrome profile; raw CDP on :9222 gives an
+agent the default browser context with every cookie; Chrome 146+ supports
+controlling an already-running logged-in session natively. The reason is exactly
+the one that drove edge/chrome: SSO with MFA makes headless re-authentication
+brutal, and riding the session avoids it entirely.
+
+### THE SECURITY FINDING, and it is the one to act on
+
+An extension in the real browser is the MOST DANGEROUS configuration precisely
+because it is the most capable: an agent there can read any tab, including
+banking and mail. Microsoft states plainly that Playwright MCP "is not a
+security boundary". Anthropic's own guidance for browser use is to pre-approve
+sites, expect confirmation before irreversible actions, avoid financial
+transactions entirely, and treat prompt-injection protections as "not
+foolproof".
+
+ACTIONABLE NOW: **run the reader in a DEDICATED CHROME PROFILE** holding only
+the accounts it reads. That is a five-minute change to how it is installed and
+it removes the entire class of "a malicious page in another tab reaches my
+bank". edge/chrome/'s observe-only constraint already blocks the action half;
+the profile blocks the reach half.
+
+### Revised recommendation
+
+  BUILD (nobody else has it)  the ok/blind/loggedout coverage contract; the
+                              promise ledger; capture; viki as an MCP SERVER so
+                              nanoclaw/openclaw/anything consumes it
+  ADAPT                       nanoclaw for Discord/Slack/Telegram/Gmail;
+                              ms-365-mcp-server for O365 if the tenant allows
+  KEEP IN edge/chrome         ONLY what has no token path at all -- D2L, Teams
+                              and Facebook. That is 3 sites, not a platform.
+
+Sources: nanoclaw (nanocoai/nanoclaw, nanoclaw.dev), Baileys ToS/ban analyses,
+Softeria/ms-365-mcp-server, anthropics/claude-code#53408, D2L Manage
+Extensibility docs, Playwright MCP security notes, Chrome 146 session control.
+

@@ -472,7 +472,7 @@ discovered during implementation.
 | Google Calendar | yes — real API |
 | Discord | only channels a **bot** is in; reading a user's own account is against terms |
 | texts / iMessage | on **macOS** only, via the local Messages database with Full Disk Access. Not on iOS |
-| WhatsApp | **no.** No personal-account API |
+| WhatsApp | no *sanctioned* API. **Baileys** impersonates a linked device and works — at a real, permanent, unpredictable ban risk (QUEUE 51). Warren's call, not a technical one |
 | Signal | **no, by design.** Reading it would mean prying into the local encrypted store, which defeats the reason to use Signal |
 | Facebook | **effectively no.** The personal notification surface is not exposed |
 | Office 365 / Teams | **web only** (Warren, 2026-08-24) — Graph exists but is not reachable for him |
