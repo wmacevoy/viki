@@ -123,6 +123,49 @@ try here" before starting.
 machinery exists (`--closes`, M-2/M-3). Not wired to agent identity, and not
 queryable as history.
 
+### 2.2c Authority has degrees, and the ledger records which was used — MUST
+
+Anything done on Warren's behalf is done at a stated level of authority, and the
+record says which.
+
+    observe   read only; never writes anywhere
+    draft     prepares something for Warren to send
+    act       sends/posts/replies as Warren, and signs a record of it
+    (silent)  acts without a record — DOES NOT EXIST, deliberately
+
+> *Warren, 2026-08-24:* "I am never present to see a fb post, the transactions
+> are necessarily through a digital surrogate, so there is an assignment of
+> self-dom. I can assign power of attorney to a human assistant to act on my
+> behalf. The next step is to what can I assign that authority to."
+>
+> **The reframing is right and it changes the design.** The surrogate is not
+> something being introduced — a browser already renders Facebook *for* Warren,
+> already orders and filters it. He is never present either way. So the question
+> was never "delegate or don't", it is *which surrogate, and holding what
+> authority*. The API boundary this document treated as a limit is an
+> engineering accident of which companies published endpoints, not a moral line.
+>
+> **Where the power-of-attorney analogy strains, and it is the useful part.**
+> PoA works because the agent is a *person*: identifiable, liable, revocable,
+> bound by fiduciary duty. Software has none of that, and liability does not
+> transfer — it stays entirely with Warren. So this is closer to operating a
+> machine than to appointing an attorney.
+>
+> What substitutes for the accountability personhood supplies is **legibility**:
+> an inspectable, signed record of everything done in his name, so the authority
+> is auditable even though it is not liable. `identity.db` already mints agent
+> identities with real keypairs, so an agent can sign what it did. That is the
+> mechanism; this requirement is the policy.
+
+*Acceptance:* the ledger distinguishes three parties, not two — *mine*,
+*someone else's*, and **acted as me**; every `act` carries a signed record
+naming the agent identity, the authority level and the time; and no code path
+exists that acts without producing one.
+
+**Status:** the ledger has two parties (§2.2). Authority levels are not built.
+The Chrome reader below is deliberately `observe` only — the first and safest
+rung, and the one that needs no policy decided first.
+
 ### 2.3 Ingest: calendar and notifications — MUST
 
 Events and messages arrive from many places and become either a promise, a
@@ -361,6 +404,7 @@ an index problem, and reaching for ANN here would buy faster mediocre answers.
 |---|---|---|
 | P1.1 | **Google Calendar + O365 ingest** (§2.3) | UNBLOCKED (Q5 answered) — derived, not mirrored |
 | P1.2 | **Gmail / Outlook / GitHub ingest** (§2.3) | UNBLOCKED — the four readable channels first |
+| P1.2b | **Chrome reader** for Facebook / Discord (§2.3) | UNBLOCKED — `observe` only; collapses three "unreadable" channels by acting inside Warren's own session rather than as an API client |
 | P1.3 | **The clock: morning brief** (§2.4) | UNBLOCKED (Q6 answered) — it asks; questions batch into the brief |
 | P1.4 | **Coverage reporting** (§2.5) | ships with P1.3, and now MUST name Signal/WhatsApp/Facebook as unseen |
 | P1.5 | **Capture as the bridge** (§2.6) | PROMOTED — the only coverage mechanism unreadable channels have |
