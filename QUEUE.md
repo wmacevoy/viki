@@ -1833,7 +1833,41 @@ cache reads it forever. Not a flaw in the scheme -- the nature of at-rest keys -
 it means "remove a member" is a re-key operation with a real cost, and the vikiverse
 should say so rather than implying a delete button.
 
-SHAPE, if built:
+### BUILT 2026-08-23. edge/tools/{viki-key-wrap,viki-identity}.c, build/keywrap-probe.sh 9/0/0
+
+Wire-compatible with age v1, proven in BOTH directions against stock age 1.3.1:
+  I1  age-keygen -y derives the SAME public key from our secret
+  I2  `age -d` reads a file we wrote
+  I3  we read a file stock age wrote
+Plus W1-W6: identity.db mints age recipients, the tribe key round-trips through it,
+a second recipient opens the same file independently, and both a wrong passphrase
+and an unrelated identity recover nothing.
+
+THE INTEROP LEG EARNED ITS KEEP IMMEDIATELY. An early build passed its own
+round-trip perfectly while emitting secret keys real age rejected as "invalid
+checksum": bech32's checksum is defined over the LOWERCASE hrp even when the key is
+rendered upper case, and age's secret keys are upper case. Self-round-trip could
+never have caught it. That is the argument for choosing an existing format rather
+than inventing one, made concrete on the first run.
+
+identity.db as shipped keeps Warren's design: SQLCipher under the known key "1" (for
+its per-page HMAC, i.e. tamper detection -- W2 asserts it is not a plain sqlite file
+so nobody "simplifies" that away), private keys each wrapped under their own
+passphrase, several identities per device. PBKDF2-HMAC-SHA256 at 600k iterations,
+which is OWASP's floor and all LibreSSL offers.
+
+THE SECOND FACTOR IS BUILT IN AS STRUCTURE, NOT SHIPPED AS FUNCTION:
+    unlock_key = HKDF( PBKDF2(passphrase, salt, iters) || device_secret,
+                       "viki-identity-v1" )
+device_secret is empty today and a `factors` column records 'passphrase'. When a
+platform secret exists (Secure Enclave / Keystore / TPM / WebAuthn PRF) it mixes in
+here with NO format change and the column says so, which also makes the
+single-factor rows findable for migration.
+
+STILL TRUE AND STILL UNSOLVED: revocation. Removing a member is a re-key of the
+whole tribe, and anyone who held the old key reads any copy they kept.
+
+ORIGINAL SHAPE (superseded by the above, kept for the reasoning):
   edge/tools/viki-key-wrap.c   age-compatible: wrap/unwrap the tribe key to a set of
                                X25519 recipients, LibreSSL only, ~150 lines
   keys/<member>.age            one wrap per member, plaintext-readable location

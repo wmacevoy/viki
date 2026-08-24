@@ -166,6 +166,26 @@ sh build/vikiverse-up.sh <dir> [tribe] [--lan]  # stands up a WORKING vikiverse:
                                             #   and still answers semantically. Writes a
                                             #   README.txt and a vikiverse-down.sh.
                                             #   DO NOT PIPE IT -- see its header
+sh edge/tools/build-tools.sh                 # the native key-custody tools -> build/dist/:
+                                            #   viki-key-wrap    age v1 wrap/unwrap to X25519
+                                            #                    recipients. Wire-compatible:
+                                            #                    `age -d` reads what it writes
+                                            #                    and vice versa (proven, I1-I3)
+                                            #   viki-identity    identity.db -- a SQLCipher
+                                            #                    container under the KNOWN key
+                                            #                    "1" (kept for its per-page HMAC
+                                            #                    = tamper detection), holding
+                                            #                    private keys each wrapped with
+                                            #                    its own passphrase
+                                            #   viki-cache-encrypt   the pushing peer's cache
+                                            #                    converter, via sqlcipher_export
+                                            #   LibreSSL + SQLCipher come from fossil-see's
+                                            #   vendor tree; nothing new is downloaded
+sh build/keywrap-probe.sh <empty-dir>       # key custody, 9 assertions. The INTEROP three
+                                            #   (I1-I3) are the ones that matter and they SKIP
+                                            #   without `age` on PATH rather than passing:
+                                            #   an early build passed its own round-trip while
+                                            #   emitting keys real age rejected
 sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests under CONTEST:
                                             #   a long same-topic document must bury the one
                                             #   chunk naming the identifier, or every
