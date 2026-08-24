@@ -1689,3 +1689,54 @@ RELATED PRIOR ART worth reading before building this: ../strata/vendor/wyatt tar
 the same combination ("Swap for SQLCipher WASM -> encrypted at rest. Same API.") and
 already has an adapter trio for sqlite / sqlcipher / pg.
 
+## 47. THE CASE FOR THE VIKIVERSE, DEMONSTRATED BY FAILING IT LIVE
+     (Warren, 2026-08-23: "there are a lot of re-inventions here. why do dependencies
+      keep getting lost? ... this happens to me in bucketloads ... kettle black moment")
+
+WHAT HAPPENED. Asked to give viki edge encryption at rest, I proposed BUILDING
+SQLCipher for wasm. It already existed one directory over: ../sqlcipher-libressl/wasm/
+has sqlcipher_wasm.c, opfs_vfs.c and three JS shims, and ../sqlcipher-libressl/
+examples/web/ has a PREBUILT WORKING sqlcipher.wasm with a demo page. I also did not
+know ../strata/vendor/wyatt targets the same combination. Warren knew and said so;
+nothing in any tool I was using would have told me.
+
+MEASURED, because this project does not accept assertions. Copied 80 files -- just
+*.md, build*.sh and *.html, maxdepth 3 -- from three sibling projects into a scratch
+tree and ran one `viki index`:
+
+  viki ask "persisting a database in the browser origin private file system OPFS"
+    [1] ./sqlcipher-libressl/ext_wasm_index-*        rrf=0.0476
+    [2] ./sqlcipher-libressl/examples_web_index.html rrf=0.0453
+
+Rank 1 and 2 ARE the prior art. About ninety seconds of work. I proposed building the
+thing at rank 2.
+
+(The other phrasing, "is there an existing SQLCipher build for WebAssembly", returned
+only fossil-sqlcipher-libressl READMEs -- worse. Worth noting rather than hiding: one
+query found it and one did not, which is the ordinary state of retrieval and the
+reason AGENTS.md's HyDE convention exists.)
+
+WHY THIS IS THE SAME PROBLEM AS CLAIM ROT, and why it belongs in this queue beside
+41/43/44/45. Both are failures of DISTRIBUTED INFORMATION across a boundary the
+searcher is not looking past:
+  - claim rot   -- one fact in several places, and the copies diverge
+  - lost deps   -- one solution in another project, and you never learn it exists
+Neither is an agent failure specifically; Warren's "bucketloads / kettle black" is the
+point. A human and an agent lose track for the same reason -- the boundary is the
+repository, and attention does not cross it. viki as it stands indexes ONE repo, so
+it is structurally incapable of catching either across projects. THAT is the
+vikiverse's actual value proposition, and this is the first time it has been
+demonstrated rather than argued.
+
+IMPLICATION FOR SCOPE: a personal vikiverse that indexes every project Warren owns is
+worth more than any retrieval-quality improvement measured this week. The literal leg
+bought recall@1 0.302 -> 0.372 (QUEUE 42). Cross-project indexing turns a 0% into a
+rank-1 hit, because the document was not ranked badly -- it was NOT IN THE CORPUS.
+Coverage dominates ranking, and nothing in test/retrieval-eval.sh measures coverage
+across repositories.
+
+CHEAP FIRST STEP, no new code: `viki index` each sibling project into its own cache
+and ATTACH them, or index a tree of symlinked docs. SQLITE_MAX_ATTACHED=10 is the
+first wall (QUEUE 39), and QUEUE 39's measurement already showed that at this scale
+opening is free -- 3.4ms for three caches -- so the cost objection does not apply.
+
