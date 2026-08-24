@@ -494,6 +494,17 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   for `fork()`/BSD sockets), so `viki.exe` links `msys-2.0.dll` — bundled by
   `build.sh`. ONNX Runtime is native and needs UTF-16 model paths regardless
   (`-DVIKI_WIN_ORT_PATH`) and `cygpath -m` paths, since it has no MSYS awareness.
+- **`.vikiignore` decides what is in the corpus, and the corpus is the
+  product.** One glob per line, `#` comments, at the indexed root; a pattern
+  with no `/` matches any path COMPONENT, one with `/` matches the whole
+  relative path and everything under it. `SKIP_DIRS` in `viki_index.c` still
+  matches by BASENAME, which is why it was not enough: `vendor-wasm` is not
+  `vendor` and `dist` is not `build`. Measured 2026-08-24 on this repo before
+  the file existed — **83.4% of all chunks were vendored SQLCipher/LibreSSL
+  source**, 8.6% build output, 6.9% actually ours, and a question about why
+  ndvss was chosen over sqlite-vec returned a vendored `sqlite3.c` at rank 1.
+  Adding the file took the corpus from 9,578 chunks to 779 and moved that
+  question's rank-1 hit to `FINDINGS.md`, where the answer is.
 - **Known-naive by choice, not by oversight** (see AGENTS.md before "fixing"):
   fixed 40-line chunks with no overlap or token awareness, ASCII-scoped
   tokenizer, no epoch-migration path for a model change, and

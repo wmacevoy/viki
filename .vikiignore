@@ -1,0 +1,26 @@
+# Paths viki should not index. One glob per line; `#` comments.
+# A pattern with no `/` matches any path COMPONENT; one with `/` matches the
+# whole path relative to the indexed root, and also everything beneath it.
+#
+# Why this file exists, measured 2026-08-24: 83.4% of this repo's chunks were
+# vendored SQLCipher/LibreSSL source copied in for the wasm build, 8.6% was
+# build output, and 6.9% was actually this project. A question about why ndvss
+# was chosen over sqlite-vec returned a vendored sqlite3.c at RANK 1.
+# SKIP_DIRS in viki_index.c matches by BASENAME, so `vendor-wasm` is not
+# `vendor` and `dist` is not `build`.
+
+# vendored third-party source -- not ours, and it drowns everything
+edge/vendor-wasm
+edge/dist
+vendor
+
+# build products
+build/dist
+build/obj
+build/libobj
+*.o
+*.a
+*.wasm
+
+# the derived cache itself
+.viki

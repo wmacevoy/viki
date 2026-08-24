@@ -1,4 +1,5 @@
 #include "viki_index.h"
+#include <fnmatch.h>
 #include "viki_note.h"
 #include "viki_cache.h"     /* viki_fossil_binary/viki_fossil_user, shared subprocess config */
 #include "viki_fossilsee.h" /* OPTIONAL in-process fossil SQL; absence is normal */
@@ -28,6 +29,81 @@
 static const char *SKIP_DIRS[] = {
     ".git", ".fslckout", "_FOSSIL_", ".viki", "vendor", "build", NULL
 };
+
+/* .vikiignore -- one glob per line, `#` comments, matched against the path
+** RELATIVE to the indexed root ("src/foo.c", "edge/vendor-wasm/sqlite3.c").
+**
+** SKIP_DIRS above matches by BASENAME, which is why it was not enough:
+** `vendor-wasm` is not `vendor` and `dist` is not `build`, so vendored
+** SQLCipher and LibreSSL headers copied into edge/ went straight into the
+** corpus. Measured 2026-08-24 on this repo: 83.4% of all chunks were vendored
+** code this project did not write, 8.6% was build output, and 6.9% was
+** actually ours. A question about why ndvss was chosen over sqlite-vec
+** returned a vendored sqlite3.c at RANK 1.
+**
+** A per-project file rather than a longer hardcoded list, because every
+** project has its own idea of what is not its own -- and because the corpus
+** is the product here, so what goes in it is a project-level decision. */
+#define VIKI_MAX_IGNORE 64
+static char *g_azIgnore[VIKI_MAX_IGNORE];
+static int g_nIgnore = 0;
+static int g_bIgnoreLoaded = 0;
+
+static void load_vikiignore(const char *zRoot){
+    char zPath[2048];
+    char line[512];
+    FILE *f;
+    if( g_bIgnoreLoaded ) return;
+    g_bIgnoreLoaded = 1;
+    snprintf(zPath, sizeof(zPath), "%s/.vikiignore", zRoot);
+    f = fopen(zPath, "r");
+    if( !f ) return;
+    while( g_nIgnore < VIKI_MAX_IGNORE && fgets(line, sizeof(line), f) ){
+        char *p = line, *e;
+        while( *p == ' ' || *p == '\t' ) p++;
+        if( *p == '#' || *p == '\n' || *p == '\r' || !*p ) continue;
+        e = p + strlen(p);
+        while( e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ') ) *--e = 0;
+        if( !*p ) continue;
+        g_azIgnore[g_nIgnore] = malloc(strlen(p) + 1);
+        if( !g_azIgnore[g_nIgnore] ) break;
+        strcpy(g_azIgnore[g_nIgnore], p);
+        g_nIgnore++;
+    }
+    fclose(f);
+    if( g_nIgnore ) fprintf(stderr, "viki index: .vikiignore: %d pattern(s)\n", g_nIgnore);
+}
+
+/* A pattern with no `/` matches any path COMPONENT (so "*.o" and "dist" work
+** the way a reader expects); one with `/` matches the whole relative path. */
+static int path_ignored(const char *zRel){
+    int i;
+    for( i = 0; i < g_nIgnore; i++ ){
+        const char *pat = g_azIgnore[i];
+        if( strchr(pat, '/') ){
+            if( fnmatch(pat, zRel, 0) == 0 ) return 1;
+            /* a directory pattern also covers everything under it */
+            {
+                char pfx[512];
+                snprintf(pfx, sizeof(pfx), "%s/*", pat);
+                if( fnmatch(pfx, zRel, 0) == 0 ) return 1;
+            }
+        }else{
+            const char *seg = zRel;
+            while( seg && *seg ){
+                const char *slash = strchr(seg, '/');
+                char comp[256];
+                size_t n = slash ? (size_t)(slash - seg) : strlen(seg);
+                if( n < sizeof(comp) ){
+                    memcpy(comp, seg, n); comp[n] = 0;
+                    if( fnmatch(pat, comp, 0) == 0 ) return 1;
+                }
+                seg = slash ? slash + 1 : NULL;
+            }
+        }
+    }
+    return 0;
+}
 
 /* Per-namespace authority to INVALIDATE, one flag per extractor.
 **
@@ -1766,11 +1842,16 @@ static int index_unversioned(sqlite3 *db, viki_embedder *emb, const char *modelI
 ** exits 0 with a silent opendir() failure -- silence is tolerable for a
 ** typo that indexes nothing, and unacceptable for one that would DELETE
 ** everything under the name that was typed. */
+/* The root the current walk started from, so path_ignored() can be given a
+** path RELATIVE to it rather than whatever cwd happens to be. */
+static const char *g_zWalkRoot = ".";
+
 static int walk(sqlite3 *db, const char *dir, int *nFiles, int *nChunked,
                   viki_embedder *emb, const char *modelId){
     DIR *d = opendir(dir);
     struct dirent *ent;
     int complete = 1;
+    size_t nRoot = strlen(g_zWalkRoot);
     if( !d ) return 0;
 
     while( (ent = readdir(d)) != NULL ){
@@ -1781,6 +1862,17 @@ static int walk(sqlite3 *db, const char *dir, int *nFiles, int *nChunked,
         snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
 
         if( lstat(path, &st) != 0 ) continue;
+
+        {   /* .vikiignore is checked for BOTH directories and files: pruning
+            ** a directory is what makes ignoring a vendored tree cheap, and
+            ** the file check catches patterns like "*.o" that name no dir. */
+            const char *zRel = path;
+            if( strncmp(path, g_zWalkRoot, nRoot) == 0 ){
+                zRel = path + nRoot;
+                while( *zRel == '/' ) zRel++;
+            }
+            if( path_ignored(zRel) ) continue;
+        }
 
         if( S_ISDIR(st.st_mode) ){
             if( should_skip_dir(ent->d_name) ) continue;
@@ -1940,6 +2032,8 @@ int viki_cmd_index(sqlite3 *db, const char *zDir, viki_embedder *emb){
     return viki_cmd_index_since(db, zDir, emb, VIKI_SINCE_FULL);
 }
 
+/* Set by the index entry point so walk() and path_ignored() agree on what
+** paths are relative TO. */
 int viki_cmd_index_since(sqlite3 *db, const char *zDir, viki_embedder *emb, long sinceRcvid){
     int nFiles = 0, nChunked = 0;
     int nWiki = 0, nWikiChunked = 0;
@@ -1953,6 +2047,9 @@ int viki_cmd_index_since(sqlite3 *db, const char *zDir, viki_embedder *emb, long
     VikiAuth auth;
     int nDropped, nOrphans;
     int bIncremental = 0, bAnythingNew = 1;
+
+    g_zWalkRoot = zDir;
+    load_vikiignore(zDir);
     long newMark = -1;
     char projCode[128] = "";
     char *errmsg = NULL;
