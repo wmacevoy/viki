@@ -1619,9 +1619,30 @@ THE CODEC AND THE VFS ARE THE SAME DECISION. There are two coherent designs:
      genuinely come off storage. Needs opfs_vfs.c AND the LibreSSL-wasm libcrypto.a.
      Earns its keep when the cache outgrows memory, and only then.
 
-DO A. It closes gap 2 with no build dependency at all, and it deletes the
-LibreSSL-under-emscripten unknown from the critical path. Reach for B at the same
-moment the cache stops fitting in memory -- not before, and never separately.
+RECOMMENDATION REVERSED AGAIN, same day, Warren: "the db will eventually be useful
+and have pictures of all the horse bands - it will be bigger than 5mb soon enough."
+
+A's whole justification was "read-only few-MB cache". If that premise expires, A is
+~20 lines you write and then delete, so DO B AND SKIP A -- unless the plaintext-at-
+rest exposure needs closing before B can land, in which case A is a stopgap with a
+known expiry date and should be labelled as one in the code.
+
+AND GROWTH COUPLES A THIRD DECISION IN, which neither A nor B addresses. With the
+VFS plus a codec, every page SQLite touches is a storage read AND a decrypt. The
+vector leg is a FULL SCAN (ndvss has no ANN -- and neither does sqlite-vec, measured
+when it was evaluated and reverted). So a large cache means scanning every vector,
+through the VFS, decrypting every page, on a phone. THE GROWTH PATH IS THREE COUPLED
+DECISIONS -- VFS, codec, vector index -- and hitting them one crisis at a time is the
+expensive way. QUEUE 45's note that ANN is a SPEED fix and a better model is a
+QUALITY fix still holds; this is the case where the speed fix becomes load-bearing.
+
+FIRST QUESTION TO SETTLE, because it changes the curve completely: DO THE PICTURES GO
+IN THE CACHE? viki chunks and embeds TEXT. Images would live as Fossil attachments
+with the cache holding metadata and caption text, in which case the cache grows with
+NOTES, not with PHOTOS, the offline set stays small, and B may be further off than it
+looks. If instead the images themselves must be searchable, that is a second model
+(CLIP-shaped), a second model_id epoch, and a substantially bigger design question
+than storage -- and D-11's compute-once sharing would have to hold for it too.
 
 What survives from the original writeup below: the vendored machinery inventory (it
 is all real and it is what B needs), and the key-custody question, which is
