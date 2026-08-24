@@ -245,6 +245,39 @@ int viki_cmd_promises(sqlite3 *db, const char *zMe, const char *zHorizon, int bA
 ** this says what happened to it. */
 int viki_cmd_why(sqlite3 *db, const char *zId);
 
+/* THE MORNING BRIEF (VIKIVERSE_V1 2.4 + 2.5, and they are one thing).
+**
+** What is at risk, what I can and cannot see, which channels need signing in,
+** and what I am unsure about -- in that order, because that is the order of a
+** morning: act, then trust, then maintain, then decide.
+**
+** SILENCE IS NOT AN ACCEPTABLE OUTPUT. A day with nothing at risk prints a
+** short, explicit "nothing at risk" -- silence is indistinguishable from a
+** broken job, and a brief that is sometimes absent is a brief nobody can rely
+** on. Same rule as every other surface here.
+**
+** COVERAGE IS DERIVED, NOT REPORTED BY THE READER. Notes captured through the
+** browser reader carry a "[source] " prefix in their text, so the last time
+** anything was seen from a channel is a query rather than new plumbing. That
+** keeps the CLI honest without coupling it to a browser extension it should
+** know nothing about.
+**
+** QUESTIONS ARE BATCHED HERE AND NEVER PUSHED (Q6, 2026-08-24). An assistant
+** that interrupts to resolve its own uncertainty has taken the problem and
+** handed it back. */
+/* COVERAGE, as a pure query: which sources fed the corpus, when each was last
+** seen, and how many notes came from it. No thresholds, no judgment, no
+** opinion about what is "stale" -- that is policy and policy belongs to the
+** assistant, not to the substrate.
+**
+** Sources are derived from a "[name] " prefix on note text, which is what the
+** browser reader writes. Notes without one are the user's own captures. That
+** keeps viki from knowing anything about a browser extension.
+**
+** bJson emits one object per source, so an agent can consume it without
+** parsing a table meant for a human. */
+int viki_cmd_coverage(sqlite3 *db, int bJson);
+
 int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
                    const char *zState, const char *zWho, const char *zSince,
                    const char *zGrep, const char *zCloses, int bLast, int nMax);

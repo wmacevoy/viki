@@ -195,7 +195,14 @@ warning before something is missed, silence otherwise.
 day with nothing at risk produces a short, honest "nothing at risk" — not
 silence, which is indistinguishable from a broken job.
 
-**Status:** not built. viki stays pull; this is the assistant tier above it.
+**Status:** BUILT 2026-08-24 as `assistant/brief.sh`, and deliberately OUTSIDE
+viki. Warren: *"isn't this something that a digital assistant agent manages —
+not viki itself but an agent using viki to stay on top of things?"* It was
+written as a `viki brief` subcommand first, which was the second boundary
+crossing in one day. viki now exposes `coverage` as a pure query; every
+judgment — what counts as stale, what is worth asking — lives in `assistant/`.
+The sharpest test: viki cannot ask questions, so a brief that asks one was
+never a viki feature.
 
 ### 2.5 Coverage, and knowing what it cannot see — MUST
 
@@ -213,7 +220,10 @@ due" — carries what it looked at.
 unreachable or never-connected source degrades the claim explicitly rather than
 silently narrowing it.
 
-**Status:** not built anywhere. Nothing in viki reports corpus coverage.
+**Status:** `viki coverage [--json]` BUILT 2026-08-24 — per-source last-seen
+times, no thresholds. The brief in `assistant/` turns that into "STALE" and a
+bounded SIGN IN list, because a threshold is a judgment about Warren's day
+rather than a fact about the corpus.
 
 ### 2.6 Capture that cannot be lost — MUST
 

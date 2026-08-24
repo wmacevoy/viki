@@ -38,6 +38,9 @@ static void usage(void){
         "                           retired, because it deliberately does not look at what\n"
         "                           did not change.\n"
         "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found.\n"
+        "  coverage [--json]        Which sources fed the corpus and when each was last seen.\n"
+        "                           A QUERY, not a judgment: no staleness thresholds and no\n"
+        "                           advice -- those are policy, and policy lives in assistant/.\n"
         "  promises [--me NAME] [--horizon 7d] [--all]\n"
         "                           THE LEDGER: what is owed, to whom, by when, and what is at\n"
         "                           risk. Live tasks only -- anything superseded is excluded.\n"
@@ -320,6 +323,17 @@ int main(int argc, char **argv){
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
         rc = viki_cmd_promises(db, zMe, zHorizon, bAll);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "coverage") == 0 ){
+        sqlite3 *db;
+        int bJson = 0, i;
+        for( i = 2; i < argc; i++ ) if( strcmp(argv[i], "--json") == 0 ) bJson = 1;
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        rc = viki_cmd_coverage(db, bJson);
         sqlite3_close(db);
         return rc;
     }

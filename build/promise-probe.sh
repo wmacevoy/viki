@@ -84,6 +84,64 @@ chk "P7 and reads backwards from the successor" \
 chk "P8 CONTROL: an unrelated note has no chain" \
     "$("$V" why "$B" 2>&1 | grep -c 'supersedes it and it supersedes nothing')" "1"
 
+echo "== coverage is a PRIMITIVE: a query, with no judgment in it =="
+# The line viki must not cross. `coverage` reports last-seen times and nothing
+# else -- no thresholds, no "stale", no advice. The moment it needs a number
+# like "12 hours" it has become policy, and policy belongs in assistant/.
+T=$(cap "[teams] Karl asked for the rank data")
+"$V" index . >/dev/null 2>&1
+COV=$("$V" coverage 2>&1)
+chk "C1 a channel-sourced note appears as its own source" \
+    "$(printf '%s' "$COV" | grep -cE '^teams ')" "1"
+chk "C2 the user's own captures are a source too" \
+    "$(printf '%s' "$COV" | grep -c 'captured here')" "1"
+chk "C3 CONTROL: coverage renders NO judgment -- no STALE, no advice" \
+    "$(printf '%s' "$COV" | grep -ciE 'stale|sign in|should|overdue')" "0"
+if printf '%s' "$("$V" coverage --json 2>&1)" | grep -q '"source":"teams"'; then
+  ok "C4 --json is machine-readable, so an agent need not parse a display format"
+else no "C4 --json malformed"; fi
+
+echo "== the brief is the ASSISTANT's, and lives outside viki =="
+B="$ROOT/assistant/brief.sh"
+if [ ! -x "$B" ]; then
+  sk "B1 (no assistant/brief.sh)"
+else
+  BR=$(cd "$DIR" && sh "$B" --me warren 2>&1)
+  chk "B1 the brief reports what is at risk" \
+      "$(printf '%s' "$BR" | grep -c 'AT RISK')" "1"
+  chk "B2 and states its coverage" \
+      "$(printf '%s' "$BR" | grep -c 'WHAT I CAN SEE')" "1"
+  chk "B3 and what it cannot see at all" \
+      "$(printf '%s' "$BR" | grep -c 'not seen at all')" "1"
+
+  # STALENESS IS THE ASSISTANT'S CALL. Age a channel and the judgment appears
+  # in the brief -- while `viki coverage` above still refuses to make it.
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DIR/.viki/cache.db" \
+      "UPDATE viki_note SET ts='2020-01-02T09:00:00Z' WHERE text LIKE '%[teams]%';" 2>/dev/null
+    BR2=$(cd "$DIR" && sh "$B" --me warren 2>&1)
+    chk "B4 an old channel is judged STALE by the assistant" \
+        "$(printf '%s' "$BR2" | grep -c 'STALE')" "1"
+    chk "B5 ...and named in a bounded sign-in list" \
+        "$(printf '%s' "$BR2" | grep -c 'SIGN IN: teams')" "1"
+    chk "B6 CONTROL: viki coverage STILL says nothing about it" \
+        "$(cd "$DIR" && "$V" coverage 2>&1 | grep -ciE 'stale|sign in')" "0"
+  else
+    sk "B4 (no sqlite3)"; sk "B5 (no sqlite3)"; sk "B6 (no sqlite3)"
+  fi
+
+  # THE GOOD MORNING MUST BE SAID OUT LOUD. Silence is indistinguishable from a
+  # broken cron job, and a brief that is sometimes absent is one nobody relies on.
+  mkdir -p "$DIR/quiet"
+  ( cd "$DIR/quiet" && "$V" capture "a passing thought" >/dev/null 2>&1
+    "$V" index . >/dev/null 2>&1 )
+  QB=$(cd "$DIR/quiet" && sh "$B" --me warren 2>&1)
+  chk "B7 a day with nothing owed SAYS SO, rather than printing nothing" \
+      "$(printf '%s' "$QB" | grep -c 'nothing due in the next')" "1"
+  chk "B8 CONTROL: and the brief is still a full brief, not a stub" \
+      "$(printf '%s' "$QB" | grep -c 'WHAT I CAN SEE')" "1"
+fi
+
 echo "== coverage is stated, not implied (2.5) =="
 chk "P9 the ledger says what it can and cannot see" \
     "$(printf '%s' "$OUT2" | grep -c 'captured and ingested notes only')" "1"

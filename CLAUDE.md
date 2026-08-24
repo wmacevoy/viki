@@ -81,6 +81,11 @@ build/dist/viki promises [--me NAME] [--horizon 7d] [--all]
                                          # `--closes` is excluded, which is the property a
                                          # ledger cannot do without. Ordered by due, not by
                                          # write time. States its own coverage every run.
+build/dist/viki coverage [--json]         # which sources fed the corpus and when each was
+                                         # last seen. A QUERY WITH NO JUDGMENT IN IT: no
+                                         # staleness threshold, no advice. The moment it
+                                         # needs a number like "12 hours" it is policy, and
+                                         # policy lives in assistant/ -- see below
 build/dist/viki why <note-id>            # the supersession chain BOTH ways: what this replaced
                                          # and what replaced it. What an agent reads BEFORE
                                          # starting, so it does not redo a superseded attempt
@@ -196,7 +201,18 @@ sh build/reader-probe.sh                    # the Chrome reader is OBSERVE ONLY,
                                             #   loopback as the ONLY destination, and every
                                             #   extractor able to report `blind` so a broken
                                             #   selector cannot read as a quiet day
-sh build/promise-probe.sh <empty-dir>       # THE PROMISE LEDGER, 12 assertions. P4 is the
+sh assistant/brief.sh [--me NAME]           # THE MORNING BRIEF -- and it is NOT VIKI. It
+                                            #   composes promises + coverage + pending into a
+                                            #   decision: what is at risk, what I can and
+                                            #   cannot see, which channels need signing in,
+                                            #   what I am unsure about. Every judgment (what
+                                            #   counts as stale, what to ask) lives there and
+                                            #   none of it in src/. See assistant/README.md
+                                            #   for the test that tells which side a thing is
+                                            #   on -- the sharpest being that viki CANNOT ask
+                                            #   questions, so a brief that asks one was never
+                                            #   a viki feature
+sh build/promise-probe.sh <empty-dir>       # THE PROMISE LEDGER, 24 assertions. P4 is the
                                             #   one that matters: a superseded promise must
                                             #   LEAVE the ledger. A promise retired last month
                                             #   still reading as owed makes the brief wrong in

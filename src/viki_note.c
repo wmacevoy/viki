@@ -445,6 +445,42 @@ int viki_cmd_why(sqlite3 *db, const char *zId){
     return 0;
 }
 
+/* ---- coverage: a primitive, not a judgment ---------------------------- */
+
+int viki_cmd_coverage(sqlite3 *db, int bJson){
+    sqlite3_stmt *st;
+    int n = 0;
+
+    if( sqlite3_prepare_v2(db,
+        "SELECT CASE WHEN text LIKE '[%]%'"
+        "            THEN substr(text, 2, instr(text, ']') - 2)"
+        "            ELSE 'captured here' END AS src,"
+        "       max(ts), count(*)"
+        "  FROM viki_note GROUP BY src ORDER BY max(ts) DESC", -1, &st, NULL) != SQLITE_OK ){
+        fprintf(stderr, "viki coverage: %s\n", sqlite3_errmsg(db));
+        return 1;
+    }
+    if( bJson ) printf("[");
+    while( sqlite3_step(st) == SQLITE_ROW ){
+        const char *src = (const char*)sqlite3_column_text(st, 0);
+        const char *ts  = (const char*)sqlite3_column_text(st, 1);
+        int cnt = sqlite3_column_int(st, 2);
+        if( bJson ){
+            printf("%s{\"source\":\"%s\",\"last_seen\":\"%s\",\"notes\":%d}",
+                   n ? "," : "", src ? src : "?", ts ? ts : "", cnt);
+        }else{
+            printf("%-18s %-28s %d note(s)\n", src ? src : "?", ts ? ts : "never", cnt);
+        }
+        n++;
+    }
+    sqlite3_finalize(st);
+    if( bJson ) printf("]\n");
+    else if( n == 0 ) printf("(nothing captured or ingested)\n");
+    /* Deliberately NO "stale" column and no advice. When a source counts as
+    ** stale, and what to do about it, are decisions -- see assistant/. */
+    return 0;
+}
+
 int viki_cmd_promises(sqlite3 *db, const char *zMe, const char *zHorizon, int bAll){
     viki_note_filter f;
     LedgerCtx c;
@@ -618,11 +654,20 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
         "        ((lease<>'' AND lease < ?9) OR (coalesce(lease,'')='' AND claimed < ?10))))"
         "   AND (?8='' OR closes=?8)"
         "   AND (%d=0 OR type IS NULL OR type='')"
-        /* bLive: nothing has retired this one. A correlated NOT EXISTS rather
-        ** than a join, so a note closed by SEVERAL others still appears once
-        ** (or rather, does not appear at all) instead of being multiplied. */
-        "   AND (%d=0 OR NOT EXISTS (SELECT 1 FROM viki_note c"
-        "                             WHERE c.closes = viki_note.note_id))"
+        /* bLive means STILL OWED, which is two conditions and not one.
+        **
+        ** Nothing has retired it -- a correlated NOT EXISTS rather than a join,
+        ** so a note closed by SEVERAL others still appears once (or rather,
+        ** does not appear at all) instead of being multiplied.
+        **
+        ** AND it has not closed itself. Found by running the brief: `viki
+        ** structure --state closed` marks a task done WITHOUT any successor
+        ** note, and the first version showed those as open promises and then
+        ** asked questions about them. A ledger that keeps asking about finished
+        ** work is one you stop reading. */
+        "   AND (%d=0 OR (NOT EXISTS (SELECT 1 FROM viki_note c"
+        "                              WHERE c.closes = viki_note.note_id)"
+        "                 AND coalesce(state,'') NOT IN ('closed','done','cancelled')))"
         "   AND (%d=0 OR (due IS NOT NULL AND due<>''))"
         "   AND (?11='' OR (due IS NOT NULL AND due<>'' AND due <= ?11))"
         " ORDER BY %s LIMIT ?7",
