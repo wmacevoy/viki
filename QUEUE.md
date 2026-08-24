@@ -2083,8 +2083,32 @@ application/manifest+json), the manifest parses with scope/start_url consistent,
 all three icons are real PNGs at their declared sizes, and both sw.js and the
 page's inline script pass `node --check`.
 
-NOT VERIFIED, and it is the important gap: NOTHING HAS BEEN CLICKED IN A
-BROWSER. The Chrome extension was disconnected for this stretch. Untested in
+FIXED 2026-08-24, reported by Warren as "stuck at loading...". TWO BUGS, and the
+second is the one worth keeping:
+
+ 1. EXPORT DRIFT. The page loads viki-edge.js (the PLAIN build) but the tribe
+    functions had only been added to the SQLCIPHER build's EXPORTED_FUNCTIONS.
+    `edge_tribe_add` was not a function, so boot threw. The two build scripts now
+    carry identical export lists with a comment saying they must, because the page
+    is one file and does not know which module it got.
+
+ 2. THE HANG ITSELF, WHICH IS THE REAL DEFECT. Boot was a bare async IIFE, so ANY
+    rejection left the status line reading "loading..." forever with the reason
+    only in a console nobody opens on a phone. That is QUEUE 36's "every failure
+    looks the same" reappearing in the UI, and it is the worst available failure
+    mode because it is indistinguishable from slow. Every boot step now reports
+    its own failure by name -- wasm load, cache pull, cache open, model -- and the
+    input is wired BEFORE anything that can fail, so capture works even when
+    retrieval does not. A degraded app that explains itself beats a beautiful one
+    that hangs.
+
+REGRESSION TEST: edge/tests/boot.mjs replays the page's boot sequence in node
+against the REAL dist bundle -- asserts every symbol the page calls is exported,
+opens the shipped cache.db, and runs ask_all. 12/0. It exists because this class
+of bug (a symbol missing from one of two builds) is invisible to every other test
+in the repo and needs no browser to catch.
+
+STILL NOT VERIFIED: NOTHING HAS BEEN CLICKED IN A BROWSER. The Chrome extension was disconnected for this stretch. Untested in
 particular: service-worker registration and offline replay, OPFS persistence
 across a reload, `navigator.storage.persist()`, the iOS install banner, and the
 `?capture=` share path. All of it is plausible and none of it is proven. Do not

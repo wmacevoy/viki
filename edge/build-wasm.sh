@@ -14,6 +14,12 @@
 # edge_noembed.c -- that three-symbol coupling is the entire distance between
 # viki's read path and a phone.
 #
+# THE TWO BUILDS MUST EXPORT THE SAME SYMBOLS. The page is one file and does
+# not know which module it got, so an export present in only one of them is a
+# runtime TypeError -- and, before the boot code caught it, a permanent
+# "loading..." with no message. Keep this list and the one in
+# build-wasm-sqlcipher.sh identical.
+#
 # ndvss's wasm SIMD kernel is selected by `__wasm_simd128__`, which -msimd128
 # defines (see vendor/sqlite-ndvss/sqlite-ndvss.c's dispatch). That kernel
 # existing is why this project kept ndvss over sqlite-vec; this script is that
@@ -40,7 +46,7 @@ docker run --rm -v "$ROOT":/src -w /src emscripten/emsdk:latest \
     -sMODULARIZE=1 -sEXPORT_NAME=VikiEdge \
     -sALLOW_MEMORY_GROWTH=1 -sFORCE_FILESYSTEM=1 \
     -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","UTF8ToString","HEAP32","HEAPF32","HEAPU8"]' \
-    -sEXPORTED_FUNCTIONS='["_edge_open","_edge_ask","_edge_chunk_count","_edge_free","_edge_vocab_load","_edge_tokenize","_edge_set_query_from_hidden","_edge_clear_query_vector","_malloc","_free"]' \
+    -sEXPORTED_FUNCTIONS='["_edge_open","_edge_open_keyed","_edge_ask","_edge_ask_all","_edge_chunk_count","_edge_free","_edge_vocab_load","_edge_tokenize","_edge_set_query_from_hidden","_edge_clear_query_vector","_edge_tribe_add","_edge_tribe_count","_edge_tribe_label","_edge_tribe_chunks","_edge_tribe_clear","_malloc","_free"]' \
     -sSTACK_SIZE=1048576
 
 ls -la "$ROOT/edge/dist/"

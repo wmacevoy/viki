@@ -216,15 +216,40 @@ async function search(){
 }
 
 let timer=null;
-$('q').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(search,180);});
-$('keep').onclick=async()=>{
-  const t=$('q').value.trim(); if(!t) return;
-  await capAdd(t); $('q').value='';
-  setStatus('kept · '+(await capAll()).length+' local capture(s)');
-  $('out').textContent='';
-};
+function wireInput(){
+  $('q').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>{
+    search().catch(e=>fatal('search', e));
+  },180);});
+  $('keep').onclick=async()=>{
+    const t=$('q').value.trim(); if(!t) return;
+    try{
+      await capAdd(t); $('q').value='';
+      setStatus('kept · '+(await capAll()).length+' local capture(s)');
+      $('out').textContent='';
+    }catch(e){ fatal('keep', e); }
+  };
+}
 
-/* ---- boot ---------------------------------------------------------- */
+/* ---- boot ----------------------------------------------------------
+ *
+ * EVERY STEP REPORTS ITS OWN FAILURE. The first build of this page wrapped
+ * boot in a bare async IIFE, so when `edge_tribe_add` was missing from the
+ * plain wasm build the promise rejected and the status line said "loading..."
+ * forever, with the reason only in a console nobody opens on a phone. That is
+ * QUEUE 36's "every failure looks the same" reappearing in the UI, and it is
+ * the worst failure mode available: indistinguishable from slow.
+ *
+ * So: nothing here may throw past its own step, and the status line always
+ * says which step failed. A degraded app that explains itself beats a
+ * beautiful one that hangs.
+ */
+function fatal(where, err){
+  setStatus(where + ' failed');
+  const d=document.createElement('div'); d.className='note';
+  d.textContent = where + ' failed: ' + (err && err.message ? err.message : String(err));
+  $('out').appendChild(d);
+  console.error(where, err);
+}
 (async ()=>{
   installAdvice();
   if('serviceWorker' in navigator){ try{ await navigator.serviceWorker.register('sw.js'); }catch(_){} }
@@ -232,21 +257,45 @@ $('keep').onclick=async()=>{
   // actually grants this; the call is still correct to make everywhere.
   try{ if(navigator.storage?.persist) await navigator.storage.persist(); }catch(_){}
 
-  M = await VikiEdge();
+  try { M = await VikiEdge(); }
+  catch(e){ return fatal('wasm load', e); }
   setStatus('loading…');
 
-  let bytes = await opfsRead(OPFS_NAME);
+  // Capture works with no tribe at all, so wire the buttons BEFORE anything
+  // that can fail. On a phone with a bad connection, being able to write
+  // something down is the part that must not depend on the rest.
+  wireInput();
+
+  let bytes = null;
+  try { bytes = await opfsRead(OPFS_NAME); } catch(e){ console.warn('opfs read', e); }
   if(!bytes){
-    try{ const r=await fetch('cache.db',{cache:'no-store'});
-         if(r.ok){ bytes=new Uint8Array(await r.arrayBuffer()); await opfsWrite(OPFS_NAME,bytes); } }catch(_){}
+    try{
+      setStatus('pulling cache…');
+      const r=await fetch('cache.db',{cache:'no-store'});
+      if(r.ok){ bytes=new Uint8Array(await r.arrayBuffer()); await opfsWrite(OPFS_NAME,bytes); }
+      else setStatus('hub answered HTTP '+r.status);
+    }catch(e){ setStatus('offline, and no local cache yet'); }
   }
-  if(bytes && await openTribe('local',bytes)) ready=true;
+  if(bytes){
+    try { if(await openTribe('local',bytes)) ready=true;
+          else setStatus('that cache did not open (wrong key, or not a viki cache)'); }
+    catch(e){ return fatal('opening the cache', e); }
+  }
 
   drawChips();
-  setStatus(ready ? `${tribes.reduce((a,t)=>a+t.chunks,0)} chunks · offline`
-                  : 'no tribe loaded');
-  if(ready){ const ok=await loadModel(); drawChips();
-             setStatus($('status').textContent + (ok?' · hybrid':'')); }
+  if(ready) setStatus(`${tribes.reduce((a,t)=>a+t.chunks,0)} chunks · offline`);
+  else if(!/failed|HTTP|offline|did not open/.test($('status').textContent))
+    setStatus('no tribe loaded — you can still capture');
+
+  if(ready){
+    // The model is 23MB. It is optional by design: BM25 + the literal leg
+    // answer without it, and saying so beats a spinner.
+    setStatus($('status').textContent + ' · loading model…');
+    let ok=false;
+    try { ok = await loadModel(); } catch(e){ console.warn('model', e); }
+    drawChips();
+    setStatus($('status').textContent.replace(' · loading model…', ok ? ' · hybrid' : ' · keyword only'));
+  }
 
   // SHARE-IN. Android gets a real share_target; iOS has none, so the same
   // ?capture= parameter is what an iOS Shortcut posts to. One code path,
