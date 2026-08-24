@@ -31,3 +31,5 @@ edge/dist/
 # amalgamation and the openssl headers. All reproducible by
 # edge/build-wasm-sqlcipher.sh from the sibling repos; none of it is ours.
 edge/vendor-wasm/
+# generated PWA icons are checked IN (they are small and part of the app);
+# only the built/pulled artefacts stay out.

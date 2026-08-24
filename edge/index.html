@@ -1,236 +1,258 @@
 <!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>viki edge</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>viki</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#16171a">
+<!-- iOS ignores most of the manifest. These three are what actually make an
+     installed iOS PWA look installed, and they are not optional there. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="viki">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
 <style>
-  :root { --bg:#fbfaf7; --fg:#1a1a19; --dim:#6b6b66; --line:#e3e0d8; --accent:#7a5c3e; }
+  :root{--bg:#fbfaf7;--fg:#1a1a19;--dim:#6b6b66;--line:#e3e0d8;--accent:#7a5c3e;--warn:#8a6d1f}
   @media (prefers-color-scheme:dark){
-    :root { --bg:#16171a; --fg:#e8e6e1; --dim:#9a978f; --line:#2c2e33; --accent:#c9a227; } }
+    :root{--bg:#16171a;--fg:#e8e6e1;--dim:#9a978f;--line:#2c2e33;--accent:#c9a227;--warn:#c9a227}}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);
-       font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-       padding:1rem;max-width:46rem;margin-inline:auto}
-  h1{font-size:1.05rem;letter-spacing:.02em;margin:0 0 .15rem;font-weight:600}
-  .sub{color:var(--dim);font-size:.8rem;margin-bottom:1rem}
-  input[type=search]{width:100%;padding:.7rem .8rem;font-size:1rem;border:1px solid var(--line);
-       border-radius:.5rem;background:var(--bg);color:var(--fg)}
-  .bar{display:flex;gap:.5rem;align-items:center;margin:.6rem 0 1rem;flex-wrap:wrap}
-  button{padding:.5rem .8rem;font-size:.85rem;border:1px solid var(--line);border-radius:.4rem;
-       background:transparent;color:var(--fg)}
-  .hit{border-top:1px solid var(--line);padding:.8rem 0}
-  .meta{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
-       word-break:break-all;margin-bottom:.35rem}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  body{padding:max(.75rem,env(safe-area-inset-top)) max(.75rem,env(safe-area-inset-right))
+       max(.75rem,env(safe-area-inset-bottom)) max(.75rem,env(safe-area-inset-left));
+       max-width:46rem;margin-inline:auto}
+  header{display:flex;align-items:baseline;gap:.5rem;margin-bottom:.5rem}
+  h1{font-size:1rem;font-weight:600;letter-spacing:.02em;margin:0}
+  .status{color:var(--dim);font-size:.78rem}
+  /* ONE INPUT, TWO VERBS: the same text is either a question or a thought. */
+  .box{display:flex;gap:.5rem;align-items:stretch}
+  textarea{flex:1;padding:.65rem .75rem;font:inherit;border:1px solid var(--line);
+    border-radius:.55rem;background:var(--bg);color:var(--fg);resize:none;min-height:2.9rem;max-height:9rem}
+  button{padding:.55rem .8rem;font-size:.85rem;border:1px solid var(--line);
+    border-radius:.5rem;background:transparent;color:var(--fg);white-space:nowrap}
+  button.primary{border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.4}
+  .chips{display:flex;flex-wrap:wrap;gap:.35rem;margin:.6rem 0 .2rem}
+  .chip{font-size:.72rem;padding:.2rem .5rem;border:1px solid var(--line);border-radius:1rem;color:var(--dim)}
+  .chip.on{border-color:var(--accent);color:var(--accent)}
+  .hit{border-top:1px solid var(--line);padding:.75rem 0}
+  .meta{font:11.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
+    word-break:break-all;margin-bottom:.3rem}
   .rrf{color:var(--accent)}
+  .tribe{color:var(--fg);opacity:.75}
   .snip{white-space:pre-wrap;font-size:.9rem}
-  .mark{color:var(--dim);font-style:italic;font-size:.8rem}
-  .status{color:var(--dim);font-size:.85rem;padding:.5rem 0}
+  .mark{color:var(--dim);font-style:italic;font-size:.78rem}
+  .local{border-left:2px solid var(--warn);padding-left:.6rem}
+  .localtag{color:var(--warn);font-size:.72rem}
+  .note{color:var(--dim);font-size:.82rem;padding:.6rem 0}
+  .install{border:1px solid var(--accent);border-radius:.55rem;padding:.7rem .8rem;
+    margin:.6rem 0;font-size:.85rem;display:none}
+  .install b{color:var(--accent)}
 </style>
-<h1>viki edge</h1>
-<div class="sub">read-only tier — pulls its cache and model, then works offline</div>
-<div class="bar">
-  <button id="pick">load cache.db</button>
-  <input type="file" id="file" accept=".db" hidden>
-  <span class="status" id="status">no cache loaded</span>
+
+<header>
+  <h1>viki</h1><span class="status" id="status">starting…</span>
+</header>
+
+<div class="install" id="install"></div>
+
+<div class="box">
+  <textarea id="q" rows="1" placeholder="ask, or write something down…" enterkeyhint="search"></textarea>
+  <button id="keep" class="primary" title="save this text as a capture">keep</button>
 </div>
-<input type="search" id="q" placeholder="ask…" disabled>
+<div class="chips" id="chips"></div>
 <div id="out"></div>
+
 <script src="ort.min.js"></script>
 <script src="viki-edge.js"></script>
 <script>
-// The fragment markers are viki_ask.h's VIKI_MARK_* strings. They are applied
-// HERE rather than baked into `snippet`, exactly as /api/ask does: a client
-// parsing the snippet must never receive marker words it cannot tell apart
-// from indexed content.
-const MARK_HEAD = "<<document continues above>>";
-const MARK_TAIL = "<<document continues below>>";
-const MARK_CUT  = "<<excerpt truncated>>";
-
-let M = null, ready = false;
+/* ------------------------------------------------------------------ *
+ * viki edge, as an installable app.
+ *
+ * THE EDGE IS READ-ONLY. It answers from caches other peers built; it
+ * cannot write to them. So `keep` does NOT index anything -- it appends
+ * to a local, append-only queue and that queue is searched alongside the
+ * tribes, with its hits visibly marked as not-yet-indexed. Hiding that
+ * distinction would recreate QUEUE 36's exact complaint from the other
+ * side: text you wrote and then cannot find.
+ * ------------------------------------------------------------------ */
+const MARK_HEAD="<<document continues above>>",
+      MARK_TAIL="<<document continues below>>",
+      MARK_CUT ="<<excerpt truncated>>";
 const $ = id => document.getElementById(id);
-const setStatus = t => { $('status').textContent = t; };
+const setStatus = t => $('status').textContent = t;
 
-async function openBytes(buf, label) {
-  try { M.FS.unlink('/cache.db'); } catch (_) {}
-  M.FS.writeFile('/cache.db', buf);
-  const ok = M.ccall('edge_open', 'number', ['string'], ['/cache.db']);
-  if (!ok) { setStatus('could not open ' + label + ' as a viki cache'); return false; }
-  const n = M.ccall('edge_chunk_count', 'number', [], []);
-  ready = true; $('q').disabled = false;
-  setStatus(n + ' chunks from ' + label + ' — offline from here');
+let M=null, ready=false, session=null, MODEL_ID='', tribes=[];
+
+/* ---- local capture queue (IndexedDB; append-only, per M-2) ---------- */
+const DB='viki-edge', STORE='captures';
+function idb(){return new Promise((ok,no)=>{const r=indexedDB.open(DB,1);
+  r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:'id',autoIncrement:true});
+  r.onsuccess=()=>ok(r.result); r.onerror=()=>no(r.error);});}
+async function capAdd(text){const d=await idb();return new Promise((ok,no)=>{
+  const t=d.transaction(STORE,'readwrite');
+  t.objectStore(STORE).add({text,ts:new Date().toISOString(),synced:0});
+  t.oncomplete=ok; t.onerror=()=>no(t.error);});}
+async function capAll(){const d=await idb();return new Promise((ok,no)=>{
+  const r=d.transaction(STORE).objectStore(STORE).getAll();
+  r.onsuccess=()=>ok(r.result||[]); r.onerror=()=>no(r.error);});}
+
+/* ---- iOS: install is not a nicety, it is what makes offline durable -- */
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+           || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+const standalone = window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true;
+function installAdvice(){
+  const el=$('install');
+  if (standalone) return;
+  if (isIOS){
+    // Safari offers no install prompt, and only a home-screen PWA is exempt
+    // from the 7-day eviction of script-writable storage. Say why, not just what.
+    el.innerHTML = 'On iOS, tap <b>Share</b> then <b>Add to Home Screen</b>. '
+      + 'That is not cosmetic: only an installed app keeps its offline data past '
+      + 'a week of not being opened.';
+    el.style.display='block';
+  }
+}
+
+/* ---- pulled cache, kept in OPFS so it survives a shell cache bump ---- */
+const OPFS_NAME='viki-cache.db';
+async function opfsRead(n){try{
+  const d=await navigator.storage.getDirectory();
+  const f=await (await d.getFileHandle(n)).getFile();
+  return f.size?new Uint8Array(await f.arrayBuffer()):null;}catch(_){return null;}}
+async function opfsWrite(n,b){try{
+  const d=await navigator.storage.getDirectory();
+  const h=await d.getFileHandle(n,{create:true});
+  const w=await h.createWritable(); await w.write(b); await w.close(); return true;
+}catch(_){return false;}}
+
+async function openTribe(label,bytes){
+  const path='/'+label+'.db';
+  M.FS.writeFile(path,bytes);
+  const slot=M.ccall('edge_tribe_add','number',['string','string','string'],[label,path,'']);
+  if(slot<0) return false;
+  tribes.push({label,slot,chunks:M.ccall('edge_tribe_chunks','number',['number'],[slot])});
   return true;
 }
-
-// THE MODEL LEG. This is the part that makes the edge a real peer rather than
-// a keyword box, and the division of labour is deliberate:
-//   - the QUERY is tokenized by viki's OWN WordPiece implementation, inside
-//     wasm. Not a JS reimplementation: D-11 makes an embedding a deterministic
-//     function of (content_hash, model_id, chunk_params), so a query tokenized
-//     differently from the corpus is simply in a different space.
-//   - onnxruntime-web runs the graph. ORT ships no static wasm library to link
-//     against, and there is no reason to link one -- the model is a pure
-//     function and JS can drive it.
-//   - pooling and L2-normalization happen back in C, mirroring embed.c, so
-//     that arithmetic exists once.
-// Verified: this path reproduces the NATIVE binary's ranking and rrf scores
-// exactly, not approximately.
-let session = null, MODEL_ID = '';
-
-async function loadModel() {
-  try {
-    const man = await (await fetch('viki-manifest.json', {cache:'force-cache'})).json();
-    MODEL_ID = man.model_id;
-    const vocab = new Uint8Array(await (await fetch('vocab.txt', {cache:'force-cache'})).arrayBuffer());
-    M.FS.writeFile('/vocab.txt', vocab);
-    if (!M.ccall('edge_vocab_load','number',['string'],['/vocab.txt'])) return false;
-    session = await ort.InferenceSession.create('model.onnx');
-    return true;
-  } catch (e) { return false; }
+function drawChips(){
+  const c=$('chips'); c.textContent='';
+  for(const t of tribes){const s=document.createElement('span');
+    s.className='chip on'; s.textContent=`${t.label} · ${t.chunks}`; c.appendChild(s);}
+  const s=document.createElement('span'); s.className='chip';
+  s.textContent = session ? 'hybrid' : 'bm25+literal'; c.appendChild(s);
 }
 
-async function embedQuery(text) {
-  if (!session) return false;
-  const MAXL = 256;
-  const p = M._malloc(MAXL * 4);
-  const n = M.ccall('edge_tokenize','number',['string','number','number'],[text, p, MAXL]);
-  const ids = Array.from(new Int32Array(M.HEAP32.buffer, p, n));
-  M._free(p);
-  if (!n) return false;
-  const big = BigInt64Array.from(ids.map(BigInt));
-  const out = await session.run({
-    input_ids:      new ort.Tensor('int64', big, [1, n]),
-    attention_mask: new ort.Tensor('int64', BigInt64Array.from(ids.map(()=>1n)), [1, n]),
-    token_type_ids: new ort.Tensor('int64', BigInt64Array.from(ids.map(()=>0n)), [1, n]),
-  });
-  const hidden = out[session.outputNames[0]];
-  const [, seqLen, dim] = hidden.dims;
-  const hp = M._malloc(hidden.data.length * 4);
-  M.HEAPF32.set(hidden.data, hp >> 2);
-  const ok = M.ccall('edge_set_query_from_hidden','number',
-                     ['number','number','number','string'],[hp, seqLen, dim, MODEL_ID]);
-  M._free(hp);
+async function loadModel(){try{
+  MODEL_ID=(await (await fetch('viki-manifest.json',{cache:'force-cache'})).json()).model_id;
+  M.FS.writeFile('/vocab.txt',new Uint8Array(await (await fetch('vocab.txt',{cache:'force-cache'})).arrayBuffer()));
+  if(!M.ccall('edge_vocab_load','number',['string'],['/vocab.txt'])) return false;
+  session=await ort.InferenceSession.create('model.onnx'); return true;
+}catch(_){return false;}}
+
+async function embedQuery(text){
+  if(!session) return false;
+  const P=M._malloc(256*4);
+  const n=M.ccall('edge_tokenize','number',['string','number','number'],[text,P,256]);
+  const ids=Array.from(new Int32Array(M.HEAP32.buffer,P,n)); M._free(P);
+  if(!n) return false;
+  const big=BigInt64Array.from(ids.map(BigInt));
+  const out=await session.run({
+    input_ids:new ort.Tensor('int64',big,[1,n]),
+    attention_mask:new ort.Tensor('int64',BigInt64Array.from(ids.map(()=>1n)),[1,n]),
+    token_type_ids:new ort.Tensor('int64',BigInt64Array.from(ids.map(()=>0n)),[1,n])});
+  const h=out[session.outputNames[0]]; const [,L,D]=h.dims;
+  const hp=M._malloc(h.data.length*4); M.HEAPF32.set(h.data,hp>>2);
+  const ok=M.ccall('edge_set_query_from_hidden','number',
+                   ['number','number','number','string'],[hp,L,D,MODEL_ID]); M._free(hp);
   return !!ok;
 }
 
-// PERSISTENCE. Without this the edge is online-only: it re-fetches its cache
-// on every load and a phone with no signal has nothing. That is QUEUE 36's
-// recorded defect ("cache pull is online-only even when the bytes are local")
-// reproduced in the browser, and it is the whole point of caching=required.
-//
-// OPFS is used as a BYTE STORE, not as a VFS. sqlcipher-libressl/wasm has a
-// real SQLite OPFS VFS (opfs_vfs.c, and it compiles against this build --
-// checked), but a VFS earns its keep when the database is too big to hold in
-// memory or is written to. This cache is read-only and a few MB, so keeping
-// the bytes and loading them is simpler and has no VFS lifecycle to get wrong.
-// Revisit if the cache outgrows memory.
-//
-// NOT ENCRYPTED AT REST. The cache is a complete plaintext copy of the corpus
-// (QUEUE 35), so this leaves it in the browser's origin-private storage in the
-// clear. The fix here is WebCrypto AES-GCM over the whole blob, NOT SQLCipher:
-// with a byte store the database is fully in memory before SQLite touches it,
-// so a page-level codec would be encrypting bytes that were just decrypted.
-// The codec belongs with the VFS, and the VFS belongs to the day this cache
-// stops fitting in memory (QUEUE 46). Do not put a tribe's real corpus on a
-// lose-able device until the blob is encrypted.
-const OPFS_NAME = 'viki-cache.db';
+function markEl(t){const d=document.createElement('div');d.className='mark';d.textContent=t;return d;}
 
-async function opfsRead() {
-  try {
-    const dir = await navigator.storage.getDirectory();
-    const fh = await dir.getFileHandle(OPFS_NAME);
-    const f = await fh.getFile();
-    if (!f.size) return null;
-    return new Uint8Array(await f.arrayBuffer());
-  } catch (_) { return null; }
-}
-async function opfsWrite(bytes) {
-  try {
-    const dir = await navigator.storage.getDirectory();
-    const fh = await dir.getFileHandle(OPFS_NAME, { create: true });
-    const w = await fh.createWritable();
-    await w.write(bytes); await w.close();
-    return true;
-  } catch (_) { return false; }
-}
-
-VikiEdge().then(async mod => {
-  M = mod;
-  setStatus('runtime ready — checking local store…');
-  // Local first. A phone that has pulled once must never need the hub again.
-  const local = await opfsRead();
-  if (local && await openBytes(local, 'local store')) {
-    const okm = await loadModel();
-    setStatus($('status').textContent + (okm ? ' · hybrid · offline' : ' · BM25+literal'));
-    return;
+async function search(){
+  const q=$('q').value.trim(), out=$('out'); out.textContent='';
+  if(!q) return;
+  const locals=(await capAll()).filter(c=>c.text.toLowerCase().includes(q.toLowerCase()));
+  let hits=[];
+  if(ready){
+    if(session){ if(!await embedQuery(q)) M.ccall('edge_clear_query_vector',null,[],[]); }
+    const p=M.ccall('edge_ask_all','number',['string','number'],[q,8]);
+    try{hits=(JSON.parse(M.UTF8ToString(p)).results)||[];}catch(_){}
+    M.ccall('edge_free',null,['number'],[p]);
   }
-  setStatus('runtime ready — pulling cache…');
-  // Served next to this page is the hosted-hub flow. On a real hub these are
-  // Fossil's own unversioned endpoints -- /uv/viki-cache.db and
-  // /uv/viki-model/* -- which it already serves over HTTP, which is why the
-  // edge needs no Fossil of its own. The file picker covers the sideloaded case.
-  try {
-    const r = await fetch('cache.db', { cache: 'no-store' });
-    if (r.ok) {
-      const bytes = new Uint8Array(await r.arrayBuffer());
-      if (await openBytes(bytes, 'cache.db')) await opfsWrite(bytes);
-    }
-  } catch (_) {}
-  if (!ready) { setStatus('runtime ready — load a cache.db'); return; }
-  setStatus($('status').textContent + ' · loading model…');
-  const okModel = await loadModel();
-  setStatus($('status').textContent.replace(' · loading model…',
-    okModel ? ' · hybrid' : ' · BM25+literal (no model)'));
-});
-
-$('pick').onclick = () => $('file').click();
-$('file').onchange = async e => {
-  const f = e.target.files[0]; if (!f || !M) return;
-  setStatus('loading ' + (f.size/1048576).toFixed(1) + ' MB…');
-  const buf = new Uint8Array(await f.arrayBuffer());
-  if (await openBytes(buf, f.name)) await opfsWrite(buf);
-};
-
-let timer = null;
-$('q').oninput = () => { clearTimeout(timer); timer = setTimeout(run, 180); };
-
-async function run() {
-  if (!ready) return;
-  const q = $('q').value.trim();
-  const out = $('out'); out.textContent = '';
-  if (!q) return;
-  if (session) { if (!await embedQuery(q)) M.ccall('edge_clear_query_vector', null, [], []); }
-  const p = M.ccall('edge_ask', 'number', ['string','number'], [q, 8]);
-  const json = M.UTF8ToString(p);
-  M.ccall('edge_free', null, ['number'], [p]);
-  let r; try { r = JSON.parse(json); } catch (_) { setStatus('bad response'); return; }
-  if (!r.results || !r.results.length) {
-    const d = document.createElement('div');
-    d.className = 'status'; d.textContent = '(no matches)';
+  if(!hits.length && !locals.length){
+    const d=document.createElement('div'); d.className='note';
+    d.textContent = ready ? '(no matches)' : '(no tribe loaded yet)';
     out.appendChild(d); return;
   }
-  const modeline = document.createElement('div');
-  modeline.className = 'status'; modeline.textContent = 'mode: ' + r.mode;
-  out.appendChild(modeline);
-  for (const h of r.results) {
-    const div = document.createElement('div'); div.className = 'hit';
-    const meta = document.createElement('div'); meta.className = 'meta';
-    const rrf = document.createElement('span'); rrf.className = 'rrf';
-    rrf.textContent = '[' + h.rank + '] rrf=' + h.rrf.toFixed(4) + '  ';
-    meta.appendChild(rrf);
-    // content_hash is the citable identity -- the CLI prints it and the
-    // serve page notoriously does not (CLAUDE.md). This surface does.
-    meta.appendChild(document.createTextNode(
-      h.hash.slice(0,12) + '…#' + h.chunk_ix +
-      (h.chunk_count ? ' of ' + h.chunk_count : '') + '  ' + h.source));
-    div.appendChild(meta);
-    if (h.fragment_head) div.appendChild(markEl(MARK_HEAD));
-    const s = document.createElement('div');
-    s.className = 'snip';
-    s.textContent = h.snippet;          // textContent: indexed content is untrusted
-    div.appendChild(s);
-    if (h.snippet_truncated) div.appendChild(markEl(MARK_CUT));
-    if (h.fragment_tail) div.appendChild(markEl(MARK_TAIL));
-    out.appendChild(div);
+  // Local captures first and visibly marked: they are the newest thing you
+  // know and the one thing no tribe has seen yet.
+  for(const c of locals){
+    const d=document.createElement('div'); d.className='hit local';
+    const m=document.createElement('div'); m.className='meta';
+    const tag=document.createElement('span'); tag.className='localtag';
+    tag.textContent='captured here · not yet indexed · '; m.appendChild(tag);
+    m.appendChild(document.createTextNode(c.ts));
+    const s=document.createElement('div'); s.className='snip'; s.textContent=c.text;
+    d.appendChild(m); d.appendChild(s); out.appendChild(d);
+  }
+  for(const h of hits){
+    const d=document.createElement('div'); d.className='hit';
+    const m=document.createElement('div'); m.className='meta';
+    const r=document.createElement('span'); r.className='rrf';
+    r.textContent=`[${h.rank}] rrf=${h.rrf.toFixed(4)} `; m.appendChild(r);
+    if(h.tribe){const t=document.createElement('span'); t.className='tribe';
+      t.textContent=h.tribe+' '; m.appendChild(t);}
+    m.appendChild(document.createTextNode(
+      `${h.hash.slice(0,12)}…#${h.chunk_ix}${h.chunk_count?' of '+h.chunk_count:''}  ${h.source}`));
+    d.appendChild(m);
+    if(h.fragment_head) d.appendChild(markEl(MARK_HEAD));
+    const s=document.createElement('div'); s.className='snip'; s.textContent=h.snippet;
+    d.appendChild(s);
+    if(h.snippet_truncated) d.appendChild(markEl(MARK_CUT));
+    if(h.fragment_tail) d.appendChild(markEl(MARK_TAIL));
+    out.appendChild(d);
   }
 }
-function markEl(t){ const d = document.createElement('div'); d.className='mark'; d.textContent=t; return d; }
+
+let timer=null;
+$('q').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(search,180);});
+$('keep').onclick=async()=>{
+  const t=$('q').value.trim(); if(!t) return;
+  await capAdd(t); $('q').value='';
+  setStatus('kept · '+(await capAll()).length+' local capture(s)');
+  $('out').textContent='';
+};
+
+/* ---- boot ---------------------------------------------------------- */
+(async ()=>{
+  installAdvice();
+  if('serviceWorker' in navigator){ try{ await navigator.serviceWorker.register('sw.js'); }catch(_){} }
+  // Ask for storage that survives pressure. On iOS an installed PWA is what
+  // actually grants this; the call is still correct to make everywhere.
+  try{ if(navigator.storage?.persist) await navigator.storage.persist(); }catch(_){}
+
+  M = await VikiEdge();
+  setStatus('loading…');
+
+  let bytes = await opfsRead(OPFS_NAME);
+  if(!bytes){
+    try{ const r=await fetch('cache.db',{cache:'no-store'});
+         if(r.ok){ bytes=new Uint8Array(await r.arrayBuffer()); await opfsWrite(OPFS_NAME,bytes); } }catch(_){}
+  }
+  if(bytes && await openTribe('local',bytes)) ready=true;
+
+  drawChips();
+  setStatus(ready ? `${tribes.reduce((a,t)=>a+t.chunks,0)} chunks · offline`
+                  : 'no tribe loaded');
+  if(ready){ const ok=await loadModel(); drawChips();
+             setStatus($('status').textContent + (ok?' · hybrid':'')); }
+
+  // SHARE-IN. Android gets a real share_target; iOS has none, so the same
+  // ?capture= parameter is what an iOS Shortcut posts to. One code path,
+  // two very different front doors.
+  const p=new URLSearchParams(location.search);
+  const shared=[p.get('capture'),p.get('title'),p.get('url')].filter(Boolean).join('\n');
+  if(shared){ $('q').value=shared; history.replaceState({},'',location.pathname); $('q').focus(); }
+})();
 </script>

@@ -2034,3 +2034,59 @@ SMALLER, BOTH WORTH DOING:
 DO NOT INVENT A SCHEME. Every piece above is standard construction; the only thing being
 designed here is which factors are required, and the answer is two.
 
+## 50. viki edge as an INSTALLABLE PWA, with iOS as a first-class target
+     (Warren, 2026-08-23: "ok pwa - but ios is first class.")
+
+WHY A PWA AND NOT FLUTTER FIRST. viki's UI is almost entirely text -- a box, a
+list of citations, a compose field. Flutter is a five-platform cross-compile of
+SQLCipher, LibreSSL and ONNX in order to render a list. The wasm edge already
+exists and already answers identically to the native binary, so the UI is one
+artifact across all six targets with no store, no signing and no build matrix.
+Flutter becomes right at a SPECIFIC line, not a vague later: when the edge hosts
+a real Fossil repo, which needs sockets and a filesystem a browser will never
+have. The OS keystore (identity.db's empty `device_secret` slot, QUEUE 49) and
+non-evictable storage arrive at the same moment. See VIKIVERSE.md.
+
+THE UI IS ONE INPUT WITH TWO VERBS. The same text is either a question or a
+thought: typing searches, `keep` captures. That is not minimalism for its own
+sake -- viki's model is capture now, structure later, so capture has to be one
+gesture with no navigation, which is US-3 on a phone.
+
+THE EDGE IS READ-ONLY, SO `keep` DOES NOT INDEX. Captures append to a local
+IndexedDB queue and are searched ALONGSIDE the tribes, with their hits visibly
+marked `captured here · not yet indexed`. Hiding that distinction would recreate
+QUEUE 36's complaint from the other side: text you wrote and then cannot find.
+A writable peer indexes them later; the marking is what keeps the UI honest in
+the meantime.
+
+THREE iOS GAPS, DESIGNED AROUND RATHER THAN NOTED:
+ 1. NO SHARE TARGET. The manifest declares one for Android; iOS ignores it. The
+    same `?capture=` parameter is what an iOS SHORTCUT posts to, so one code
+    path serves both front doors. (A Shortcut is the iOS share sheet's escape
+    hatch and is the only route in.)
+ 2. NO INSTALL PROMPT, AND EVICTION. Safari clears script-writable storage after
+    ~7 days without interaction, and ONLY a home-screen-installed PWA is exempt.
+    So on iOS install is not a convenience, it is what makes offline durable --
+    and the page says exactly that rather than a generic "add to home screen".
+ 3. NO BACKGROUND SYNC. Pull happens when the app is open. That is consistent
+    with "sync when it can" (QUEUE 47) rather than a regression from it.
+
+SERVICE WORKER USES TWO CACHES ON PURPOSE. The shell precaches so the app opens
+with no network; the MODEL (~23MB) and onnxruntime (~10MB) are cached on first
+use instead, so a first visit is not a 33MB download before anything appears.
+`cache.db` is deliberately NOT service-worker cached -- it lives in OPFS,
+refreshed deliberately, and a stale copy served from the SW would silently
+contradict the registry.
+
+VERIFIED: assets serve with correct MIME types (manifest as
+application/manifest+json), the manifest parses with scope/start_url consistent,
+all three icons are real PNGs at their declared sizes, and both sw.js and the
+page's inline script pass `node --check`.
+
+NOT VERIFIED, and it is the important gap: NOTHING HAS BEEN CLICKED IN A
+BROWSER. The Chrome extension was disconnected for this stretch. Untested in
+particular: service-worker registration and offline replay, OPFS persistence
+across a reload, `navigator.storage.persist()`, the iOS install banner, and the
+`?capture=` share path. All of it is plausible and none of it is proven. Do not
+call this working until an actual install-and-fly-mode test has been done on a
+real iPhone.
