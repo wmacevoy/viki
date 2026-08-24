@@ -1457,3 +1457,57 @@ undirected search over a corpus this size, and it is why the tiering (cheap
 scouts, expensive judges, one aggregation permitted to conclude "nothing
 interesting") is the shape rather than 111 Opus agents.
 
+## 45. C4's THREE BARS CANNOT ANSWER "DOES THE SWEEP EARN ITS PLACE" -- two measured 2026-08-23
+     (Warren: "where does re-asking sit -- if it is a large corpus there is nothing to ask")
+
+RETRIEVAL_PLAN.md's C4 gate (QUEUE 44) turns out to measure a DIFFERENT PRODUCT
+from the one being argued about. Read verbatim, all three bars assume a query:
+
+  M1 one-hop recovery -- "run `viki ask "<query>" --k 1`, take the rank-1
+     chunk's text as the muse probe ... Baseline you must beat: `viki ask
+     "<rank-1 chunk text>" --k 5`". So M1 measures muse as a ONE-HOP EXPANDER
+     from a known starting point: you asked, the top hit was not the answer,
+     does hopping beat re-asking with that hit's text? Legitimate bar,
+     legitimate use case -- and NOT the undirected background sweep, where by
+     definition there is no query to re-ask with. On a large corpus the whole
+     premise is that you do not know what to ask. Both existing measurements
+     (QUEUE 43's 12.7%, QUEUE 44's 6.9%) probed the sweep. M1 would not have
+     answered them even if someone had written it.
+
+  M3 same problem -- "probe = the query text itself".
+
+  M2 TRANSFERS, IS FREE, PASSES, AND IS NON-DISCRIMINATING. It needs no query
+     and no judgment: "the fraction of muse hits that plain `viki ask` on the
+     same probe would NOT have returned. Bar > 0.5. Below that, muse is `ask`
+     with extra steps." Measured over 40 seeds, probe = the seed chunk's own
+     text, seed excluded from both sides:
+
+       muse  (mid-band, k=5)      200 pairs   M2 = 0.995   PASS
+       CONTROL: 5 RANDOM chunks   200 pairs   M2 = 1.000   "PASS"
+
+     Random scores HIGHER than muse. The bar cannot separate them, because
+     what it actually measures is "did you avoid returning the nearest
+     neighbours" -- which a mid-band algorithm satisfies BY CONSTRUCTION
+     (it skips the seed's nearest 9 explicitly) and random satisfies by
+     accident. Passing M2 is structural, not earned. Do not quote the 0.995
+     as evidence muse works.
+
+SO THE GATE IS STILL UNMEASURED, and the missing bar is not in the plan. For a
+sweep the question is not "is this different from ask" but "is this a better
+PAIR-SELECTION STRATEGY than the trivial one". Two controls, in order of value:
+
+  M4 (the null) -- run QUEUE 44's exact scout protocol, forced bucketing and
+     all, over UNIFORMLY RANDOM chunk pairs instead of muse's band. muse
+     scored 6.9% genuine / 12.6% near-dup / 80.5% noise over 1500 hits. If
+     random scores near 6.9%, the band logic is ceremony and the honest move
+     is to say so. If random scores ~1%, muse is doing real work. THIS IS THE
+     DECISIVE EXPERIMENT and it is a fraction of the 111-agent sweep's cost,
+     because only the scout tier is needed.
+
+  M5 (the alternative) -- same protocol on NEAREST-NEIGHBOUR pairs. Mid-band's
+     specific claim is that it beats both nearest (near-duplicates) and far
+     (noise). Nobody has ever measured nearest. If nearest yields more genuine
+     adjacencies than mid-band, the core thesis is wrong regardless of M4.
+
+Neither needs test/muse-eval.py as C4 specified it. Write M4 first.
+
