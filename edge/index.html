@@ -111,8 +111,54 @@ async function embedQuery(text) {
   return !!ok;
 }
 
+// PERSISTENCE. Without this the edge is online-only: it re-fetches its cache
+// on every load and a phone with no signal has nothing. That is QUEUE 36's
+// recorded defect ("cache pull is online-only even when the bytes are local")
+// reproduced in the browser, and it is the whole point of caching=required.
+//
+// OPFS is used as a BYTE STORE, not as a VFS. sqlcipher-libressl/wasm has a
+// real SQLite OPFS VFS (opfs_vfs.c, and it compiles against this build --
+// checked), but a VFS earns its keep when the database is too big to hold in
+// memory or is written to. This cache is read-only and a few MB, so keeping
+// the bytes and loading them is simpler and has no VFS lifecycle to get wrong.
+// Revisit if the cache outgrows memory.
+//
+// NOT ENCRYPTED AT REST. The cache is a complete plaintext copy of the corpus
+// (QUEUE 35), so this leaves it in the browser's origin-private storage in the
+// clear. SQLCipher-in-wasm is the fix and the recipe exists next door; it needs
+// LibreSSL built for wasm, which is not yet on disk. Do not put a tribe's real
+// corpus on a shared device until that lands.
+const OPFS_NAME = 'viki-cache.db';
+
+async function opfsRead() {
+  try {
+    const dir = await navigator.storage.getDirectory();
+    const fh = await dir.getFileHandle(OPFS_NAME);
+    const f = await fh.getFile();
+    if (!f.size) return null;
+    return new Uint8Array(await f.arrayBuffer());
+  } catch (_) { return null; }
+}
+async function opfsWrite(bytes) {
+  try {
+    const dir = await navigator.storage.getDirectory();
+    const fh = await dir.getFileHandle(OPFS_NAME, { create: true });
+    const w = await fh.createWritable();
+    await w.write(bytes); await w.close();
+    return true;
+  } catch (_) { return false; }
+}
+
 VikiEdge().then(async mod => {
   M = mod;
+  setStatus('runtime ready — checking local store…');
+  // Local first. A phone that has pulled once must never need the hub again.
+  const local = await opfsRead();
+  if (local && await openBytes(local, 'local store')) {
+    const okm = await loadModel();
+    setStatus($('status').textContent + (okm ? ' · hybrid · offline' : ' · BM25+literal'));
+    return;
+  }
   setStatus('runtime ready — pulling cache…');
   // Served next to this page is the hosted-hub flow. On a real hub these are
   // Fossil's own unversioned endpoints -- /uv/viki-cache.db and
@@ -120,7 +166,10 @@ VikiEdge().then(async mod => {
   // edge needs no Fossil of its own. The file picker covers the sideloaded case.
   try {
     const r = await fetch('cache.db', { cache: 'no-store' });
-    if (r.ok) await openBytes(new Uint8Array(await r.arrayBuffer()), 'cache.db');
+    if (r.ok) {
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      if (await openBytes(bytes, 'cache.db')) await opfsWrite(bytes);
+    }
   } catch (_) {}
   if (!ready) { setStatus('runtime ready — load a cache.db'); return; }
   setStatus($('status').textContent + ' · loading model…');
@@ -134,7 +183,7 @@ $('file').onchange = async e => {
   const f = e.target.files[0]; if (!f || !M) return;
   setStatus('loading ' + (f.size/1048576).toFixed(1) + ' MB…');
   const buf = new Uint8Array(await f.arrayBuffer());
-  await openBytes(buf, f.name);
+  if (await openBytes(buf, f.name)) await opfsWrite(buf);
 };
 
 let timer = null;

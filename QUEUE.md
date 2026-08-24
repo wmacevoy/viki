@@ -1576,3 +1576,62 @@ The SKIP is unfalsifiable here: random avoids near-duplicates by chance anyway,
 so skipping the nearest 9 buys nothing measurable. The FLOOR is where all of
 the difference lives. That is directly actionable -- see QUEUE 43.
 
+## 46. viki edge: OFFLINE and ENCRYPTED-AT-REST are two separate gaps, one now closed
+     (Warren, 2026-08-23: "the hub wont work offline - i thought sqlcipher on wasm was
+      already vendored maybe." Both halves were right.)
+
+GAP 1, OFFLINE -- CLOSED. The first edge build fetched cache.db on every load and
+persisted NOTHING (grep for OPFS/IndexedDB/localStorage in edge/index.html returned
+0). So it was online-only, which is exactly QUEUE 36's recorded defect ("cache pull
+is online-only even when the bytes are local") reproduced in the browser, and it
+defeats the entire point of caching=required. Fixed: the page now checks OPFS first,
+fetches only on a miss, and writes what it fetched (and what the file picker loads)
+back to OPFS. A phone that has pulled once never needs the hub again.
+
+  OPFS is used as a BYTE STORE, not as a VFS, and that is a deliberate choice.
+  ../sqlcipher-libressl/wasm/opfs_vfs.c is a real SQLite OPFS VFS -- EM_JS straight
+  onto FileSystemSyncAccessHandle, no SharedArrayBuffer needed -- and it COMPILES
+  CLEAN against this build's plain amalgamation (checked, exit 0; the copy is at
+  edge/vendor_opfs_vfs.c). But a VFS earns its keep when the db is too large to hold
+  in memory or is written to. This cache is read-only and a few MB. Revisit when it
+  outgrows memory; the piece is already sitting there.
+
+GAP 2, ENCRYPTED AT REST -- STILL OPEN, AND IT IS THE SHARPER ONE. The cache is a
+COMPLETE PLAINTEXT COPY OF THE CORPUS (QUEUE 35). Persisting it to OPFS therefore
+leaves the whole corpus in the clear in a phone's browser storage. Everything needed
+to fix it exists next door and Warren was right that it is vendored:
+
+  ../sqlcipher-libressl/wasm/            sqlcipher_wasm.c, opfs_vfs.c, and JS shims
+                                         (api / oo1 / worker)
+  ../sqlcipher-libressl/examples/web/    a PREBUILT WORKING sqlcipher.wasm (1.39MB)
+                                         plus a demo page that "auto-detects OPFS or
+                                         IndexedDB page" storage
+  ../sqlcipher-libressl/build-sqlcipher-libressl.sh:40  the complete emcc recipe,
+                                         -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL
+                                         -DSQLITE_ENABLE_FTS5 (viki needs FTS5, and it
+                                         is already there)
+
+  THE ONE MISSING PIECE is the LibreSSL-compiled-to-wasm libcrypto.a that recipe
+  links (`${LIBRESSL_WASM}/lib/libcrypto.a`). It is not on disk and LIBRESSL_WASM is
+  unset. Building LibreSSL under emscripten is the only unknown in the chain.
+
+  WORK, once that exists: compile viki's retrieval core against SQLCipher's
+  amalgamation instead of the plain one (same flags plus the codec ones), call
+  sqlite3_key() with the tribe key, and keep the OPFS byte store or move to the VFS.
+  Nothing in viki_ask.c changes -- it only ever sees an sqlite3*.
+
+  THE UNANSWERED DESIGN QUESTION IS KEY CUSTODY, not crypto. Where does a phone get
+  the tribe key? Typed each session and held only in memory is the honest answer and
+  the worst UX; anything stored beside the ciphertext protects against device loss
+  only if the OS keystore holds it. D-8 answers this for servers (a systemd
+  credential); there is no phone answer yet, and picking one is Warren's call, not a
+  code change.
+
+INTERIM, AND IT SHOULD BE SAID PLAINLY: do not put a real tribe's corpus on a shared
+or lost-able device until gap 2 closes. The current edge is safe for this repo's own
+docs and not for anything private.
+
+RELATED PRIOR ART worth reading before building this: ../strata/vendor/wyatt targets
+the same combination ("Swap for SQLCipher WASM -> encrypted at rest. Same API.") and
+already has an adapter trio for sqlite / sqlcipher / pg.
+
