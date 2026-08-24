@@ -408,7 +408,8 @@ an index problem, and reaching for ANN here would buy faster mediocre answers.
 |---|---|---|
 | P1.1 | **Google Calendar + O365 ingest** (§2.3) | UNBLOCKED (Q5 answered) — derived, not mirrored |
 | P1.2 | **Gmail / Outlook / GitHub ingest** (§2.3) | UNBLOCKED — the four readable channels first |
-| P1.2b | **Chrome reader** for Facebook / Discord (§2.3) | UNBLOCKED — `observe` only; collapses three "unreadable" channels by acting inside Warren's own session rather than as an API client |
+| P1.2b | **Chrome reader** for Facebook / Discord (§2.3) | BUILT 2026-08-24. Facebook verified against a live logged-in account (30 rows, 28 captured); Discord's message selectors still unverified |
+| P1.2c | **Chrome reader: O365 / Teams / D2L** (§2.3) | THE PRIORITY. Web-only for Warren, so this is the ingest path for the work calendar, work chat and course system — worth more than P1.2b and arguably more than P1.1 |
 | P1.3 | **The clock: morning brief** (§2.4) | UNBLOCKED (Q6 answered) — it asks; questions batch into the brief |
 | P1.4 | **Coverage reporting** (§2.5) | ships with P1.3, and now MUST name Signal/WhatsApp/Facebook as unseen |
 | P1.5 | **Capture as the bridge** (§2.6) | PROMOTED — the only coverage mechanism unreadable channels have |
@@ -473,6 +474,8 @@ discovered during implementation.
 | WhatsApp | **no.** No personal-account API |
 | Signal | **no, by design.** Reading it would mean prying into the local encrypted store, which defeats the reason to use Signal |
 | Facebook | **effectively no.** The personal notification surface is not exposed |
+| Office 365 / Teams | **web only** (Warren, 2026-08-24) — Graph exists but is not reachable for him |
+| D2L / Brightspace | **web only** — course notifications, and the same story |
 
 *(Product-design facts rather than transient API terms, but verify before
 building — this determines what §2.5 may ever claim.)*
@@ -485,6 +488,32 @@ invisible, the assistant **can never honestly say "nothing is pending"** — onl
 WhatsApp."* That is not a degraded version of the feature. It is the honest
 version, and §2.5 already requires it: every completeness claim names its
 sources.
+
+### THE BROWSER IS THE PRIMARY PATH, NOT A FALLBACK (corrected 2026-08-24)
+
+> Warren: *"the only way to reach office 365 or teams is through the web. Also
+> d2l for classes."*
+
+That reverses this section's framing. The Chrome reader was filed as a way to
+recover three social channels an API could not reach — a supplement. But O365,
+Teams and D2L are **the work calendar, the work chat and the course system**,
+and if the browser is the only way in, then the browser is the ingest path for
+the majority of what §2.3 must read. Microsoft Graph exists; it is not available
+to *him*, which is the only fact that matters here.
+
+So `edge/chrome/` stops being a nice-to-have for Facebook and becomes the
+load-bearing route for P1.1 as well as P1.2 — and its `blind` reporting stops
+being a scraper nicety and becomes the thing that keeps the *calendar* honest.
+An API integration that breaks returns an error; a scraper that breaks returns
+silence unless it is built not to, which is why that machinery was worth the
+effort before anyone knew how much would depend on it.
+
+**Consequence for the roadmap:** the reader needs three more extractors
+(Outlook/O365 calendar, Teams, D2L) and they are worth more than the two it has.
+Each is an institutional tenant, so the markup is more stable than a consumer
+social app's — but each is also behind SSO, which the reader must detect as
+`loggedout` rather than `blind`, exactly as the Facebook and Discord redirects
+taught.
 
 ### AND IT PROMOTES §2.6 FROM CONVENIENCE TO MECHANISM
 

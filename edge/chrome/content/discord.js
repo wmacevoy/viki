@@ -42,8 +42,22 @@
      * and reporting on it would be noise. */
     if (location.pathname.indexOf('/channels/') !== 0) return;
 
+    /* /channels/@me WITH NO CHANNEL ID IS THE FRIENDS PAGE, not a conversation
+     * -- measured live, 2026-08-24. It has no chat list, and reporting `blind`
+     * there would be wrong: nothing is broken, Warren simply is not in a
+     * channel. Silence is correct here, which is the one place in this file it
+     * is. */
+    if (/^\/channels\/@me\/?$/.test(location.pathname)) return;
+
+    /* THE FALLBACK USED TO MATCH THE FRIENDS LIST. On /channels/@me,
+     * `main [role="list"]` selects the friends roster -- 16 rows reading "Bob
+     * Kramer Idle Message More" -- and the extractor then hunted mentions in
+     * it. It captured nothing only because no friend's name contained an "@",
+     * which is luck rather than design. The fallback is now scoped to a region
+     * that must contain messages, so it cannot anchor onto a roster. */
     const list = document.querySelector('[data-list-id="chat-messages"]')
-              || document.querySelector('main [role="list"]');
+              || document.querySelector('[data-list-id^="chat-messages"]')
+              || document.querySelector('main [role="list"][aria-label*="essages" i]');
     if (!list) {
       /* Measured: three seconds after navigating to /channels/@me the list did
        * not exist AND the login form had not rendered -- a transient that the

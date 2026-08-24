@@ -53,7 +53,7 @@ class El {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 
-function mount(root, pathname = '/channels/@me') {
+function mount(root, pathname = '/channels/@me/1098287202703790190') {
   globalThis.document = {
     querySelector: s => root.querySelector(s),
     querySelectorAll: s => root.querySelectorAll(s)
@@ -118,8 +118,10 @@ function discordScan() {
     return VIKI.report('discord', 'loggedout', [], 'signed out -- at ' + location.pathname);
   }
   if (location.pathname.indexOf('/channels/') !== 0) return;
+  if (/^\/channels\/@me\/?$/.test(location.pathname)) return;
   const list = document.querySelector('[data-list-id="chat-messages"]')
-            || document.querySelector('main [role="list"]');
+            || document.querySelector('[data-list-id^="chat-messages"]')
+            || document.querySelector('main [role="list"][aria-label*="essages" i]');
   if (!list) { if (VIKI.settle('discord', false)) VIKI.report('discord','blind',[],'no chat-messages list -- markup probably changed'); return; }
   let rows = VIKI.findAll(list, 'li[id^="chat-messages-"]');
   if (rows.length === 0) rows = VIKI.findAll(list, '[role="listitem"]');
@@ -243,16 +245,38 @@ console.log('== the redirect cases, found by loading it in Chrome ==');
     sent.length === 1 && sent[0].status === 'loggedout');
 }
 {
-  /* MEASURED: three seconds after navigating to /channels/@me the message
-   * list did not exist AND the login form had not rendered. The first version
-   * called that `blind` on every single page load. */
-  const sent = mount(new El('body', {}, '', [new El('div', { id: 'app-mount' })]), '/channels/@me');
+  /* MEASURED: three seconds after navigating into Discord the message list did
+   * not exist AND the login form had not rendered. The first version called
+   * that `blind` on every single page load. Uses a real CHANNEL path -- on
+   * /channels/@me (Friends) silence is correct for a different reason and the
+   * test would pass vacuously. */
+  const sent = mount(new El('body', {}, '', [new El('div', { id: 'app-mount' })]),
+                     '/channels/@me/1098287202703790190');
   VIKI._misses = {};
   discordScan();
   t('D9 a mid-load transient is NOT blind on the first miss', sent.length === 0);
   discordScan(); discordScan();
   t('D10 ...but a PERSISTENT miss still reports blind',
     sent.length === 1 && sent[0].status === 'blind');
+}
+
+{
+  /* MEASURED LIVE 2026-08-24: /channels/@me is the FRIENDS page. The old
+   * fallback `main [role="list"]` matched the friends roster -- 16 rows of
+   * "Bob Kramer Idle Message More" -- and hunted mentions in it. It captured
+   * nothing only because no friend's name contained an "@". */
+  const root = new El('body', {}, '', [
+    new El('main', {}, '', [
+      new El('div', { role: 'list' }, '', [
+        new El('div', { role: 'listitem' }, 'Bob Kramer Idle Message More'),
+        new El('div', { role: 'listitem' }, '@danny Online Message More')
+      ])
+    ])
+  ]);
+  const sent = mount(root, '/channels/@me');       /* no channel id: Friends */
+  VIKI._misses = {};
+  discordScan(); discordScan(); discordScan();
+  t('D11 the FRIENDS page is silence, not a message list and not blind', sent.length === 0);
 }
 
 console.log('== dedupe ==');

@@ -90,6 +90,24 @@ as navigation chrome ("New", "All"). Every row is prefixed `Unread ` — that is
 *state*, not content, so it is stripped; otherwise the same notification would
 fingerprint differently once read and be captured twice.
 
+### Discord, signed in: one latent bug, and the message path still unproven
+
+`/channels/@me` is the **Friends page**, not a conversation. The fallback
+`main [role="list"]` matched the **friends roster** — 16 rows reading *"Bob
+Kramer Idle Message More"* — and the extractor then hunted mentions inside it.
+It captured nothing only because no friend's name happened to contain an `@`.
+That is luck, not design.
+
+Fixed two ways: `/channels/@me` with no channel id now returns silently (nothing
+is broken — Warren simply is not in a channel, and this is the one place in the
+file where silence is correct), and the fallback is scoped to a region that must
+contain messages.
+
+**Still unverified:** `[data-list-id="chat-messages"]`, the message rows, and
+mention detection. Navigating directly to a DM URL bounced to `/login` — the
+logged-out detection fired correctly, which is something, but the message path
+has never met a real channel. Expect it to be wrong.
+
 ## Limits, stated rather than discovered
 
 - **Discord reads only the channel you have open.** It does not enumerate
