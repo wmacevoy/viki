@@ -38,6 +38,9 @@ static void usage(void){
         "                           retired, because it deliberately does not look at what\n"
         "                           did not change.\n"
         "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found.\n"
+        "  ask \"<query>\" --verse    Same question across EVERY registered project. Registry is\n"
+        "                           $VIKI_VERSE or ~/.viki/verse.tsv (label<TAB>cache.db per line);\n"
+        "                           build/verse-index.sh writes one. Hits are labelled by project.\n"
         "                           Each hit prints one header line, then the snippet indented 4 spaces:\n"
         "                             [<rank>] rrf=<score>  <content_hash>#<chunk_ix>  <source>\n"
         "                           content_hash is the citable identity (same value /api/ask returns as\n"
@@ -205,13 +208,32 @@ int main(int argc, char **argv){
         sqlite3 *db;
         viki_embedder *emb;
         int k = 5;
-        int i;
+        int i, bVerse = 0;
         viki_ask_opts aopts;
         viki_ask_defaults(&aopts);
-        if( argc < 3 ){ fprintf(stderr, "usage: viki ask \"<query>\" [--k N] [--min-cos F]\n"); return 1; }
-        for( i = 3; i < argc - 1; i++ ){
-            if( strcmp(argv[i], "--k") == 0 ) k = atoi(argv[i+1]);
-            else if( strcmp(argv[i], "--min-cos") == 0 ) aopts.minCos = atof(argv[i+1]);
+        if( argc < 3 ){ fprintf(stderr, "usage: viki ask \"<query>\" [--k N] [--min-cos F] [--verse]\n"); return 1; }
+        for( i = 3; i < argc; i++ ){
+            if( strcmp(argv[i], "--verse") == 0 ) bVerse = 1;
+            else if( i < argc - 1 && strcmp(argv[i], "--k") == 0 ) k = atoi(argv[i+1]);
+            else if( i < argc - 1 && strcmp(argv[i], "--min-cos") == 0 ) aopts.minCos = atof(argv[i+1]);
+        }
+        if( bVerse ){
+            /* Asks every project in the registry instead of the cache under
+            ** cwd -- so the question does not have to be asked from the right
+            ** directory, which is the entire point (VIKIVERSE_V1 2.7). It does
+            ** NOT need a local .viki, so no ensure_viki_dir() here. */
+            char zReg[1024];
+            const char *zEnv = getenv("VIKI_VERSE");
+            if( zEnv && zEnv[0] ){
+                snprintf(zReg, sizeof(zReg), "%s", zEnv);
+            }else{
+                const char *zHome = getenv("HOME");
+                snprintf(zReg, sizeof(zReg), "%s/.viki/verse.tsv", zHome ? zHome : ".");
+            }
+            emb = open_embedder_if_available();
+            rc = viki_cmd_ask_verse(zReg, argv[2], k, emb, &aopts);
+            if( emb ) viki_embedder_close(emb);
+            return rc;
         }
         if( ensure_viki_dir() ) return 1;
         if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;

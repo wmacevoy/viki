@@ -190,8 +190,29 @@ from.
 *Acceptance:* a question whose answer lives in project B, asked while working in
 project A, returns it in the top 5 with B named.
 
-**Status:** proven on the edge (`build/verse-probe.sh` 6/0); **missing on the
-native CLI**, where the work happens.
+**Status:** BUILT 2026-08-24. `viki ask "<q>" --verse` over a registry at
+`$VIKI_VERSE` / `~/.viki/verse.tsv`, written by `build/verse-index.sh`.
+Warren's verse: **110 projects, ~139,000 chunks** — 126 owned indexed in full,
+24 untouched clones skipped, 8 refused as too big (each needs a `.vikiignore`).
+
+Ownership decides depth, per Warren's rule: an `upstream` remote marks a FORK
+and only the files you changed are indexed. That case is not hypothetical —
+`wmacevoy/sqlcipher-libressl` looks owned by its remote and is 31,057 chunks of
+upstream SQLCipher.
+
+**Five defects found by running it, four of them ranking or honesty bugs:**
+`.vikiignore` indexed itself, putting an identical chunk in every project;
+merging by rrf across corpora let a 2-chunk project's rank-1 tie a 5,000-chunk
+project's, so "where have I written about horses" returned four `.vikiignore`
+files; ranking on cosine alone then discarded the literal leg, so a voting
+question missed a project holding 61 chunks that say "vote"; the script refused
+to refresh its own stale ignore files; and `VIKI_VERSE_MAX=64` truncated a
+110-project registry while printing **"64 of 64 project(s) searched"** — silent
+truncation reported as full coverage, which is exactly what §2.5 forbids.
+
+Cross-corpus ranking is now **exact-match first, then cosine**: cosine is
+comparable across projects because one pinned model means one space (D-11), and
+the literal leg's *fact* is comparable even though its 1/df score is not.
 
 ### 2.8 Provenance queries — MUST
 

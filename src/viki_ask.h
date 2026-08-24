@@ -181,4 +181,25 @@ int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb
 ** display string. */
 int viki_cmd_ask(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb);
 
+/* THE VERSE: ask every registered project at once.
+**
+** Registry is a plain TSV -- `label<TAB>/path/to/cache.db`, `#` comments -- at
+** $VIKI_VERSE, else ~/.viki/verse.tsv. Deliberately a flat file and not
+** identity.db: these are the owner's OWN plaintext caches on his own machine,
+** and requiring a passphrase to search your own notes would make the feature
+** cost more than it returns. Encrypted tribes belong in identity.db's registry;
+** this is the local case.
+**
+** Each cache gets its own connection and its own viki_ask_query() call, then
+** results merge by rrf -- so the retrieval core stays the single implementation
+** and the CLI cannot drift from /api/ask or the wasm edge.
+**
+** KNOWN BIAS, same as the edge: rrf is rank-based, so rank 1 in a 40-chunk
+** project scores exactly what rank 1 in a 40,000-chunk project scores, which
+** favours SMALL projects. The label on every hit makes that visible rather than
+** invisible. Fixing it needs a corpus-size normalisation nothing here has
+** measured. */
+int viki_cmd_ask_verse(const char *zRegistry, const char *zQuery, int topK,
+                        viki_embedder *emb, const viki_ask_opts *opts);
+
 #endif

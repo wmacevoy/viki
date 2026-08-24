@@ -78,6 +78,14 @@ static void load_vikiignore(const char *zRoot){
 ** the way a reader expects); one with `/` matches the whole relative path. */
 static int path_ignored(const char *zRel){
     int i;
+    /* The control file is not content. Indexing it put an identical chunk in
+    ** every project of the verse, and because RRF favours small corpora those
+    ** near-duplicates took the top slots for unrelated questions. */
+    {
+        const char *base = strrchr(zRel, '/');
+        base = base ? base + 1 : zRel;
+        if( strcmp(base, ".vikiignore") == 0 ) return 1;
+    }
     for( i = 0; i < g_nIgnore; i++ ){
         const char *pat = g_azIgnore[i];
         if( strchr(pat, '/') ){

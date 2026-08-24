@@ -650,6 +650,207 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
     return nOut;
 }
 
+/* ---- the verse: one question, every project ------------------------- */
+
+static void trim_excerpt(char *z);   /* defined below; shared with viki_cmd_ask */
+
+#define VIKI_VERSE_MAX 256
+
+typedef struct {
+    char label[64];
+    char path[1024];
+} VerseEntry;
+
+/* Reads the registry. Returns the count. A missing file is not an error --
+** it means "no verse configured", which the caller reports rather than
+** treating as a failure. */
+/* Returns the count loaded; sets *pnTotal to how many the registry actually
+** holds. THOSE CAN DIFFER, and saying so is the whole point: the first version
+** stopped at the cap and printed "64 of 64 project(s) searched" against a
+** 110-project registry -- silent truncation reported as complete coverage,
+** which is precisely the failure VIKIVERSE_V1 2.5 exists to forbid. */
+static int verse_load(const char *zPath, VerseEntry *aOut, int nMax, int *pnTotal){
+    FILE *f = fopen(zPath, "r");
+    char line[1200];
+    int n = 0;
+    if( pnTotal ) *pnTotal = 0;
+    if( !f ) return 0;
+    while( fgets(line, sizeof(line), f) ){
+        {   /* count every valid row, loaded or not */
+            char *t = strchr(line, '\t');
+            char *q = line;
+            while( *q == ' ' || *q == '\t' ) q++;
+            if( t && *q != '#' && *q != '\n' && *q != '\r' && *q && pnTotal ) (*pnTotal)++;
+        }
+        if( n >= nMax ) continue;
+        char *tab, *e;
+        char *p = line;
+        while( *p == ' ' || *p == '\t' ) p++;
+        if( *p == '#' || *p == '\n' || *p == '\r' || !*p ) continue;
+        tab = strchr(p, '\t');
+        if( !tab ) continue;
+        *tab = 0;
+        snprintf(aOut[n].label, sizeof(aOut[n].label), "%s", p);
+        p = tab + 1;
+        while( *p == ' ' || *p == '\t' ) p++;
+        e = p + strlen(p);
+        while( e > p && (e[-1]=='\n' || e[-1]=='\r' || e[-1]==' ') ) *--e = 0;
+        if( !*p ) continue;
+        snprintf(aOut[n].path, sizeof(aOut[n].path), "%s", p);
+        n++;
+    }
+    fclose(f);
+    return n;
+}
+
+typedef struct { viki_ask_result r; int iProj; } VerseHit;
+
+/* RRF IS NOT COMPARABLE ACROSS CORPORA, and at verse scale that is fatal
+** rather than approximate.
+**
+** RRF scores a hit by its RANK within its own result list, so rank 1 in a
+** 2-chunk project scores exactly what rank 1 in a 5,000-chunk project scores.
+** Measured on Warren's 119-project verse: merging by rrf returned four
+** different projects' `.vikiignore` files for "where have I written about
+** horses" -- tiny corpora winning on rank alone. Draft comments called this a
+** "known approximation"; it is a wrong answer.
+**
+** Cosine IS comparable: one pinned model (D-11) means every chunk in every
+** project lives in the same 384-dim space, so cos(query, chunk) means the same
+** thing everywhere. So the verse ranks by cosine when a model ran, and says so.
+**
+** With no model there is no corpus-independent signal at all -- bm25() depends
+** on corpus statistics by construction -- so it falls back to rrf AND WARNS,
+** rather than quietly returning the small-project bias. */
+static int cmp_verse(const void *a, const void *b){
+    const VerseHit *x = (const VerseHit*)a, *y = (const VerseHit*)b;
+    double cx = x->r.cos, cy = y->r.cos;
+    int lx = (x->r.legs & VIKI_LEG_LIT) != 0, ly = (y->r.legs & VIKI_LEG_LIT) != 0;
+
+    if( cx > VIKI_COS_NONE || cy > VIKI_COS_NONE ){
+        /* THE LITERAL LEG'S *FACT* IS COMPARABLE EVEN THOUGH ITS SCORE IS NOT.
+        ** Its 1/df weighting is per-corpus, so the number means nothing across
+        ** projects -- but "this chunk contains the query's distinctive terms"
+        ** means the same everywhere. Ranking on cosine ALONE discarded that and
+        ** measurably lost: asking a 110-project verse about voting returned
+        ** brainwallet/combinations.py above a project holding 61 chunks that
+        ** say "vote" and 34 that say "ballot" or "ranked". So: exact-match hits
+        ** first, cosine ordering within each group. */
+        if( lx != ly ) return ly - lx;
+        if( cx > cy ) return -1;
+        if( cx < cy ) return 1;
+        return 0;
+    }
+    if( lx != ly ) return ly - lx;
+    if( x->r.rrf > y->r.rrf ) return -1;
+    if( x->r.rrf < y->r.rrf ) return 1;
+    return 0;
+}
+
+int viki_cmd_ask_verse(const char *zRegistry, const char *zQuery, int topK,
+                        viki_embedder *emb, const viki_ask_opts *opts){
+    /* HEAP, not stack. At VIKI_VERSE_MAX=256 the merged pool is 256 x 40
+    ** results of ~1.1KB each -- about 11MB, which overflows the default stack
+    ** and segfaults on the first query. Found by raising the cap from 64 and
+    ** watching exit 139. */
+    VerseEntry *aProj = NULL;
+    VerseHit *all = NULL;
+    viki_ask_result res[VIKI_CANDIDATE_POOL];
+    int nCap = VIKI_VERSE_MAX * VIKI_CANDIDATE_POOL;
+    int rcOut = 1;
+    int nProj, nAll = 0, i, j, nOpened = 0, nShow, nRegistered = 0;
+    viki_ask_opts o;
+
+    if( !opts ){ viki_ask_defaults(&o); opts = &o; }
+    if( topK < 1 ) topK = 5;
+    if( topK > VIKI_CANDIDATE_POOL ) topK = VIKI_CANDIDATE_POOL;
+
+    aProj = malloc(sizeof(VerseEntry) * VIKI_VERSE_MAX);
+    all   = malloc(sizeof(VerseHit) * (size_t)nCap);
+    if( !aProj || !all ){
+        fprintf(stderr, "viki ask --verse: out of memory\n");
+        free(aProj); free(all);
+        return 1;
+    }
+
+    nProj = verse_load(zRegistry, aProj, VIKI_VERSE_MAX, &nRegistered);
+    if( nProj == 0 ){
+        fprintf(stderr, "viki ask --verse: no registry at %s\n", zRegistry);
+        fprintf(stderr, "  one `label<TAB>/path/to/cache.db` per line; "
+                        "build/verse-index.sh writes one\n");
+        free(aProj); free(all);
+        return 1;
+    }
+
+    for( i = 0; i < nProj; i++ ){
+        sqlite3 *db = NULL;
+        int n, k;
+        /* READONLY: searching must never create or migrate someone else's
+        ** cache as a side effect of a question. A project whose cache is
+        ** missing is reported, not silently skipped -- an answer that
+        ** quietly excluded half the verse is exactly the completeness
+        ** failure this feature exists to fix. */
+        if( sqlite3_open_v2(aProj[i].path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK ){
+            fprintf(stderr, "viki ask --verse: %s unreadable (%s)\n",
+                    aProj[i].label, aProj[i].path);
+            if( db ) sqlite3_close(db);
+            continue;
+        }
+        nOpened++;
+        n = viki_ask_query_opts(db, zQuery, topK, emb, res, VIKI_CANDIDATE_POOL, opts, NULL);
+        for( k = 0; k < n && nAll < nCap; k++ ){
+            all[nAll].r = res[k];
+            all[nAll].iProj = i;
+            nAll++;
+        }
+        sqlite3_close(db);
+    }
+
+    qsort(all, (size_t)nAll, sizeof(VerseHit), cmp_verse);
+    nShow = nAll < topK ? nAll : topK;
+
+    /* Coverage is stated, not implied (VIKIVERSE_V1 2.5): the reader is told
+    ** how much of the verse actually answered. */
+    printf("viki ask --verse: %d of %d registered project(s) searched, ranked by %s\n",
+           nOpened, nRegistered, emb ? "exact-match, then cosine" : "exact-match, then rrf");
+    if( nRegistered > nProj ){
+        printf("  WARNING: registry holds %d projects but this build searches at most %d.\n"
+               "  %d WERE NOT SEARCHED. Raise VIKI_VERSE_MAX and rebuild.\n",
+               nRegistered, VIKI_VERSE_MAX, nRegistered - nProj);
+    }
+    if( !emb ){
+        printf("  NOTE: with no model there is no corpus-independent score, so this\n"
+               "  ranking FAVOURS SMALL PROJECTS. Set VIKI_MODEL_DIR for a fair one.\n");
+    }
+    printf("\n");
+    if( nShow == 0 ){
+        printf("(no matches)\n");
+        free(aProj); free(all);
+        return 0;
+    }
+    for( i = 0; i < nShow; i++ ){
+        viki_ask_result *r = &all[i].r;
+        char excerpt[sizeof(r->snippet)];
+        snprintf(excerpt, sizeof(excerpt), "%s", r->snippet);
+        trim_excerpt(excerpt);
+        if( r->cos > VIKI_COS_NONE ){
+            printf("[%d] cos=%.4f  %s  %s#%d  %s\n",
+                   i + 1, r->cos, aProj[all[i].iProj].label, r->hash, r->chunk_ix, r->source);
+        }else{
+            printf("[%d] rrf=%.4f  %s  %s#%d  %s\n",
+                   i + 1, r->rrf, aProj[all[i].iProj].label, r->hash, r->chunk_ix, r->source);
+        }
+        printf("    %s%s%s%s\n\n",
+               (r->frag & VIKI_FRAG_HEAD) ? VIKI_MARK_HEAD " " : "",
+               excerpt,
+               (r->frag & VIKI_FRAG_CUT)  ? " " VIKI_MARK_CUT : "",
+               (r->frag & VIKI_FRAG_TAIL) ? " " VIKI_MARK_TAIL : "");
+    }
+    (void)j; (void)rcOut;
+    free(aProj); free(all);
+    return 0;
+}
+
 /* Strips leading and trailing whitespace from an excerpt, in place, for
 ** display only. Both ends acquire whitespace that means nothing here: a
 ** chunk_text slice ends with the newline that ended its last line, and
