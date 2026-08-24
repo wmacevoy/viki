@@ -190,6 +190,12 @@ sh edge/tools/build-tools.sh                 # the native key-custody tools -> b
                                             #                    converter, via sqlcipher_export
                                             #   LibreSSL + SQLCipher come from fossil-see's
                                             #   vendor tree; nothing new is downloaded
+sh build/reader-probe.sh                    # the Chrome reader is OBSERVE ONLY, 9 assertions
+                                            #   and they are safety properties, not style: no
+                                            #   .click/.submit/dispatchEvent/innerHTML anywhere,
+                                            #   loopback as the ONLY destination, and every
+                                            #   extractor able to report `blind` so a broken
+                                            #   selector cannot read as a quiet day
 sh build/promise-probe.sh <empty-dir>       # THE PROMISE LEDGER, 12 assertions. P4 is the
                                             #   one that matters: a superseded promise must
                                             #   LEAVE the ledger. A promise retired last month

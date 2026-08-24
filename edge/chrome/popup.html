@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>viki reader</title>
+<style>
+  :root{--bg:#f7f7f4;--fg:#1b1f22;--dim:#6b7278;--rule:#dfdeda;--accent:#2f5d50;--warn:#8a5a12}
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#14171a;--fg:#e4e7e6;--dim:#969d9f;--rule:#282d32;--accent:#79b5a0;--warn:#c99a4e}}
+  body{width:19rem;margin:0;padding:.85rem;background:var(--bg);color:var(--fg);
+       font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  h1{font-size:.95rem;margin:0 0 .1rem}
+  .sub{color:var(--dim);font-size:.78rem;margin-bottom:.7rem}
+  .src{display:flex;gap:.5rem;align-items:baseline;padding:.4rem 0;border-top:1px solid var(--rule)}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none;margin-top:.4rem}
+  .ok{background:var(--accent)} .blind{background:var(--warn)}
+  .off{background:transparent;border:1px solid var(--dim)}
+  .name{font-weight:600;width:5rem;flex:none}
+  .note{color:var(--dim);font-size:.76rem}
+  .row{display:flex;gap:.5rem;align-items:center;margin-top:.8rem;
+       padding-top:.7rem;border-top:1px solid var(--rule)}
+  button{font:inherit;padding:.3rem .6rem;border:1px solid var(--rule);
+         border-radius:.35rem;background:transparent;color:var(--fg)}
+  .q{color:var(--dim);font-size:.78rem;margin-left:auto}
+</style>
+<h1>viki reader</h1>
+<div class="sub">observe only — never posts, replies, or clicks</div>
+<div id="sources"></div>
+<div class="row">
+  <button id="toggle">…</button>
+  <span class="q" id="queue"></span>
+</div>
+<script src="popup.js"></script>

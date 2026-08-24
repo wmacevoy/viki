@@ -162,9 +162,13 @@ record says which.
 naming the agent identity, the authority level and the time; and no code path
 exists that acts without producing one.
 
-**Status:** the ledger has two parties (§2.2). Authority levels are not built.
-The Chrome reader below is deliberately `observe` only — the first and safest
-rung, and the one that needs no policy decided first.
+**Status:** the ledger has two parties (§2.2); authority levels are not built.
+`edge/chrome/` is the `observe` rung, BUILT 2026-08-24 — the first and safest,
+and the one needing no policy settled first. `build/reader-probe.sh` (9/0)
+enforces the claim rather than trusting it: no `.click(`, `.submit(`,
+`dispatchEvent`, `execCommand`, `innerHTML =` or `document.write` anywhere; the
+only destination is `127.0.0.1` with no setting for it; and no
+`tabs`/`scripting`/`cookies`/`history` permission.
 
 ### 2.3 Ingest: calendar and notifications — MUST
 

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "viki reader",
+  "version": "0.1.0",
+  "description": "Reads your own notifications into your local viki. Observe only - it never posts, replies, or clicks.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://www.facebook.com/*",
+    "https://discord.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "viki reader" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.facebook.com/*"],
+      "js": ["content/common.js", "content/facebook.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://discord.com/channels/*"],
+      "js": ["content/common.js", "content/discord.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
