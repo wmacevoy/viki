@@ -1822,9 +1822,35 @@ Fixing it needs a corpus-size normalisation nothing here has measured. The per-h
 Probe: build/verse-probe.sh (refuses without the codec build rather than passing
 vacuously). Test: edge/tests/verse.mjs.
 
-REMAINING for a real personal vikiverse: a tribe REGISTRY (which caches exist,
-where, which key unwraps each -- identity.db from QUEUE 48/49 is the natural home),
-and pulling each tribe's cache over /uv/ rather than by hand.
+### TRIBE REGISTRY BUILT 2026-08-23, in identity.db (R1-R5, probe now 14/0/0)
+
+    CREATE TABLE tribe(name, url, cache, wrapped, identity, caching, added)
+
+`wrapped` is the tribe's SQLCipher key AGE-WRAPPED to one of the identities in the
+same file, so IDENTITY.DB NEVER HOLDS A TRIBE KEY IN THE CLEAR (R2 greps the file
+to prove it). Reading one costs the owning identity's passphrase every time; there
+is no cached plaintext anywhere. R5 is the control that matters: a tribe registered
+to a DIFFERENT identity needs that identity's passphrase, so holding one tribe on a
+device grants nothing about another. That is what makes "my projects" and "a tribe
+someone gave me access to" safe on the same phone, and it is why the registry
+belongs here rather than in a config file beside the caches.
+
+`caching` carries VIKIVERSE.md's tier (none|optional|required) as this device's
+stated INTENT -- what a puller needs to know before it spends a phone's storage.
+`url` is the hub base; /uv/ under it already serves the cache over plain HTTP
+(measured, QUEUE 46), so pulling needs no Fossil on the device.
+
+    viki-identity tribe add <tribe> -r <identity> [--key-file f] [--url U]
+                        [--cache C] [--caching none|optional|required]
+    viki-identity tribe key <tribe>      prints it; costs a passphrase
+    viki-identity tribe list
+
+Migration is automatic: an identity.db predating the registry gets the table on
+open, which is safe because it is additive and empty.
+
+REMAINING: wire the puller -- read the registry, fetch each tribe's cache from its
+url, hand each (label, path, key) to edge_tribe_add(). Every piece now exists; what
+is missing is the loop joining them.
 
 CHEAP FIRST STEP FOR THE NATIVE CLI, no new code: `viki index` each sibling project into its own cache
 and ATTACH them, or index a tree of symlinked docs. SQLITE_MAX_ATTACHED=10 is the

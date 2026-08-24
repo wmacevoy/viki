@@ -61,6 +61,39 @@ rm -f none.key
 "$W" unwrap -k "$SSEC" -i tribe.age -o none.key >/dev/null 2>&1 || true
 if [ ! -s none.key ]; then ok "W6 CONTROL: an unrelated identity recovers nothing"; else no "W6"; fi
 
+echo "== the tribe registry =="
+# The registry is what makes identity.db the vikiverse's key custody rather
+# than just a keyring: it records which tribes exist, where to pull each from,
+# and which identity opens it -- with the tribe key age-wrapped to that
+# identity, never stored in the clear.
+TK="x'$(printf 'e%.0s' $(seq 64))'"
+printf '%s' "$TK" > tribe1.key
+"$I" tribe add camp -r warren --key-file tribe1.key --url http://localhost:8770/ \
+     --cache camp.db --caching required --db id.db >/dev/null
+if "$I" tribe list --db id.db | grep -q '^camp .*required .*via warren'
+then ok "R1 tribe list shows the tribe, its tier and its identity"
+else no "R1"; fi
+
+# The point of wrapping: grepping the file must not find the key.
+if strings id.db 2>/dev/null | grep -q "eeeeeeeeeeee"
+then no "R2 the tribe key is stored IN THE CLEAR in identity.db"
+else ok "R2 identity.db holds no plaintext tribe key"; fi
+
+GOT=$(printf 'pass one\n' | "$I" tribe key camp --db id.db 2>/dev/null || true)
+if [ "$GOT" = "$TK" ]; then ok "R3 the tribe key is recovered with the owning passphrase"
+else no "R3 (got '$GOT')"; fi
+
+OUT=$(printf 'wrong\n' | "$I" tribe key camp --db id.db 2>&1 || true)
+case "$OUT" in *"$TK"*) no "R4 a wrong passphrase still yielded the key" ;;
+                    *) ok "R4 CONTROL: a wrong passphrase yields nothing" ;; esac
+
+# A tribe registered to ANOTHER identity needs THAT identity's passphrase --
+# holding one tribe grants nothing about another on the same device.
+"$I" tribe add other -r agent --key-file tribe1.key --db id.db >/dev/null
+OUT=$(printf 'pass one\n' | "$I" tribe key other --db id.db 2>&1 || true)
+case "$OUT" in *"$TK"*) no "R5 another identity's tribe opened with the wrong passphrase" ;;
+                    *) ok "R5 CONTROL: a tribe owned by another identity needs ITS passphrase" ;; esac
+
 echo "== interop with stock age (the reason for this format) =="
 if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   "$W" keygen > id.txt

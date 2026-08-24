@@ -266,27 +266,30 @@ static unsigned char *readall(const char *zPath, int *pn){
     return b;
 }
 
-static int cmd_wrap(char **recips, int nRecip, const char *zIn, const char *zOut){
+/* Wraps `plain` to every recipient, into a caller-supplied buffer. The
+** memory forms exist because viki-identity stores wrapped TRIBE KEYS in a
+** BLOB column: routing that through temp files would put plaintext secrets on
+** disk, which is the one thing this whole layer exists to avoid. */
+int age_wrap_mem(char **recips, int nRecip,
+                 const unsigned char *plain, int plen,
+                 unsigned char *out, int *pOutLen, int outCap){
     unsigned char fileKey[FILE_KEY_LEN], nonce[16], payKey[32], aeadNonce[12];
-    char hdr[8192]; int hl = 0, i, plen;
-    unsigned char *plain, *ct, mac[32]; char b64[512];
-    FILE *out;
+    char hdr[8192]; int hl = 0, i, o = 0;
+    unsigned char mac[32]; char b64[512];
 
-    if( RAND_bytes(fileKey, FILE_KEY_LEN) != 1 ) die("RAND_bytes failed");
+    if( RAND_bytes(fileKey, FILE_KEY_LEN) != 1 ) return 0;
     hl += sprintf(hdr + hl, "age-encryption.org/v1\n");
     for( i = 0; i < nRecip; i++ ){
         unsigned char rpk[X25519_LEN], esk[X25519_LEN], epk[X25519_LEN];
         unsigned char shared[X25519_LEN], salt[64], wk[32], body[FILE_KEY_LEN + TAG_LEN], z12[12];
-        if( bech_decode(recips[i], "age", rpk, X25519_LEN) != X25519_LEN )
-            die("bad recipient (expected age1...)");
-        if( RAND_bytes(esk, X25519_LEN) != 1 ) die("RAND_bytes failed");
-        if( !x25519_pub(esk, epk) ) die("x25519 failed");
-        if( !x25519_shared(esk, rpk, shared) ) die("x25519 shared secret rejected");
+        if( bech_decode(recips[i], "age", rpk, X25519_LEN) != X25519_LEN ) return 0;
+        if( RAND_bytes(esk, X25519_LEN) != 1 ) return 0;
+        if( !x25519_pub(esk, epk) ) return 0;
+        if( !x25519_shared(esk, rpk, shared) ) return 0;
         memcpy(salt, epk, X25519_LEN); memcpy(salt + X25519_LEN, rpk, X25519_LEN);
         hkdf(salt, 64, shared, X25519_LEN, "age-encryption.org/v1/X25519", wk, 32);
         memset(z12, 0, sizeof(z12));
-        if( aead(1, wk, z12, fileKey, FILE_KEY_LEN, body) != FILE_KEY_LEN + TAG_LEN )
-            die("wrap failed");
+        if( aead(1, wk, z12, fileKey, FILE_KEY_LEN, body) != FILE_KEY_LEN + TAG_LEN ) return 0;
         b64enc(epk, X25519_LEN, b64);
         hl += sprintf(hdr + hl, "-> X25519 %s\n", b64);
         b64enc(body, FILE_KEY_LEN + TAG_LEN, b64);
@@ -297,34 +300,46 @@ static int cmd_wrap(char **recips, int nRecip, const char *zIn, const char *zOut
     b64enc(mac, 32, b64);
     hl += sprintf(hdr + hl, " %s\n", b64);
 
+    if( RAND_bytes(nonce, 16) != 1 ) return 0;
+    hkdf(nonce, 16, fileKey, FILE_KEY_LEN, "payload", payKey, 32);
+    memset(aeadNonce, 0, 12); aeadNonce[11] = 1;
+    if( hl + 16 + plen + TAG_LEN > outCap ) return 0;
+    memcpy(out + o, hdr, (size_t)hl); o += hl;
+    memcpy(out + o, nonce, 16); o += 16;
+    {
+        int n = aead(1, payKey, aeadNonce, plain, plen, out + o);
+        if( n != plen + TAG_LEN ) return 0;
+        o += n;
+    }
+    *pOutLen = o;
+    return 1;
+}
+
+static unsigned char *readall(const char *zPath, int *pn);
+
+static int cmd_wrap(char **recips, int nRecip, const char *zIn, const char *zOut){
+    unsigned char *plain, out[65536 + 8192];
+    int plen, olen = 0;
+    FILE *f;
     plain = readall(zIn, &plen);
     if( plen > 65536 ) die("payload > 64KiB: this tool wraps KEYS, not files");
-    if( RAND_bytes(nonce, 16) != 1 ) die("RAND_bytes failed");
-    hkdf(nonce, 16, fileKey, FILE_KEY_LEN, "payload", payKey, 32);
-    memset(aeadNonce, 0, 12);
-    aeadNonce[11] = 1;                 /* STREAM: counter 0, final chunk */
-    ct = malloc((size_t)plen + TAG_LEN);
-    if( !ct ) die("oom");
-    if( aead(1, payKey, aeadNonce, plain, plen, ct) != plen + TAG_LEN ) die("encrypt failed");
-
-    out = zOut ? fopen(zOut, "wb") : stdout;
-    if( !out ) die("cannot open output");
-    fwrite(hdr, 1, (size_t)hl, out);
-    fwrite(nonce, 1, 16, out);
-    fwrite(ct, 1, (size_t)plen + TAG_LEN, out);
-    if( zOut ) fclose(out);
-    free(plain); free(ct);
+    if( !age_wrap_mem(recips, nRecip, plain, plen, out, &olen, (int)sizeof(out)) )
+        die("wrap failed");
+    f = zOut ? fopen(zOut, "wb") : stdout;
+    if( !f ) die("cannot open output");
+    fwrite(out, 1, (size_t)olen, f);
+    if( zOut ) fclose(f);
+    free(plain);
     return 0;
 }
 
-static int cmd_unwrap(const char *zKey, const char *zIn, const char *zOut){
-    unsigned char sk[X25519_LEN], *buf; int n, i, hdrEnd = -1;
-    unsigned char fileKey[FILE_KEY_LEN]; int got = 0;
-    if( bech_decode(zKey, "AGE-SECRET-KEY-", sk, X25519_LEN) != X25519_LEN )
-        die("bad identity (expected AGE-SECRET-KEY-1...)");
-    buf = readall(zIn, &n);
+/* Unwraps in memory. Returns 1 on success. `sk` is the raw 32-byte X25519
+** secret, so callers holding a key in memory never have to render it as text. */
+int age_unwrap_mem(const unsigned char *sk, const unsigned char *buf, int n,
+                   unsigned char *out, int *pOutLen, int outCap){
+    int i, hdrEnd = -1, got = 0;
+    unsigned char fileKey[FILE_KEY_LEN];
 
-    /* find the "---" MAC line; the header ends at the newline after it */
     for( i = 0; i + 3 < n; i++ ){
         if( buf[i]=='-' && buf[i+1]=='-' && buf[i+2]=='-' && buf[i+3]==' '
             && (i == 0 || buf[i-1] == '\n') ){
@@ -332,78 +347,81 @@ static int cmd_unwrap(const char *zKey, const char *zIn, const char *zOut){
             hdrEnd = j + 1; break;
         }
     }
-    if( hdrEnd < 0 ) die("not an age file (no header MAC line)");
+    if( hdrEnd < 0 ) return 0;
 
-    /* walk the recipient stanzas, trying each against our identity */
     for( i = 0; i + 10 < hdrEnd && !got; i++ ){
+        char shareB64[128], bodyB64[128];
+        unsigned char epk[X25519_LEN], shared[X25519_LEN], salt[64], wk[32];
+        unsigned char body[FILE_KEY_LEN + TAG_LEN], mypk[X25519_LEN], z12[12];
+        int a, b, c, d;
         if( memcmp(buf + i, "-> X25519 ", 10) != 0 ) continue;
         if( i != 0 && buf[i-1] != '\n' ) continue;
-        {
-            char shareB64[128], bodyB64[128];
-            unsigned char epk[X25519_LEN], shared[X25519_LEN], salt[64], wk[32];
-            unsigned char body[FILE_KEY_LEN + TAG_LEN], mypk[X25519_LEN], z12[12];
-            int a = i + 10, b = a, c, d;
-            while( b < hdrEnd && buf[b] != '\n' ) b++;
-            if( b - a >= (int)sizeof(shareB64) ) continue;
-            memcpy(shareB64, buf + a, (size_t)(b - a)); shareB64[b-a] = 0;
-            c = b + 1; d = c; while( d < hdrEnd && buf[d] != '\n' ) d++;
-            if( d - c >= (int)sizeof(bodyB64) ) continue;
-            memcpy(bodyB64, buf + c, (size_t)(d - c)); bodyB64[d-c] = 0;
-            if( b64dec(shareB64, epk, X25519_LEN) != X25519_LEN ) continue;
-            if( b64dec(bodyB64, body, sizeof(body)) != FILE_KEY_LEN + TAG_LEN ) continue;
-            if( !x25519_pub(sk, mypk) ) die("x25519 failed");
-            if( !x25519_shared(sk, epk, shared) ) continue;
-            memcpy(salt, epk, X25519_LEN); memcpy(salt + X25519_LEN, mypk, X25519_LEN);
-            hkdf(salt, 64, shared, X25519_LEN, "age-encryption.org/v1/X25519", wk, 32);
-            memset(z12, 0, sizeof(z12));
-            if( aead(0, wk, z12, body, FILE_KEY_LEN + TAG_LEN, fileKey) == FILE_KEY_LEN ) got = 1;
-        }
+        a = i + 10; b = a;
+        while( b < hdrEnd && buf[b] != '\n' ) b++;
+        if( b - a >= (int)sizeof(shareB64) ) continue;
+        memcpy(shareB64, buf + a, (size_t)(b - a)); shareB64[b-a] = 0;
+        c = b + 1; d = c; while( d < hdrEnd && buf[d] != '\n' ) d++;
+        if( d - c >= (int)sizeof(bodyB64) ) continue;
+        memcpy(bodyB64, buf + c, (size_t)(d - c)); bodyB64[d-c] = 0;
+        if( b64dec(shareB64, epk, X25519_LEN) != X25519_LEN ) continue;
+        if( b64dec(bodyB64, body, sizeof(body)) != FILE_KEY_LEN + TAG_LEN ) continue;
+        if( !x25519_pub(sk, mypk) ) return 0;
+        if( !x25519_shared(sk, epk, shared) ) continue;
+        memcpy(salt, epk, X25519_LEN); memcpy(salt + X25519_LEN, mypk, X25519_LEN);
+        hkdf(salt, 64, shared, X25519_LEN, "age-encryption.org/v1/X25519", wk, 32);
+        memset(z12, 0, sizeof(z12));
+        if( aead(0, wk, z12, body, FILE_KEY_LEN + TAG_LEN, fileKey) == FILE_KEY_LEN ) got = 1;
     }
-    if( !got ) die("no identity matched a recipient stanza");
+    if( !got ) return 0;
 
-    {   /* verify the header MAC before trusting anything in it */
+    {   /* the header MAC is checked before anything in the header is trusted */
         int macLineStart = -1, j;
         unsigned char want[32], have[32]; char b64[128];
         for( j = hdrEnd - 1; j > 0; j-- ) if( buf[j-1] == '\n' && buf[j] == '-' ){ macLineStart = j; break; }
-        if( macLineStart < 0 ) die("malformed header");
+        if( macLineStart < 0 ) return 0;
         mac_header(fileKey, (const char*)buf, macLineStart + 3, have);
         {
             int k = macLineStart + 4, e = k;
             while( e < hdrEnd && buf[e] != '\n' ) e++;
-            if( e - k >= (int)sizeof(b64) ) die("malformed MAC");
+            if( e - k >= (int)sizeof(b64) ) return 0;
             memcpy(b64, buf + k, (size_t)(e - k)); b64[e-k] = 0;
-            if( b64dec(b64, want, 32) != 32 ) die("malformed MAC");
+            if( b64dec(b64, want, 32) != 32 ) return 0;
         }
-        if( memcmp(want, have, 32) != 0 ) die("header MAC mismatch -- file is tampered or corrupt");
+        if( memcmp(want, have, 32) != 0 ) return 0;
     }
 
     {
-        unsigned char payKey[32], aeadNonce[12], *pt;
+        unsigned char payKey[32], aeadNonce[12];
         int clen = n - hdrEnd - 16, plen;
-        if( clen < TAG_LEN ) die("truncated payload");
+        if( clen < TAG_LEN || clen - TAG_LEN > outCap ) return 0;
         hkdf(buf + hdrEnd, 16, fileKey, FILE_KEY_LEN, "payload", payKey, 32);
         memset(aeadNonce, 0, 12); aeadNonce[11] = 1;
-        pt = malloc((size_t)clen);
-        if( !pt ) die("oom");
-        plen = aead(0, payKey, aeadNonce, buf + hdrEnd + 16, clen, pt);
-        if( plen < 0 ) die("payload authentication failed");
-        {
-            FILE *out = zOut ? fopen(zOut, "wb") : stdout;
-            if( !out ) die("cannot open output");
-            fwrite(pt, 1, (size_t)plen, out);
-            if( zOut ) fclose(out);
-        }
-        free(pt);
+        plen = aead(0, payKey, aeadNonce, buf + hdrEnd + 16, clen, out);
+        if( plen < 0 ) return 0;
+        *pOutLen = plen;
+    }
+    return 1;
+}
+
+static int cmd_unwrap(const char *zKey, const char *zIn, const char *zOut){
+    unsigned char sk[X25519_LEN], *buf, out[65536];
+    int n, olen = 0;
+    if( bech_decode(zKey, "AGE-SECRET-KEY-", sk, X25519_LEN) != X25519_LEN )
+        die("bad identity (expected AGE-SECRET-KEY-1...)");
+    buf = readall(zIn, &n);
+    if( !age_unwrap_mem(sk, buf, n, out, &olen, (int)sizeof(out)) )
+        die("no identity matched, or the file is tampered/corrupt");
+    memset(sk, 0, sizeof(sk));
+    {
+        FILE *f = zOut ? fopen(zOut, "wb") : stdout;
+        if( !f ) die("cannot open output");
+        fwrite(out, 1, (size_t)olen, f);
+        if( zOut ) fclose(f);
     }
     free(buf);
     return 0;
 }
 
-/* viki-identity.c #includes this file with VIKI_AGE_NO_MAIN defined, so the
-** two tools share one implementation of age v1 rather than growing a second
-** copy that can drift. A .c/.h split would be the usual shape; this stays a
-** single file because every symbol above is internal to it and the header
-** would be the whole file restated. */
 #ifndef VIKI_AGE_NO_MAIN
 int main(int argc, char **argv){
     char *recips[MAX_RECIP]; int nRecip = 0, i;
