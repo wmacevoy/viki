@@ -67,7 +67,9 @@ link. Nothing is edited; things are superseded (M-2/M-3).
 risk today" is answerable in one query, over every source that has been
 ingested.
 
-**Status:** schema mostly exists (`viki_note`). Not exercised as a ledger.
+**Status:** BUILT 2026-08-24. `viki promises [--me NAME] [--horizon 7d] [--all]`.
+Live tasks only, ordered by due date, risk marked OVERDUE/TODAY, and it states
+its own coverage on every run. `build/promise-probe.sh` 12/0.
 
 ### 2.2 The assistant is a party, not a tool — MUST
 
@@ -84,8 +86,11 @@ own identity, and are distinguishable at a glance.
 briefing separates "yours" from "mine"; a broken agent promise is as visible as
 a broken human one.
 
-**Status:** `identity.db` mints agent identities (age keypairs, per-identity
-passphrases). Not wired to notes.
+**Status:** BUILT 2026-08-24 as far as the ledger needs. `--me` names what
+counts as yours; every other holder is shown by name, agent or human.
+Deliberately NO agent flag in the schema -- an agent identity is just a name,
+matching identity.db's names by convention, and a column recording which is
+which would be a second source of truth for something the name already says.
 
 ### 2.2b Continuity: an instance can leave something for the next — MUST
 

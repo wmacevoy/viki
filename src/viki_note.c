@@ -310,6 +310,199 @@ static void print_note_row(void *pCtx, const viki_note_row *r){
     printf("\n    %s\n", r->text ? r->text : "");
 }
 
+/* ---- the promise ledger --------------------------------------------- */
+
+static long parse_duration(const char *z);          /* defined below */
+static void iso_plus(long secs, char *out, size_t n);
+
+typedef struct {
+    const char *zMe;
+    char zNow[32];
+    char zEod[32];      /* end of today, so "at risk today" is a real boundary */
+    int nOverdue, nToday, nSoon, nUndated, nTheirs;
+    int nShown;
+} LedgerCtx;
+
+/* Risk is a function of the due date and nothing else. Deliberately not of
+** state or claim: a promise you have claimed and not delivered is exactly as
+** broken as one you never touched, and softening that is how a ledger stops
+** being believed. */
+static const char *risk_of(const LedgerCtx *c, const char *zDue){
+    if( !zDue || !zDue[0] ) return "";
+    if( strcmp(zDue, c->zNow) < 0 ) return "OVERDUE";
+    if( strcmp(zDue, c->zEod) <= 0 ) return "TODAY";
+    return "";
+}
+
+static void ledger_cb(void *pCtx, const viki_note_row *row){
+    LedgerCtx *c = (LedgerCtx*)pCtx;
+    const char *zDue = row->due ? row->due : "";
+    const char *zRisk = risk_of(c, zDue);
+    const char *zWho = (row->who && row->who[0]) ? row->who : "";
+    int bMine = (!zWho[0]) || (c->zMe && strcmp(zWho, c->zMe) == 0);
+
+    if( !zDue[0] ) c->nUndated++;
+    else if( strcmp(zRisk, "OVERDUE") == 0 ) c->nOverdue++;
+    else if( strcmp(zRisk, "TODAY") == 0 ) c->nToday++;
+    else c->nSoon++;
+    if( !bMine ) c->nTheirs++;
+
+    {
+        /* An ISO stamp is 20 characters and made every column ragged. The day
+        ** is what a ledger is read for; the clock time only matters for today,
+        ** so it is shown only then. */
+        char zWhen[16];
+        if( !zDue[0] ) snprintf(zWhen, sizeof(zWhen), "%s", "(no due)");
+        else if( strcmp(zRisk, "TODAY") == 0 ) snprintf(zWhen, sizeof(zWhen), "%.5s", zDue + 11);
+        else snprintf(zWhen, sizeof(zWhen), "%.10s", zDue);
+        printf("%-8s %-10s %-12s %s\n",
+               zRisk[0] ? zRisk : "",
+               zWhen,
+               bMine ? "mine" : zWho,
+               row->text ? row->text : "");
+    }
+    printf("         %s%s%s\n",
+           row->id ? row->id : "",
+           (row->place && row->place[0]) ? "  @" : "",
+           (row->place && row->place[0]) ? row->place : "");
+    c->nShown++;
+}
+
+/* One hop of a supersession chain. */
+static int why_row(sqlite3 *db, const char *zId, const char *zMark){
+    sqlite3_stmt *st;
+    int found = 0;
+    if( sqlite3_prepare_v2(db,
+        "SELECT ts, coalesce(who,''), coalesce(state,''), coalesce(type,''), text"
+        " FROM viki_note WHERE note_id=?1", -1, &st, NULL) != SQLITE_OK ) return 0;
+    sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) == SQLITE_ROW ){
+        printf("%s %s  %-8s %-10s %s\n", zMark,
+               sqlite3_column_text(st, 0), sqlite3_column_text(st, 3),
+               sqlite3_column_text(st, 1), sqlite3_column_text(st, 4));
+        printf("    %s\n", zId);
+        found = 1;
+    }
+    sqlite3_finalize(st);
+    return found;
+}
+
+int viki_cmd_why(sqlite3 *db, const char *zId){
+    char zCur[128];
+    char aBack[32][128];
+    int nBack = 0, i, nFwd = 0;
+
+    if( !zId || !zId[0] ){ fprintf(stderr, "viki why: need a note id\n"); return 1; }
+    snprintf(zCur, sizeof(zCur), "%s", zId);
+
+    /* Backwards first: follow `closes` to the oldest ancestor. Bounded at 32
+    ** hops -- a cycle would otherwise hang, and `closes` is not constrained
+    ** to be acyclic anywhere. */
+    while( nBack < 32 ){
+        sqlite3_stmt *st;
+        char zPrev[128] = "";
+        if( sqlite3_prepare_v2(db, "SELECT coalesce(closes,'') FROM viki_note WHERE note_id=?1",
+                               -1, &st, NULL) != SQLITE_OK ) break;
+        sqlite3_bind_text(st, 1, zCur, -1, SQLITE_STATIC);
+        if( sqlite3_step(st) == SQLITE_ROW )
+            snprintf(zPrev, sizeof(zPrev), "%s", (const char*)sqlite3_column_text(st, 0));
+        sqlite3_finalize(st);
+        if( !zPrev[0] ) break;
+        snprintf(aBack[nBack], sizeof(aBack[0]), "%s", zPrev);
+        nBack++;
+        snprintf(zCur, sizeof(zCur), "%s", zPrev);
+    }
+
+    printf("viki why: %s\n\n", zId);
+    for( i = nBack - 1; i >= 0; i-- ) why_row(db, aBack[i], "  ");
+    if( !why_row(db, zId, "->") ){
+        printf("(no such note)\n");
+        return 1;
+    }
+
+    /* Forwards: whatever closed it, and whatever closed that. */
+    snprintf(zCur, sizeof(zCur), "%s", zId);
+    while( nFwd < 32 ){
+        sqlite3_stmt *st;
+        char zNext[128] = "";
+        if( sqlite3_prepare_v2(db, "SELECT note_id FROM viki_note WHERE closes=?1"
+                                   " ORDER BY ts ASC LIMIT 1", -1, &st, NULL) != SQLITE_OK ) break;
+        sqlite3_bind_text(st, 1, zCur, -1, SQLITE_STATIC);
+        if( sqlite3_step(st) == SQLITE_ROW )
+            snprintf(zNext, sizeof(zNext), "%s", (const char*)sqlite3_column_text(st, 0));
+        sqlite3_finalize(st);
+        if( !zNext[0] ) break;
+        why_row(db, zNext, "  ");
+        snprintf(zCur, sizeof(zCur), "%s", zNext);
+        nFwd++;
+    }
+
+    if( nBack == 0 && nFwd == 0 ){
+        printf("\nnothing supersedes it and it supersedes nothing.\n");
+    }else{
+        printf("\n%d before, %d after.\n", nBack, nFwd);
+    }
+    return 0;
+}
+
+int viki_cmd_promises(sqlite3 *db, const char *zMe, const char *zHorizon, int bAll){
+    viki_note_filter f;
+    LedgerCtx c;
+    long horizon;
+    char zCut[32];
+    int rc;
+
+    memset(&f, 0, sizeof(f));
+    memset(&c, 0, sizeof(c));
+    c.zMe = zMe;
+    iso_now(c.zNow, sizeof(c.zNow));
+    /* End of today in UTC. A real boundary rather than "now + 24h": "is it due
+    ** today" is the question a morning brief answers, and a rolling window
+    ** would call tomorrow morning's promise today's. */
+    snprintf(c.zEod, sizeof(c.zEod), "%.10sT23:59:59Z", c.zNow);
+
+    horizon = parse_duration(zHorizon ? zHorizon : "7d");
+    if( horizon <= 0 ) horizon = 7 * 86400;
+    iso_plus(horizon, zCut, sizeof(zCut));
+
+    /* A promise is a `task` that nothing has retired. Type is the vocabulary
+    ** AGENTS.md already fixes -- only `task` belongs in "what needs to be
+    ** done" -- so the ledger reads that rather than inventing a second one. */
+    f.type  = "task";
+    f.bLive = 1;
+    f.nMax  = 200;
+    if( !bAll ){
+        f.bHasDue = 1;
+        f.dueBefore = zCut;
+    }
+
+    printf("viki promises: as of %s, horizon %s%s\n",
+           c.zNow, zHorizon ? zHorizon : "7d", bAll ? ", including undated" : "");
+    printf("%-8s %-10s %-12s %s\n", "RISK", "DUE", "WHO", "WHAT");
+    rc = viki_note_query(db, &f, ledger_cb, &c);
+    if( rc < 0 ) return 1;
+
+    if( c.nShown == 0 ){
+        printf("\nnothing owed in the next %s.\n", zHorizon ? zHorizon : "7d");
+    }else{
+        printf("\n%d overdue, %d due today, %d later", c.nOverdue, c.nToday, c.nSoon);
+        if( c.nUndated ) printf(", %d undated", c.nUndated);
+        if( c.nTheirs )  printf("  (%d held by someone else)", c.nTheirs);
+        printf("\n");
+    }
+
+    /* COVERAGE, not a footnote (VIKIVERSE_V1 2.5). This ledger sees only what
+    ** has been captured or ingested. Half of Warren's channels cannot be read
+    ** by any machine -- Signal, WhatsApp, Facebook -- so "nothing owed" means
+    ** "nothing owed THAT I CAN SEE", and saying only the first would be the
+    ** one lie that costs the most trust. */
+    if( !bAll ){
+        printf("       undated promises are not shown; add --all\n");
+    }
+    printf("       this ledger sees captured and ingested notes only.\n");
+    return 0;
+}
+
 int viki_cmd_notes_filter(sqlite3 *db, const viki_note_filter *f){
     int n = viki_note_query(db, f, print_note_row, NULL);
     if( n < 0 ) return 1;
@@ -394,7 +587,7 @@ static int claim_state(sqlite3 *db, const char *zId, char *who, size_t nWho,
 /* ---- structure: find the work, then apply it safely ---- */
 
 int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, void *pCtx){
-    char sql[1500];
+    char sql[2200];   /* grew with the ledger predicates */
     char place[64], type[32], who[64], state[16];
     sqlite3_stmt *st;
     int n = 0;
@@ -425,9 +618,22 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
         "        ((lease<>'' AND lease < ?9) OR (coalesce(lease,'')='' AND claimed < ?10))))"
         "   AND (?8='' OR closes=?8)"
         "   AND (%d=0 OR type IS NULL OR type='')"
-        " ORDER BY ts %s LIMIT ?7",
+        /* bLive: nothing has retired this one. A correlated NOT EXISTS rather
+        ** than a join, so a note closed by SEVERAL others still appears once
+        ** (or rather, does not appear at all) instead of being multiplied. */
+        "   AND (%d=0 OR NOT EXISTS (SELECT 1 FROM viki_note c"
+        "                             WHERE c.closes = viki_note.note_id))"
+        "   AND (%d=0 OR (due IS NOT NULL AND due<>''))"
+        "   AND (?11='' OR (due IS NOT NULL AND due<>'' AND due <= ?11))"
+        " ORDER BY %s LIMIT ?7",
         f->bUnclaimed ? 1 : 0, f->bStale ? 1 : 0,
-        f->bPending ? 1 : 0, f->bPending ? "ASC" : "DESC");
+        f->bPending ? 1 : 0,
+        f->bLive ? 1 : 0, f->bHasDue ? 1 : 0,
+        /* A ledger orders by WHEN IT IS OWED, not when it was written. Notes
+        ** with no due sort last: they are owed but cannot be late. */
+        (f->bHasDue || f->dueBefore)
+            ? "CASE WHEN coalesce(due,'')='' THEN 1 ELSE 0 END, due ASC, ts DESC"
+            : (f->bPending ? "ts ASC" : "ts DESC"));
 
     if( viki_grep_register(db) != SQLITE_OK ) return -1;
     if( sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK ){
@@ -441,6 +647,7 @@ int viki_note_query(sqlite3 *db, const viki_note_filter *f, viki_note_cb cb, voi
     sqlite3_bind_text(st, 5, f->since ? f->since : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 6, f->grep ? f->grep : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(st, 7, f->bLast ? 1 : (f->nMax > 0 ? f->nMax : 50));
+    sqlite3_bind_text(st, 11, f->dueBefore ? f->dueBefore : "", -1, SQLITE_TRANSIENT);
     {
         /* "now", for the lease comparison. Text, so the comparison is the
         ** same lexicographic one used everywhere else in this file. */

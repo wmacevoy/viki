@@ -75,6 +75,15 @@ build/dist/viki muse [--k N] [--seed N] [--from <hash>#<ix>]
                                          # Needs vectors in the cache but NOT model.onnx;
                                          # refuses a BM25-only cache rather than faking it.
                                          # --seed replays a run exactly.
+build/dist/viki promises [--me NAME] [--horizon 7d] [--all]
+                                         # THE LEDGER: what is owed, to whom, by when, what is
+                                         # at risk. LIVE tasks only -- anything a later note
+                                         # `--closes` is excluded, which is the property a
+                                         # ledger cannot do without. Ordered by due, not by
+                                         # write time. States its own coverage every run.
+build/dist/viki why <note-id>            # the supersession chain BOTH ways: what this replaced
+                                         # and what replaced it. What an agent reads BEFORE
+                                         # starting, so it does not redo a superseded attempt
 build/dist/viki serve [--host H] [--port N]   # 127.0.0.1:8080; / = HTML page, /api/* = JSON
 build/dist/viki cache push|pull [db-path] [--no-model]
                                          # fossil uv add/sync/export -- moves the embedding
@@ -181,6 +190,15 @@ sh edge/tools/build-tools.sh                 # the native key-custody tools -> b
                                             #                    converter, via sqlcipher_export
                                             #   LibreSSL + SQLCipher come from fossil-see's
                                             #   vendor tree; nothing new is downloaded
+sh build/promise-probe.sh <empty-dir>       # THE PROMISE LEDGER, 12 assertions. P4 is the
+                                            #   one that matters: a superseded promise must
+                                            #   LEAVE the ledger. A promise retired last month
+                                            #   still reading as owed makes the brief wrong in
+                                            #   the direction of anxiety, which is what the
+                                            #   product exists to remove. NOTE: no `set -e` --
+                                            #   every CONTROL is a `grep -c == 0` and grep exits
+                                            #   1 on zero, so set -e would abort the suite
+                                            #   exactly when the code was correct
 sh build/keywrap-probe.sh <empty-dir>       # key custody, 9 assertions. The INTEROP three
                                             #   (I1-I3) are the ones that matter and they SKIP
                                             #   without `age` on PATH rather than passing:

@@ -38,6 +38,11 @@ static void usage(void){
         "                           retired, because it deliberately does not look at what\n"
         "                           did not change.\n"
         "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found.\n"
+        "  promises [--me NAME] [--horizon 7d] [--all]\n"
+        "                           THE LEDGER: what is owed, to whom, by when, and what is at\n"
+        "                           risk. Live tasks only -- anything superseded is excluded.\n"
+        "  why <note-id>            The supersession chain both ways: what this replaced and\n"
+        "                           what replaced it. What an agent reads BEFORE starting.\n"
         "  ask \"<query>\" --verse    Same question across EVERY registered project. Registry is\n"
         "                           $VIKI_VERSE or ~/.viki/verse.tsv (label<TAB>cache.db per line);\n"
         "                           build/verse-index.sh writes one. Hits are labelled by project.\n"
@@ -297,6 +302,34 @@ int main(int argc, char **argv){
         sopts.zDue=zDue; sopts.zState=zState; sopts.zCloses=zCloses;
         rc = bPending ? viki_cmd_structure_pending(db, nMax)
                       : viki_cmd_structure_opts(db, zId, &sopts);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "promises") == 0 ){
+        sqlite3 *db;
+        const char *zMe = getenv("VIKI_ME");
+        const char *zHorizon = "7d";
+        int bAll = 0, i;
+        if( !zMe || !zMe[0] ) zMe = viki_fossil_user();
+        for( i = 2; i < argc; i++ ){
+            if( strcmp(argv[i], "--all") == 0 ) bAll = 1;
+            else if( i + 1 < argc && strcmp(argv[i], "--me") == 0 ) zMe = argv[++i];
+            else if( i + 1 < argc && strcmp(argv[i], "--horizon") == 0 ) zHorizon = argv[++i];
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        rc = viki_cmd_promises(db, zMe, zHorizon, bAll);
+        sqlite3_close(db);
+        return rc;
+    }
+
+    if( strcmp(sub, "why") == 0 ){
+        sqlite3 *db;
+        if( argc < 3 ){ fprintf(stderr, "usage: viki why <note-id>\n"); return 1; }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) != SQLITE_OK ) return 1;
+        rc = viki_cmd_why(db, argv[2]);
         sqlite3_close(db);
         return rc;
     }

@@ -91,6 +91,20 @@ typedef struct {
     int bStale;     /* only claims that look abandoned: a lapsed lease, OR no
                     ** lease and a claim older than staleAfter */
     const char *staleAfter;  /* age threshold for UNLEASED claims; default 1d */
+
+    /* ---- the promise ledger (VIKIVERSE_V1 2.1) ---------------------- */
+
+    int bLive;      /* exclude notes some OTHER note has closed.
+                    ** THE FILTER A LEDGER CANNOT DO WITHOUT, and the existing
+                    ** `closes` field does not provide it: `closes` asks "which
+                    ** note retired X", this asks "which notes has nothing
+                    ** retired". Without it a promise that was superseded a
+                    ** month ago still reads as owed, which is the one mistake
+                    ** a promise ledger may not make -- it would make the
+                    ** morning brief wrong in the direction of anxiety, and
+                    ** the entire product is aimed at the opposite. */
+    int bHasDue;    /* only notes carrying a due date */
+    const char *dueBefore;  /* ISO-8601; only notes due at or before it */
 } viki_note_filter;
 
 /* PURE query: no output of its own. `viki notes`, `viki structure --pending`
@@ -199,6 +213,37 @@ int viki_cmd_structure_opts(sqlite3 *db, const char *zId, const viki_structure_o
 ** to end. `viki notes --closes <old-id>` answers it as a query. */
 /* Filter-struct form, so a new predicate never changes a signature. */
 int viki_cmd_notes_filter(sqlite3 *db, const viki_note_filter *f);
+
+/* THE PROMISE LEDGER. Answers 2.1's acceptance in one call: what is promised,
+** to whom, by when, and which of those are at risk.
+**
+** `zMe` is the name that counts as YOURS -- everything else is somebody
+** else's, including an agent's. There is deliberately NO agent flag in the
+** schema: an agent identity is just a name, matching the identity names in
+** identity.db by convention, and the distinction that matters at 6am is
+** "mine / not mine" rather than "human / machine". A column recording which
+** is which would be a second source of truth for something the name already
+** says.
+**
+** `zHorizon` is a duration ("7d", "48h"). Promises due beyond it are counted
+** but not listed, so the ledger stays the length of a morning rather than the
+** length of a year. Pass NULL for the default.
+**
+** bAll includes promises with NO due date -- they cannot be at risk today by
+** definition, but they are still owed, and a ledger that hides them would be
+** dishonest in the same direction as hiding a superseded one. */
+int viki_cmd_promises(sqlite3 *db, const char *zMe, const char *zHorizon, int bAll);
+
+/* CONTINUITY (VIKIVERSE_V1 2.2b). Walks a note's supersession chain in both
+** directions and prints it oldest-first: what this replaced, and what replaced
+** it, with each hop's author and time.
+**
+** This is what makes "I believed X on the 23rd and stopped believing it on the
+** 24th, because Y" a record rather than a lost edit -- and it is the query an
+** agent should run BEFORE starting, because the chain is where the previous
+** instance already tried something. Attribution says whose claim it was;
+** this says what happened to it. */
+int viki_cmd_why(sqlite3 *db, const char *zId);
 
 int viki_cmd_notes(sqlite3 *db, const char *zPlace, const char *zType,
                    const char *zState, const char *zWho, const char *zSince,
