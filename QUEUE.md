@@ -1362,7 +1362,18 @@ of all draws).
 FIX IS NOT "DROP MUSE", IT IS "STOP SEEDING IT UNIFORMLY": a genre filter on the
 seed draw, or a floor calibrated PER-POPULATION rather than on one corpus-wide
 median. Either should roughly quadruple yield without touching the band logic,
-which is already doing its job. `--from` beat random seeding in the one targeted
+which is already doing its job.
+
+**NARROWED 2026-08-23 by QUEUE 45's M4 experiment: DO THE FLOOR, LEAVE THE SKIP
+ALONE.** M4 separates the band's two mechanisms and only one of them is earning
+anything. Near-duplicate rate is indistinguishable between muse's band (5.0%)
+and uniformly random pairs (4.2%), so "skip the seed's nearest 9" buys nothing
+measurable -- random avoids near-duplicates by chance anyway. The entire
+band-vs-random difference lives in noise (68.3% vs 84.2%). So the per-population
+floor is the whole of the available win here, the genre filter on the seed draw
+is the other half of it, and touching the skip window is effort with no measured
+return. Re-run M4 after changing the floor: it is now the standing measurement,
+and it costs ~24 Sonnet agents rather than the 111 of QUEUE 44. `--from` beat random seeding in the one targeted
 run tried, which points the same way.
 
 NO CRASHES, NO ERRORS, NO EMPTY RESULTS across ~105 invocations. One degraded run
@@ -1510,4 +1521,58 @@ PAIR-SELECTION STRATEGY than the trivial one". Two controls, in order of value:
      adjacencies than mid-band, the core thesis is wrong regardless of M4.
 
 Neither needs test/muse-eval.py as C4 specified it. Write M4 first.
+
+### M4 RESULT, measured 2026-08-23: MUSE IS NOT CEREMONY (2.3x random, p<0.01)
+
+DESIGN. Blinded and PAIRED, because an unblinded judge grades to expectation.
+48 batches of (1 seed chunk + 5 candidates): 24 where the candidates came from
+muse's band, and 24 MATCHED batches using the SAME SEED CHUNK with 5 uniformly
+random candidates -- so seed difficulty is controlled. Batches were globally
+shuffled, given opaque ids, and the arm labels kept in a manifest the scouts
+never saw. 24 Sonnet scouts, 2 batches each, identical prompt, forced bucketing,
+told explicitly that "some batches may be near-random" and that marking a whole
+batch NOISE is a valid and expected outcome. 240 classifications, 0 errors.
+
+  arm       n     GENUINE        NEAR_DUP       NOISE
+  band    120    32 (26.7%)     6 ( 5.0%)     82 (68.3%)
+  random  120    14 (11.7%)     5 ( 4.2%)    101 (84.2%)
+
+  ratio 2.3x   two-proportion z = 2.95 (p < 0.01)
+  paired by seed, 24 pairs: band better 15, random better 1, tie 8
+
+VERDICT: the band logic does real work. RETRIEVAL_PLAN's "if muse cannot beat
+re-asking, muse is ceremony" asked the wrong question, but against the RIGHT
+null -- random pair selection -- muse wins clearly and the paired split is 15-1.
+
+THREE CAVEATS, and the second one is the one that will get misquoted.
+
+ 1. RANDOM IS NOT ZERO. 11.7% of uniformly random chunk pairs from this repo
+    were judged genuine adjacencies. Put any two chunks of a coherent project
+    in front of a careful judge and about one in nine yields something
+    defensible. So a large share of what reads as muse's value is the JUDGE's
+    value. The band's marginal contribution is 15 percentage points, not 26.7.
+
+ 2. THE ABSOLUTE RATE IS PROTOCOL-DEPENDENT AND IS NOT COMPARABLE TO QUEUE 44's
+    6.9%. There, scouts ran `viki muse` themselves and classified ~15 hits over
+    3 seeds; here they were handed pre-extracted pairs with source paths and
+    judged 10 items carefully. ONLY the within-experiment band-vs-random
+    contrast is meaningful. Do not quote 26.7% as "muse's genuine rate".
+
+ 3. It measures GENUINE ADJACENCY, not usefulness. If muse's real job is
+    hypothesis generation (QUEUE 46), a random pair can still provoke a good
+    question. A 2.3x gap is wide enough to act on; a narrow one would not have
+    been.
+
+### WHICH HALF OF THE BAND LOGIC EARNS IT: THE FLOOR, NOT THE SKIP
+
+Mid-band makes two separate claims -- skip the seed's nearest 9 (avoid
+near-duplicates) and stay above the corpus-median cosine floor (avoid noise).
+M4 separates them:
+
+  near-duplicate   band 5.0%  vs random 4.2%   -- indistinguishable
+  noise            band 68.3% vs random 84.2%  -- 16 points apart
+
+The SKIP is unfalsifiable here: random avoids near-duplicates by chance anyway,
+so skipping the nearest 9 buys nothing measurable. The FLOOR is where all of
+the difference lives. That is directly actionable -- see QUEUE 43.
 
