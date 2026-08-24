@@ -350,14 +350,15 @@ binding constraint. D-11 makes the model an explicit epoch bump, so this is a
 deliberate, testable change with `test/retrieval-eval.sh` as the gate — **not**
 an index problem, and reaching for ANN here would buy faster mediocre answers.
 
-### Phase 1 — needs answers to Q5 and Q6.
+### Phase 1 — UNBLOCKED 2026-08-24. Q5 and Q6 answered; see §5c.
 
 | | work | blocked on |
 |---|---|---|
-| P1.1 | **Calendar ingest** (§2.3) | Q5 — which calendars, concretely |
-| P1.2 | **Notification ingest** (§2.3) | Q5 — which sources |
-| P1.3 | **The clock: morning brief** (§2.4) | Q6 — what it does when unsure |
-| P1.4 | **Coverage reporting** (§2.5) | ships with P1.3 or the brief cannot be trusted |
+| P1.1 | **Google Calendar + O365 ingest** (§2.3) | UNBLOCKED (Q5 answered) — derived, not mirrored |
+| P1.2 | **Gmail / Outlook / GitHub ingest** (§2.3) | UNBLOCKED — the four readable channels first |
+| P1.3 | **The clock: morning brief** (§2.4) | UNBLOCKED (Q6 answered) — it asks; questions batch into the brief |
+| P1.4 | **Coverage reporting** (§2.5) | ships with P1.3, and now MUST name Signal/WhatsApp/Facebook as unseen |
+| P1.5 | **Capture as the bridge** (§2.6) | PROMOTED — the only coverage mechanism unreadable channels have |
 
 This phase is where it stops being a search tool. P1.3 is the first thing you
 would actually *feel*.
@@ -385,6 +386,89 @@ installable PWA; snapshot pull over HTTPS; and the verse — 110 projects, one
 question. Tests: m1 90/0/0, plus nine probes.
 
 ---
+
+## 5c. Q5 and Q6, answered 2026-08-24 — and what they cost
+
+### Q5: the sources
+
+**Calendars:** Office 365 and Google Calendar. Warren: *"office 365 is fairly
+polluted so something derived seems better."* That is D-2's design arriving from
+the other direction — do not mirror the calendar, derive a cleaned projection
+from it. iCloud *"may be the final location for my things"*: noted, not settled,
+and a destination question rather than an ingest one.
+
+**Notifications:** Outlook, Gmail, Facebook, Discord, WhatsApp, Signal, texts,
+GitHub. And the sentence that explains the whole mess: *"some groups have no
+common choice."* The fragmentation is not disorganisation, it is **imposed** —
+each group picked its own channel, so consolidation is not available to Warren
+and the assistant must work across channels rather than force convergence onto
+one.
+
+### THE HARD CONSTRAINT: HALF THOSE CHANNELS CANNOT BE READ BY A MACHINE
+
+This is the most consequential fact in the document and it must not be
+discovered during implementation.
+
+| channel | machine-readable? |
+|---|---|
+| Gmail | yes — real API |
+| Outlook / O365 | yes — Microsoft Graph |
+| GitHub | yes — real API |
+| Google Calendar | yes — real API |
+| Discord | only channels a **bot** is in; reading a user's own account is against terms |
+| texts / iMessage | on **macOS** only, via the local Messages database with Full Disk Access. Not on iOS |
+| WhatsApp | **no.** No personal-account API |
+| Signal | **no, by design.** Reading it would mean prying into the local encrypted store, which defeats the reason to use Signal |
+| Facebook | **effectively no.** The personal notification surface is not exposed |
+
+*(Product-design facts rather than transient API terms, but verify before
+building — this determines what §2.5 may ever claim.)*
+
+### WHAT THAT DOES TO §2.5, WHICH IS THE POINT OF THE PRODUCT
+
+"You have time for a friend" is a trust claim. If Signal and WhatsApp are
+invisible, the assistant **can never honestly say "nothing is pending"** — only
+*"nothing is pending in the seven places I can see, and I cannot see Signal or
+WhatsApp."* That is not a degraded version of the feature. It is the honest
+version, and §2.5 already requires it: every completeness claim names its
+sources.
+
+### AND IT PROMOTES §2.6 FROM CONVENIENCE TO MECHANISM
+
+One-gesture capture stops being a nicety the moment half the channels are
+unreadable. **It is the only coverage mechanism those channels have**: a promise
+made on Signal enters the ledger because Warren captures it in fifteen seconds,
+or it does not enter at all. That reframes the capture loop as load-bearing
+infrastructure rather than a phone feature, and it raises §2.6 in the priority
+order.
+
+The forward-to-inbox pattern covers some of the gap — several of these can be
+made to email an address Warren controls, converting an unreadable channel into
+a readable one — and should be tried before writing any integration, because it
+is configuration rather than code.
+
+### Q6: what the assistant does when it is not sure
+
+**It asks.** Warren: *"I think the assistant asks, somewhat like you do now. I am
+ok if questions drive values instead of merely accepting them."*
+
+The second sentence is the load-bearing one and it licenses something a servile
+assistant could not do. A question is permitted to be **formative, not merely
+extractive** — *"you have moved this three times; is it actually a promise?"* is
+a question that changes what Warren decides, not just what the machine records.
+Without that sentence, asking it would be presumptuous. With it, declining to
+ask is the failure.
+
+Three consequences for the build:
+
+1. **Never guess silently.** An uncertain classification is a question, not a
+   confident row. This is §2.9 applied to judgment rather than to errors.
+2. **Questions are batched into the brief, not pushed as they arise.** The
+   product exists to reduce interruption; an assistant that interrupts to
+   resolve its own uncertainty has taken the problem and handed it back.
+3. **A question is itself a promise** — it has an owner and a due time, and an
+   unanswered one is visible rather than silently dropped. `viki_note` already
+   has `challenge`, which is exactly *"an unanswered are-you-still-on-this."*
 
 ## 6. Questions only Warren can answer
 
