@@ -1787,7 +1787,46 @@ rank-1 hit, because the document was not ranked badly -- it was NOT IN THE CORPU
 Coverage dominates ranking, and nothing in test/retrieval-eval.sh measures coverage
 across repositories.
 
-CHEAP FIRST STEP, no new code: `viki index` each sibling project into its own cache
+### BUILT 2026-08-23: THE EDGE NOW DRAWS FROM THE VIKIVERSE (V-series, 6/0)
+
+edge_tribe_add(label, path, key) / edge_ask_all() -- several tribes open at once,
+EACH ITS OWN SQLCipher CONNECTION WITH ITS OWN KEY. Not ATTACH: that caps at
+SQLITE_MAX_ATTACHED=10 (QUEUE 39) and, decisively, FTS5's MATCH does not compose
+across a UNION view, so the BM25 leg could not span tribes at all. Separate
+connections also give the property that makes this safe -- unlocking one tribe
+grants nothing about another, so "my projects" and "a tribe I was given access to"
+can sit on the same phone.
+
+`ask` runs viki_ask_query() once per tribe and merges, so the retrieval core is
+untouched and CLI / /api/ask / edge still share one implementation. QUEUE 39's
+measurement is what makes that affordable: opening is ~6ms and a scan is
+milliseconds, so N small scans cost about what one did.
+
+MEASURED, three real tribes built from sibling projects, three DIFFERENT keys:
+  V1  sqlcipher-libressl (256 chunks), strata (103), fossil-sqlcipher-libressl (51)
+      each opens with its own key
+  V2  the edge holds all three at once
+  V3  CONTROL: another tribe's key does NOT open this one
+  V4/V5  asking "persisting a database in the browser origin private file system
+      OPFS" returns ./ext_wasm_README.md from sqlcipher-libressl at RANK 1 --
+      a tribe that is NOT the one being worked in. That is QUEUE 47's failure,
+      answered by the machine instead of by Warren.
+  V6  every hit carries its tribe
+
+KNOWN APPROXIMATION, stated in the source rather than left to be found: merging by
+rrf across corpora biases toward SMALL tribes, because RRF is rank-based and rank 1
+in a 51-chunk tribe scores exactly what rank 1 in a 600k-chunk tribe scores.
+Fixing it needs a corpus-size normalisation nothing here has measured. The per-hit
+`tribe` field at least makes the bias visible rather than invisible.
+
+Probe: build/verse-probe.sh (refuses without the codec build rather than passing
+vacuously). Test: edge/tests/verse.mjs.
+
+REMAINING for a real personal vikiverse: a tribe REGISTRY (which caches exist,
+where, which key unwraps each -- identity.db from QUEUE 48/49 is the natural home),
+and pulling each tribe's cache over /uv/ rather than by hand.
+
+CHEAP FIRST STEP FOR THE NATIVE CLI, no new code: `viki index` each sibling project into its own cache
 and ATTACH them, or index a tree of symlinked docs. SQLITE_MAX_ATTACHED=10 is the
 first wall (QUEUE 39), and QUEUE 39's measurement already showed that at this scale
 opening is free -- 3.4ms for three caches -- so the cost objection does not apply.

@@ -32,7 +32,40 @@
 #include "viki_ask.h"
 #include "embed.h"
 
-static sqlite3 *g_db = NULL;
+/* THE VIKIVERSE EDGE HOLDS SEVERAL TRIBES AT ONCE, each its own connection.
+**
+** Not ATTACH, deliberately. ATTACH would hit SQLITE_MAX_ATTACHED (10, QUEUE 39)
+** and, worse, FTS5's MATCH does not compose across a UNION view, so the BM25
+** leg could not span tribes anyway. Separate connections also mean separate
+** KEYS -- each tribe is its own SQLCipher database with its own tribe key, and
+** unlocking one grants nothing about another, which is the property that makes
+** "my projects" and "someone else's tribe" safe to hold on the same device.
+**
+** So `ask` runs viki_ask_query() once per tribe and merges. That keeps the
+** retrieval core untouched -- the CLI, /api/ask and this build still share one
+** implementation -- and it is why QUEUE 39's measurement matters: at this scale
+** opening is ~6ms and a full scan is milliseconds, so N small scans cost
+** essentially what one did.
+**
+** MERGING BY rrf ACROSS CORPORA IS A KNOWN APPROXIMATION and it is stated here
+** rather than discovered later: RRF is rank-based, so rank 1 in a 6-chunk tribe
+** scores exactly what rank 1 in a 600k-chunk tribe scores, which biases toward
+** SMALL tribes. Fixing it properly needs a corpus-size normalisation nothing in
+** this project has measured yet. Until then the per-hit `tribe` field lets a
+** caller see the bias rather than be fooled by it. */
+#define EDGE_MAX_TRIBES 12
+
+typedef struct {
+    sqlite3 *db;
+    char label[64];
+} EdgeTribe;
+
+static EdgeTribe g_tribe[EDGE_MAX_TRIBES];
+static int g_nTribe = 0;
+
+/* Tribe 0 doubles as the single-cache handle, so every existing entry point
+** keeps working unchanged. */
+#define g_db (g_tribe[0].db)
 
 /* Supplied by edge_embed_js.c: the JS-backed embedder, or NULL when no query
 ** vector has been set. Passing NULL is the degraded path, not an error. */
@@ -119,6 +152,135 @@ int edge_open_keyed(const char *zPath, const char *zKey){
 
 EMSCRIPTEN_KEEPALIVE
 int edge_open(const char *zPath){ return edge_open_keyed(zPath, NULL); }
+
+/* ---- the vikiverse: several tribes, one question --------------------- */
+
+/* Adds a tribe. Returns its slot, or -1. Each carries its own key, so a
+** device can hold one tribe it owns and another it was merely given access
+** to, without either being able to open the other. */
+EMSCRIPTEN_KEEPALIVE
+int edge_tribe_add(const char *zLabel, const char *zPath, const char *zKey){
+    sqlite3 *db = NULL;
+    int slot = g_nTribe;
+    if( slot >= EDGE_MAX_TRIBES ) return -1;
+    viki_db_register_ndvss();
+    if( sqlite3_open_v2(zPath, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK ){
+        if( db ) sqlite3_close(db);
+        return -1;
+    }
+#ifdef SQLITE_HAS_CODEC
+    if( zKey && zKey[0] ){
+        if( sqlite3_key(db, zKey, (int)strlen(zKey)) != SQLITE_OK ){
+            sqlite3_close(db); return -1;
+        }
+    }
+#endif
+    if( sqlite3_exec(db, "SELECT count(*) FROM viki_chunk", NULL, NULL, NULL) != SQLITE_OK ){
+        sqlite3_close(db); return -1;
+    }
+    g_tribe[slot].db = db;
+    snprintf(g_tribe[slot].label, sizeof(g_tribe[slot].label), "%s", zLabel ? zLabel : "?");
+    g_nTribe = slot + 1;
+    return slot;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int edge_tribe_count(void){ return g_nTribe; }
+
+EMSCRIPTEN_KEEPALIVE
+const char *edge_tribe_label(int i){
+    return (i >= 0 && i < g_nTribe) ? g_tribe[i].label : "";
+}
+
+EMSCRIPTEN_KEEPALIVE
+int edge_tribe_chunks(int i){
+    sqlite3_stmt *st; int n = 0;
+    if( i < 0 || i >= g_nTribe || !g_tribe[i].db ) return -1;
+    if( sqlite3_prepare_v2(g_tribe[i].db, "SELECT count(*) FROM viki_chunk", -1, &st, NULL) == SQLITE_OK ){
+        if( sqlite3_step(st) == SQLITE_ROW ) n = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    return n;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void edge_tribe_clear(void){
+    int i;
+    for( i = 0; i < g_nTribe; i++ ){
+        if( g_tribe[i].db ) sqlite3_close(g_tribe[i].db);
+        g_tribe[i].db = NULL;
+        g_tribe[i].label[0] = 0;
+    }
+    g_nTribe = 0;
+}
+
+/* Asks EVERY open tribe and merges by rrf. Each hit carries the tribe that
+** produced it -- without that a cross-tribe answer is unattributable, which
+** for a corpus assembled from several projects is worse than no answer. */
+EMSCRIPTEN_KEEPALIVE
+char *edge_ask_all(const char *zQuery, int k){
+    typedef struct { viki_ask_result r; int tribe; } Hit;
+    Hit all[EDGE_MAX_TRIBES * 20];
+    viki_ask_result res[20];
+    char *buf = NULL; size_t len = 0, cap = 0;
+    char num[160];
+    int nAll = 0, t, i, j, kk;
+    viki_embedder *emb;
+
+    if( k < 1 ) k = 5;
+    if( k > 20 ) k = 20;
+    if( g_nTribe < 1 ){
+        buf = malloc(64); if( buf ) strcpy(buf, "{\"error\":\"no tribes open\"}");
+        return buf;
+    }
+    emb = edge_embedder();
+
+    for( t = 0; t < g_nTribe; t++ ){
+        int n;
+        if( !g_tribe[t].db ) continue;
+        n = viki_ask_query(g_tribe[t].db, zQuery, k, emb, res, 20);
+        for( i = 0; i < n && nAll < (int)(sizeof(all)/sizeof(all[0])); i++ ){
+            all[nAll].r = res[i];
+            all[nAll].tribe = t;
+            nAll++;
+        }
+    }
+    /* insertion sort: nAll is at most 240 and this keeps the merge obvious */
+    for( i = 1; i < nAll; i++ ){
+        Hit h = all[i];
+        for( j = i - 1; j >= 0 && all[j].r.rrf < h.r.rrf; j-- ) all[j+1] = all[j];
+        all[j+1] = h;
+    }
+    kk = nAll < k ? nAll : k;
+
+    json_raw(&buf, &len, &cap, "{\"mode\":\"");
+    json_raw(&buf, &len, &cap, emb ? "hybrid" : "bm25+literal");
+    snprintf(num, sizeof(num), "\",\"tribes\":%d,\"results\":[", g_nTribe);
+    json_raw(&buf, &len, &cap, num);
+    for( i = 0; i < kk; i++ ){
+        viki_ask_result *r = &all[i].r;
+        if( i ) json_raw(&buf, &len, &cap, ",");
+        snprintf(num, sizeof(num), "{\"rank\":%d,\"rrf\":%.6f,\"chunk_ix\":%d,\"chunk_count\":%d,",
+                 i + 1, r->rrf, r->chunk_ix, r->chunk_count);
+        json_raw(&buf, &len, &cap, num);
+        json_raw(&buf, &len, &cap, "\"tribe\":\"");
+        json_escape(&buf, &len, &cap, g_tribe[all[i].tribe].label);
+        json_raw(&buf, &len, &cap, "\",\"hash\":\"");
+        json_escape(&buf, &len, &cap, r->hash);
+        json_raw(&buf, &len, &cap, "\",\"source\":\"");
+        json_escape(&buf, &len, &cap, r->source);
+        json_raw(&buf, &len, &cap, "\",\"snippet\":\"");
+        json_escape(&buf, &len, &cap, r->snippet);
+        snprintf(num, sizeof(num), "\",\"fragment_head\":%s,\"fragment_tail\":%s,\"snippet_truncated\":%s}",
+                 (r->frag & VIKI_FRAG_HEAD) ? "true" : "false",
+                 (r->frag & VIKI_FRAG_TAIL) ? "true" : "false",
+                 (r->frag & VIKI_FRAG_CUT)  ? "true" : "false");
+        json_raw(&buf, &len, &cap, num);
+    }
+    json_raw(&buf, &len, &cap, "]}");
+    if( buf ) buf[len] = '\0';
+    return buf;
+}
 
 /* Present only in the SQLCipher build; harmless in the plain one, where
 ** sqlite3_key is absent -- guarded by the macro the codec build defines. */
