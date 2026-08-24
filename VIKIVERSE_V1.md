@@ -409,7 +409,8 @@ an index problem, and reaching for ANN here would buy faster mediocre answers.
 | P1.1 | **Google Calendar + O365 ingest** (§2.3) | UNBLOCKED (Q5 answered) — derived, not mirrored |
 | P1.2 | **Gmail / Outlook / GitHub ingest** (§2.3) | UNBLOCKED — the four readable channels first |
 | P1.2b | **Chrome reader** for Facebook / Discord (§2.3) | BUILT 2026-08-24. Facebook verified against a live logged-in account (30 rows, 28 captured); Discord's message selectors still unverified |
-| P1.2c | **Chrome reader: O365 / Teams / D2L** (§2.3) | THE PRIORITY. Web-only for Warren, so this is the ingest path for the work calendar, work chat and course system — worth more than P1.2b and arguably more than P1.1 |
+| P1.2c | **Chrome reader: D2L** (§2.3) | BUILT + VERIFIED 2026-08-24 against a live account: Quick Eval, 20 rows captured. Targets grading OWED, not announcements sent |
+| P1.2d | **Chrome reader: O365 / Outlook / Teams** (§2.3) | NEXT. Same web-only constraint; entry points are `mavnet.coloradomesa.edu/cmu_redir/{outlook,teams,office365}` |
 | P1.3 | **The clock: morning brief** (§2.4) | UNBLOCKED (Q6 answered) — it asks; questions batch into the brief |
 | P1.4 | **Coverage reporting** (§2.5) | ships with P1.3, and now MUST name Signal/WhatsApp/Facebook as unseen |
 | P1.5 | **Capture as the bridge** (§2.6) | PROMOTED — the only coverage mechanism unreadable channels have |

@@ -30,6 +30,65 @@ const VIKI = {
     catch (_) { return []; }
   },
 
+  /* SHADOW-DOM-PIERCING SEARCH, and D2L cannot be read without it.
+   * Measured live on d2l.coloradomesa.edu, 2026-08-24: 63 OPEN shadow roots,
+   * `document.body.innerText` yielding 364 characters for a full page, and a
+   * flat `querySelectorAll('a[href]')` finding 19 links where a piercing walk
+   * finds 84. A scraper that does not descend sees a page that looks almost
+   * empty -- and would report it as a quiet day.
+   *
+   * Open roots only. A CLOSED root is genuinely unreachable from script, and
+   * the honest response to one is `blind`, not a workaround.
+   *
+   * The `seen` set guards against a cycle through slotted content, which would
+   * otherwise recurse until the stack gives out. */
+  deepAll(selector, root, out, seen) {
+    out = out || []; seen = seen || new Set(); root = root || document;
+    if (seen.has(root)) return out;
+    seen.add(root);
+    /* THE ROOT'S OWN SHADOW ROOT COUNTS. Missing this is subtle and silent:
+     * given `deepAll('tbody tr', table)` where `table` is a custom element
+     * whose content lives in its own shadow root, the light-DOM query returns
+     * nothing, the `*` walk below also returns nothing (there are no light
+     * children to walk), and the function reports zero rows from a table full
+     * of them. Measured on D2L Quick Eval: 0 rows found where 20 exist. */
+    if (root.shadowRoot) VIKI.deepAll(selector, root.shadowRoot, out, seen);
+    try { root.querySelectorAll(selector).forEach(e => out.push(e)); } catch (_) {}
+    let all = [];
+    try { all = root.querySelectorAll('*'); } catch (_) {}
+    for (const e of all) if (e.shadowRoot) VIKI.deepAll(selector, e.shadowRoot, out, seen);
+    return out;
+  },
+
+  deepOne(selector, root) {
+    return VIKI.deepAll(selector, root)[0] || null;
+  },
+
+  /* Text that descends into an element's OWN shadow root.
+   *
+   * deepAll finds the element; this is what reads it, and the distinction is
+   * easy to miss because the first half appears to work. Measured on D2L:
+   * every `d2l-activity-name` was located correctly and every one returned ""
+   * from innerText, because its text lives inside its own shadow root.
+   *
+   * STYLE/SCRIPT/TEMPLATE are skipped or the "text" comes back as the
+   * component's CSS -- the first attempt extracted
+   * ":host { display: block; } .d2l-activity-name-icon {..." as a notification. */
+  deepText(node, depth) {
+    depth = depth || 0;
+    if (!node || depth > 12) return '';
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+    const tag = node.tagName;
+    if (tag === 'STYLE' || tag === 'SCRIPT' || tag === 'TEMPLATE') return '';
+    let s = '';
+    if (node.shadowRoot) {
+      for (const c of node.shadowRoot.childNodes) s += ' ' + VIKI.deepText(c, depth + 1);
+    }
+    for (const c of node.childNodes) s += ' ' + VIKI.deepText(c, depth + 1);
+    return s.replace(/\s+/g, ' ').trim();
+  },
+
   text(el) {
     if (!el) return '';
     return (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();

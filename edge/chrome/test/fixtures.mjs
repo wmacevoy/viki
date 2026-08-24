@@ -51,6 +51,17 @@ class El {
     return out;
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  /* attachShadow, small enough to reason about: a shadow root is just another
+   * El whose children are hidden from the light-DOM query above. */
+  attachShadow(kids) { this.shadowRoot = new El('#shadow', {}, '', kids); return this.shadowRoot; }
+  /* deepText walks childNodes looking for nodeType 3, so this shim's own text
+   * has to appear as one -- otherwise every element reads as empty and the
+   * test fails for a reason that has nothing to do with the code under test. */
+  get childNodes() {
+    return this._text ? [{ nodeType: 3, nodeValue: this._text }, ...this.kids] : this.kids;
+  }
+  get nodeType() { return 1; }
+  get tagName() { return this.tag.toUpperCase(); }
 }
 
 function mount(root, pathname = '/channels/@me/1098287202703790190') {
@@ -277,6 +288,63 @@ console.log('== the redirect cases, found by loading it in Chrome ==');
   VIKI._misses = {};
   discordScan(); discordScan(); discordScan();
   t('D11 the FRIENDS page is silence, not a message list and not blind', sent.length === 0);
+}
+
+console.log('== shadow DOM (D2L) ==');
+{
+  /* Both bugs below were found live on d2l.coloradomesa.edu, 2026-08-24, and
+   * both are SILENT: each one reports an empty page rather than an error. */
+  const deepAll = (sel, root, out, seen) => {
+    out = out || []; seen = seen || new Set(); root = root || document;
+    if (seen.has(root)) return out; seen.add(root);
+    if (root.shadowRoot) deepAll(sel, root.shadowRoot, out, seen);
+    try { root.querySelectorAll(sel).forEach(e => out.push(e)); } catch (_) {}
+    let all = []; try { all = root.querySelectorAll('*'); } catch (_) {}
+    for (const e of all) if (e.shadowRoot) deepAll(sel, e.shadowRoot, out, seen);
+    return out;
+  };
+  const deepText = (node, depth) => {
+    depth = depth || 0;
+    if (!node || depth > 12) return '';
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+    const tag = node.tagName;
+    if (tag === 'STYLE' || tag === 'SCRIPT' || tag === 'TEMPLATE') return '';
+    let s = '';
+    if (node.shadowRoot) for (const c of node.shadowRoot.childNodes) s += ' ' + deepText(c, depth + 1);
+    for (const c of node.childNodes) s += ' ' + deepText(c, depth + 1);
+    return s.replace(/\s+/g, ' ').trim();
+  };
+
+  /* A table whose rows live in its OWN shadow root -- exactly D2L's
+   * d2l-quick-eval-submissions-table. The pre-fix deepAll found 0 of 20. */
+  const table = new El('d2l-quick-eval-submissions-table');
+  table.attachShadow([
+    new El('table', {}, '', [ new El('tbody', {}, '', [
+      new El('tr', {}, 'Noah Foli repo CSCI365-001-21618 Data Mining 8/20/2026 9:38 AM'),
+      new El('tr', {}, 'Ethan Talbert repo CSCI365-001-21618 Data Mining 8/20/2026 9:41 AM')
+    ])])
+  ]);
+  const root = new El('body', {}, '', [table]);
+  mount(root, '/d2l/le/12904/quickeval/');
+  /* 'tr' rather than 'tbody tr': this shim's matches() handles one simple
+   * selector, not combinators. The property under test is the shadow descent,
+   * not the selector engine. */
+  const found = deepAll('tr', table);
+  t('S1 deepAll descends into the ROOT element\'s own shadow root', found.length === 2);
+  t('S2 rows carry learner, activity, course and date',
+    /CSCI365.*8\/20\/2026/.test(deepText(found[0])));
+
+  /* A component whose text is inside its own shadow root AND whose shadow root
+   * begins with a <style> block -- both true of d2l-activity-name. The first
+   * attempt extracted ":host { display: block; }..." as a notification. */
+  const name = new El('d2l-activity-name');
+  name.attachShadow([
+    new El('style', {}, ':host { display: block; } .icon { color: red; }'),
+    new El('span', {}, 'repo')
+  ]);
+  t('S3 deepText reads through a shadow root', deepText(name) === 'repo');
+  t('S4 ...and does NOT return the component CSS', !/host|display/.test(deepText(name)));
 }
 
 console.log('== dedupe ==');

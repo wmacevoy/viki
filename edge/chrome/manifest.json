@@ -10,7 +10,8 @@
   "host_permissions": [
     "http://127.0.0.1/*",
     "https://www.facebook.com/*",
-    "https://discord.com/*"
+    "https://discord.com/*",
+    "https://d2l.coloradomesa.edu/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -37,6 +38,16 @@
       "js": [
         "content/common.js",
         "content/discord.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://d2l.coloradomesa.edu/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/d2l.js"
       ],
       "run_at": "document_idle"
     }

@@ -108,6 +108,39 @@ mention detection. Navigating directly to a DM URL bounced to `/login` — the
 logged-out detection fired correctly, which is something, but the message path
 has never met a real channel. Expect it to be wrong.
 
+### D2L: the surface was wrong, and shadow DOM hid everything
+
+Two lessons, in order of importance.
+
+**The wrong surface.** The first D2L extractor read course *announcements* —
+things Warren **sent**. He uses D2L almost exclusively for assignment
+management, so the promise surface is **Quick Eval**: learner submissions
+awaiting his evaluation. Work he **owes**, each with a date. Rewritten to target
+`/d2l/le/<orgUnit>/quickeval/`; one row reads
+`<learner> repo CSCI365-001-21618 Data Mining 8/20/2026 9:38 AM`.
+**Verified live: 20 rows found, 20 captured.**
+
+**Shadow DOM, in two separate ways, both silent.** D2L renders through 63 open
+shadow roots.
+
+1. *Finding* elements needs a piercing walk — a flat `querySelectorAll('a[href]')`
+   finds 19 links where a piercing one finds 84, and `document.body.innerText`
+   returns 364 characters for a full page.
+2. *Reading* them needs a piercing text function too, which is easy to miss
+   because step 1 appears to work. Every `d2l-activity-name` was located
+   correctly and every one returned `""` from `innerText`, because its text is
+   inside its own shadow root. And `deepText` must skip `STYLE` — the first
+   attempt extracted `":host { display: block; }…"` as a notification.
+
+Then a third, found only by running it: **`deepAll` must descend into the
+root's own shadow root.** Given `deepAll('tbody tr', table)` where `table` is a
+custom element, the light-DOM query returns nothing, the `*` walk returns
+nothing, and the function reports **0 rows from a table holding 20**. All three
+failures report an *empty page* rather than an error, which is exactly the class
+this reader is built to make visible.
+
+Fixtures S1–S4 pin them.
+
 ## Limits, stated rather than discovered
 
 - **Discord reads only the channel you have open.** It does not enumerate
