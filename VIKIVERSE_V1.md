@@ -327,6 +327,65 @@ By value per unit of work, not dependency:
 
 ---
 
+## 5b. Roadmap
+
+Four phases. The split is **what is blocked on a decision** versus what is not —
+because the substrate is essentially done and the remaining risk is choices, not
+code.
+
+### Phase 0 — now. Nothing blocks it.
+
+| | work | why now |
+|---|---|---|
+| P0.1 | **Promise ledger** (§2.1, §2.2, §2.2b) | `viki_note` already has `who`/`due`/`state`/`closes`/`claimed`/`lease`/`challenge`. Needs a ledger view, agent identity wired in, and supersession queryable as history. No new schema, no external answers. |
+| P0.2 | **Provenance** (§2.8) — `viki when`, `viki since` | A join over `mlink`/`event`, tables Fossil already keeps open. No model, no epoch bump. Answers the questions an agent asks most. |
+| P0.3 | **Verse hygiene** | Eight projects still refuse to index (`darter`, `data-mine-wmacevoy`, `flutter`, +5): each needs a `.vikiignore` naming its dependency tree. An afternoon. |
+| P0.4 | **Retrieval quality at verse scale** | The real open risk — see below. |
+
+**P0.4 is the one that could reorder everything.** At 139,000 chunks, MiniLM's
+cosine is doing work it is mediocre at: it scores register and form over
+referent, which is measurable (a true contradiction scored 0.268 while an
+unrelated distractor scored 0.420). Coverage is solved; ranking is now the
+binding constraint. D-11 makes the model an explicit epoch bump, so this is a
+deliberate, testable change with `test/retrieval-eval.sh` as the gate — **not**
+an index problem, and reaching for ANN here would buy faster mediocre answers.
+
+### Phase 1 — needs answers to Q5 and Q6.
+
+| | work | blocked on |
+|---|---|---|
+| P1.1 | **Calendar ingest** (§2.3) | Q5 — which calendars, concretely |
+| P1.2 | **Notification ingest** (§2.3) | Q5 — which sources |
+| P1.3 | **The clock: morning brief** (§2.4) | Q6 — what it does when unsure |
+| P1.4 | **Coverage reporting** (§2.5) | ships with P1.3 or the brief cannot be trusted |
+
+This phase is where it stops being a search tool. P1.3 is the first thing you
+would actually *feel*.
+
+### Phase 2 — needs Q1, Q2, Q3.
+
+| | work | blocked on |
+|---|---|---|
+| P2.1 | **API contract frozen** (§2.11) | Q3 — Fossil accounts or tokens |
+| P2.2 | **Auth beyond loopback** | Q3, and Q2 if other people are in a tribe |
+| P2.3 | **vikiverse.net stands up** | Q1 — hub, directory, or download |
+| P2.4 | **Close the capture loop** (§2.6) | partly Q1: where a phone's captures go |
+
+### Phase 3 — post-v1, and deliberately so.
+
+Flutter over `dart:ffi` and a device as a real Fossil peer (Q4); federation
+between tribes; revocation as a real operation rather than a documented re-key.
+
+### What is already done, so it does not get re-litigated
+
+Substrate: retrieval core with three legs; nine indexed artifact classes;
+encryption end to end; age-compatible key custody with `identity.db` and a tribe
+registry; the wasm edge, hybrid and encrypted, several tribes at once; an
+installable PWA; snapshot pull over HTTPS; and the verse — 110 projects, one
+question. Tests: m1 90/0/0, plus nine probes.
+
+---
+
 ## 6. Questions only Warren can answer
 
 1. **Is `vikiverse.net` a hub, a directory, or a download?** Changes the trust
