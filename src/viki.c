@@ -38,6 +38,11 @@ static void usage(void){
         "                           retired, because it deliberately does not look at what\n"
         "                           did not change.\n"
         "  ask \"<query>\" [--k N]    Hybrid BM25+vector search (default N=5); BM25-only if no model found.\n"
+        "  sql \"<SELECT ...>\" [--json]\n"
+        "                           THE RAW SURFACE: direct SQL over the cache, READ-ONLY, with\n"
+        "                           the vector function registered. Stock sqlite3 cannot call\n"
+        "                           ndvss_cosine_similarity_f() -- this is the only place it\n"
+        "                           exists, so without this an agent cannot query vectors at all.\n"
         "  coverage [--json]        Which sources fed the corpus and when each was last seen.\n"
         "                           A QUERY, not a judgment: no staleness thresholds and no\n"
         "                           advice -- those are policy, and policy lives in assistant/.\n"
@@ -325,6 +330,19 @@ int main(int argc, char **argv){
         rc = viki_cmd_promises(db, zMe, zHorizon, bAll);
         sqlite3_close(db);
         return rc;
+    }
+
+    if( strcmp(sub, "sql") == 0 ){
+        int bJson = 0, i;
+        if( argc < 3 ){
+            fprintf(stderr, "usage: viki sql \"<SELECT ...>\" [--json]\n"
+                            "  Read-only. ndvss_cosine_similarity_f() is available here and\n"
+                            "  NOWHERE ELSE -- a stock sqlite3 opening the cache cannot call it.\n");
+            return 1;
+        }
+        for( i = 3; i < argc; i++ ) if( strcmp(argv[i], "--json") == 0 ) bJson = 1;
+        /* No ensure_viki_dir(): asking a question must never create a cache. */
+        return viki_cmd_sql(VIKI_DEFAULT_CACHE_DB, argv[2], bJson);
     }
 
     if( strcmp(sub, "coverage") == 0 ){

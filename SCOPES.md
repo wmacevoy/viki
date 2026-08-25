@@ -36,9 +36,9 @@ read-only wasm tier, next to `chrome/`, which is a connector.
 
 ---
 
-## 1. The correction that matters most
+## 1. Two corrections, and the second undoes half of the first
 
-**The foundation is STATE MANAGEMENT, not retrieval.**
+### 1a. The foundation is STATE MANAGEMENT, not retrieval.
 
 This document previously behaved as though viki were "the thing that does
 semantic search". That framing puts the boundary in the wrong place, and it is
@@ -49,6 +49,37 @@ and every other projection looks like a stranger.
 State is: **private** (SQLCipher end to end), **distributed** (Fossil sync),
 **optionally offline** (`caching = {none, optional, required}`), and
 **content-addressed** (a hash is the citable identity).
+
+### 1b. But STATE INCLUDES SEARCH — reduction by question is not a layer above it
+
+> *"state includes search — there must be a way to reduce a state by a question,
+> otherwise retrieval becomes impossible."* — Warren, 2026-08-25
+
+The first draft of this file put retrieval in L1 and state in L0, which draws
+the line in a place that cannot hold. **A state store you cannot reduce by a
+question is a bucket, not a store.** SQL is the canonical case: a database is
+state *and* query, and nobody calls the query engine a projection over the
+tables.
+
+So the levels below are **not** state-then-search. They are one store with a
+**gradient of abstraction over the same reduction**:
+
+    RAW        direct SQL and vector queries.  Full power, no opinions.
+    CURATED    ask, grep, muse, promises, why, coverage.  Convenience.
+    DELIVERED  cli · http api · mcp · wasm.  How either reaches a caller.
+
+**Agents belong at RAW, and until 2026-08-25 they could not get there.** A stock
+`sqlite3` opening `.viki/cache.db` gets `no such function:
+ndvss_cosine_similarity_f` — the vector engine is statically linked into viki
+and registered at open, so viki's own process is the only place a vector query
+can run. Without a sanctioned entry point the raw layer was not inconvenient, it
+was *unreachable*, and `ask` was the only way to ask anything. `viki sql` exists
+because of this correction.
+
+**The curated verbs are conveniences, not gatekeepers.** `ask` is a good default
+and must never be the only door. An agent that wants a different fusion, a
+different filter, or a join viki never anticipated should write the query, and
+the schema is the contract.
 
 ---
 
@@ -63,11 +94,16 @@ Append-only, synced, survives being offline. Nothing here interprets anything.
 
 ### L1 — PROJECTIONS. Derived, disposable, rebuildable (D-10).
 
-Everything computed *from* state. Never truth; deletable at any time; rebuilt by
-re-indexing. **Retrieval is one of these, not the foundation.**
+Everything computed *from* state, **including the structures that make search
+possible**. Never truth; deletable at any time; rebuilt by re-indexing.
 
     the chunk index + embeddings · the note ledger · source coverage
     the FTS index · viki_source liveness
+
+Note the distinction §1b forces: the *index* is a projection, but the *ability
+to reduce state by a question* is not a layer — it is what L0 and L1 are for.
+Deleting the index costs speed and recall; it does not turn viki into something
+that cannot answer.
 
 ### L2 — INTERFACES. Peers, all thin.
 
@@ -76,7 +112,12 @@ project has wrong today. The CLI is primary and the HTTP API is a wrapper
 around the same core, which is right; MCP must join as a *third face on the
 same functions*, not as a wrapper around the CLI.
 
-    cli · http api · mcp (not built) · wasm edge (read-only)
+    RAW      viki sql (direct SQL + vector, read-only)
+    CURATED  ask · grep · muse · promises · why · coverage · capture
+    FACES    cli · http api · mcp (not built) · wasm edge (read-only)
+
+Every face should carry both rungs. An MCP server exposing only `ask` would
+recreate exactly the gate §1b just removed.
 
 The rule that keeps them honest: `viki_ask_query()` is the single
 implementation, and every face is a thin caller. When two faces can disagree
@@ -164,6 +205,39 @@ worth doing in one deliberate commit rather than piecemeal.
 
 ---
 
+## 6b. The canonical shape: robot → agent → viki
+
+> *"a robot scrapes outlook emails, passes them to an agent for
+> categorization/tagging, and stores the 'not junk' versions in the viki
+> personal digital assistant tribe for search and retrieval. That last story is
+> specific to me. vikiverse is a generalized tool for this kind of problem."*
+> — Warren, 2026-08-25
+
+    ROBOT            scrapes.  Mechanical, no judgment.       L3 producer
+      ↓
+    AGENT            categorises, tags, discards junk.        L3
+      ↓
+    viki (a tribe)   stores what survived; answers about it.  L0–L2
+      ↓
+    ACTIONS          search, retrieval, the brief.            L3 consumer
+
+**The judgment happens BEFORE storage, and that is the load-bearing detail.**
+viki is not filtering the junk — an agent already did, and viki holds the
+result. Which is why viki needs no opinion about what junk is, and why a
+`--junk-threshold` flag would be a scope violation rather than a feature.
+
+It also explains why connectors are **agent-specific** rather than viki
+plugins: the robot that scrapes Outlook and the agent that tags it are Warren's
+choices about Warren's mail, and someone else's tribe will use different ones
+for the same reason their calendar is not his. That is what "leverages other
+toolchains" buys — nanoclaw already has the robots.
+
+**And it settles §7.3:** this pipeline is Warren's instance; **vikiverse is the
+generalized tool for the class of problem.** So `vikiverse` names the product,
+and the network of tribes needs its own word or none at all.
+
+---
+
 ## 7. Open questions
 
 1. **Is "viki" the right name for L0–L2 together**, or does the state layer
@@ -173,5 +247,11 @@ worth doing in one deliberate commit rather than piecemeal.
 2. **Does `assistant/` stay in this repo?** It is L3 and explicitly not viki.
    Keeping it here makes the boundary legible; moving it out makes it
    enforceable.
-3. **Is `vikiverse` the product name or the network name?** It is being used
-   for both, and §4 asserts a split that has not actually been decided.
+3. ~~Is `vikiverse` the product name or the network name?~~ **Settled 2026-08-25:
+   the product.** "vikiverse is a generalized tool for this kind of problem."
+   The set of tribes on one device is *the verse*; whether that word survives
+   contact with anyone but us is a separate question.
+4. **Should `viki sql` be exposed over HTTP and MCP too?** §2 says every face
+   should carry both rungs, which argues yes. Against: an HTTP-reachable SQL
+   console is a much larger surface than `/api/ask`, even read-only, and
+   loopback is thinner protection than a CLI a person typed.

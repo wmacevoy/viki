@@ -225,3 +225,104 @@ int viki_db_open(const char *zPath, sqlite3 **out){
 
     return SQLITE_OK;
 }
+
+/* ---- the raw query surface ------------------------------------------- */
+
+static void sql_json_escape(const char *z){
+    const unsigned char *p = (const unsigned char*)z;
+    for( ; p && *p; p++ ){
+        switch( *p ){
+            case '"':  fputs("\\\"", stdout); break;
+            case '\\': fputs("\\\\", stdout); break;
+            case '\n': fputs("\\n", stdout); break;
+            case '\r': fputs("\\r", stdout); break;
+            case '\t': fputs("\\t", stdout); break;
+            default:
+                if( *p < 0x20 ) printf("\\u%04x", *p);
+                else putchar(*p);
+        }
+    }
+}
+
+int viki_cmd_sql(const char *zPath, const char *zSql, int bJson){
+    sqlite3 *db = NULL;
+    sqlite3_stmt *st = NULL;
+    int rc = 1, nRow = 0, i, nCol;
+
+    viki_db_register_ndvss();
+    /* READONLY is the whole safety story, and it is structural: SQLite
+    ** enforces it, so no statement -- however clever -- can write. */
+    if( sqlite3_open_v2(zPath, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK ){
+        fprintf(stderr, "viki sql: cannot open %s read-only: %s\n",
+                zPath, db ? sqlite3_errmsg(db) : "(no db)");
+        if( db ) sqlite3_close(db);
+        return 1;
+    }
+    if( sqlite3_prepare_v2(db, zSql, -1, &st, NULL) != SQLITE_OK ){
+        fprintf(stderr, "viki sql: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return 1;
+    }
+    nCol = sqlite3_column_count(st);
+    if( bJson ) printf("[");
+    for(;;){
+        int step = sqlite3_step(st);
+        if( step == SQLITE_DONE ) break;
+        if( step != SQLITE_ROW ){
+            /* A WRITE ON A READ-ONLY CONNECTION LANDS HERE, and the first
+            ** version ignored it: `viki sql "DELETE FROM viki_chunk"` refused
+            ** the write, printed nothing, and exited 0. An agent would read
+            ** that as success. SQLite reports it at step rather than prepare,
+            ** which is why checking only the prepare was not enough. */
+            if( bJson ) printf("]\n");
+            fprintf(stderr, "viki sql: %s\n", sqlite3_errmsg(db));
+            if( step == SQLITE_READONLY ){
+                fprintf(stderr, "  the cache is opened READ-ONLY here by design."
+                                " It is a projection (D-10):\n"
+                                "  rebuild it with `viki index`, never repair it"
+                                " through a query console.\n");
+            }
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+            return 1;
+        }
+        if( bJson ){
+            printf("%s{", nRow ? "," : "");
+            for( i = 0; i < nCol; i++ ){
+                const char *name = sqlite3_column_name(st, i);
+                printf("%s\"", i ? "," : "");
+                sql_json_escape(name ? name : "?");
+                printf("\":");
+                switch( sqlite3_column_type(st, i) ){
+                    case SQLITE_NULL:    printf("null"); break;
+                    case SQLITE_INTEGER: printf("%lld", (long long)sqlite3_column_int64(st, i)); break;
+                    case SQLITE_FLOAT:   printf("%.17g", sqlite3_column_double(st, i)); break;
+                    case SQLITE_BLOB:    printf("\"<%d bytes>\"", sqlite3_column_bytes(st, i)); break;
+                    default:
+                        printf("\"");
+                        sql_json_escape((const char*)sqlite3_column_text(st, i));
+                        printf("\"");
+                }
+            }
+            printf("}");
+        }else{
+            for( i = 0; i < nCol; i++ ){
+                const unsigned char *v = sqlite3_column_text(st, i);
+                /* A BLOB rendered as text is a screenful of binary; an
+                ** embedding is 1536 bytes of it. Say what it is instead. */
+                if( sqlite3_column_type(st, i) == SQLITE_BLOB ){
+                    printf("%s<%d bytes>", i ? "|" : "", sqlite3_column_bytes(st, i));
+                }else{
+                    printf("%s%s", i ? "|" : "", v ? (const char*)v : "");
+                }
+            }
+            printf("\n");
+        }
+        nRow++;
+    }
+    if( bJson ) printf("]\n");
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    rc = 0;
+    return rc;
+}

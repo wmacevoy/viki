@@ -88,6 +88,15 @@ build/dist/viki promises [--me NAME] [--horizon 7d] [--all]
                                          # `--closes` is excluded, which is the property a
                                          # ledger cannot do without. Ordered by due, not by
                                          # write time. States its own coverage every run.
+build/dist/viki sql "<SELECT ...>" [--json]
+                                         # THE RAW SURFACE. Read-only SQL over the cache with
+                                         # the vector function registered -- and this is the
+                                         # ONLY place it exists: a stock `sqlite3` opening
+                                         # cache.db gets `no such function:
+                                         # ndvss_cosine_similarity_f`, so without this an agent
+                                         # cannot do a vector query at all and `ask` is the
+                                         # only door. READONLY is structural (SQLite enforces
+                                         # it), not parsed; a refused write reports and exits 1
 build/dist/viki coverage [--json]         # which sources fed the corpus and when each was
                                          # last seen. A QUERY WITH NO JUDGMENT IN IT: no
                                          # staleness threshold, no advice. The moment it
