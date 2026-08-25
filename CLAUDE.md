@@ -4,6 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Orientation
 
+**Read `SCOPES.md` when you are about to add something and are not sure where
+it goes.** It is the four-level split -- state, projections, interfaces,
+connectors -- and the one-line test that decides: *can viki compute this without
+an opinion?* If not, it is a connector and does not belong in `src/`. That
+boundary got crossed twice in a single day before it had a name, and both times
+the code was reasonable and the placement was not.
+
 **Read `AGENTS.md` first.** It is the current-state snapshot — what exists, what
 is verified end to end, and what is not yet built — and is kept current in the
 same commit as any code change that makes it stale. `KICKOFF.md` has the full
