@@ -94,6 +94,29 @@ OUT=$(printf 'pass one\n' | "$I" tribe key other --db id.db 2>&1 || true)
 case "$OUT" in *"$TK"*) no "R5 another identity's tribe opened with the wrong passphrase" ;;
                     *) ok "R5 CONTROL: a tribe owned by another identity needs ITS passphrase" ;; esac
 
+echo "== identity.db is PRIVATE: refused by code, not by convention =="
+# SYNC.md classes blobs derived / grow-only / owned / private. `private` is the
+# only class with no safe sync at any frequency, and identity.db is the live
+# case: passphrase-wrapped private keys inside a container whose key is public
+# by design (QUEUE 49 keeps it for the per-page HMAC). Publishing it hands every
+# wrapped key to an offline attacker with no rate limit.
+cp id.db identity.db 2>/dev/null || :
+# `|| rc=$?` rather than a bare call: this probe runs under `set -e`, and the
+# command under test is REQUIRED to fail -- without the guard the suite dies at
+# exactly the assertion that is passing. Same trap promise-probe.sh hit.
+rc=0
+"$ROOT/build/dist/viki" cache push identity.db >/dev/null 2>&1 || rc=$?
+if [ "$rc" -ne 0 ]; then ok "R6 pushing identity.db is REFUSED (exit nonzero)"
+else no "R6 pushing identity.db was ALLOWED"; fi
+OUT=$("$ROOT/build/dist/viki" cache push identity.db 2>&1 || true)
+case "$OUT" in *"REFUSING to publish"*) ok "R7 ...and says why, naming it a private blob" ;;
+                                     *) no "R7 refused without explaining" ;; esac
+# The control that keeps R6 from passing for the wrong reason: a NON-private
+# path must fail differently (or succeed), not with the same refusal.
+OUT2=$("$ROOT/build/dist/viki" cache push /nonexistent/cache.db 2>&1 || true)
+case "$OUT2" in *"REFUSING to publish"*) no "R8 CONTROL: a normal path was also refused as private" ;;
+                                      *) ok "R8 CONTROL: a normal path is not refused as private" ;; esac
+
 echo "== interop with stock age (the reason for this format) =="
 if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   "$W" keygen > id.txt

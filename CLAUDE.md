@@ -603,5 +603,17 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   delete every `ckin:` row. Never widen that scope casually — "delete everything not seen this
   run" wipes the cache on any subdirectory index or on any machine without a
   `fossil` binary. See `sweep_sources()` in `src/viki_index.c` and FINDINGS.md.
+- **What may sync is a policy, and `SYNC.md` is it.** Four classes: `derived`
+  (rebuildable — latest-wins is safe), `grow-only` (immutable rows on a content
+  key — union IS merge, so multi-writer is safe), `owned` (one declared writer),
+  `private` (**never syncs**). An undeclared blob must be refused, not guessed
+  at, because the guess is latest-wins and that loses data silently. Two
+  measured facts drive it: `uv` is latest-wins by mtime across peers whose
+  clocks disagree, and **encrypting the same database twice with the same key
+  produces different bytes** (SQLCipher salts per database) — so encrypted blobs
+  cannot be diffed, deduped or delta-synced, and every sync is a full transfer.
+  That is the strongest argument for keeping truth in Fossil artifacts, which
+  merge and carry history, rather than in blobs. `identity.db` is `private` and
+  `viki_cache_refuse_private()` now enforces it in code rather than in prose.
 - **Out of scope for Milestone 1**: Flutter app, VPS deployment, calendar
   projection, voice, MCP server. Do not start them.

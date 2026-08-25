@@ -24,6 +24,42 @@
 ** next time -- rather than advertising an epoch whose bytes never
 ** arrived. Pull mirrors it: manifest installed only after the blobs it
 ** names are on disk and checksum-verified. */
+/* REFUSE TO PUBLISH A PRIVATE BLOB.
+**
+** SYNC.md classes a blob as derived / grow-only / owned / private, and private
+** is the only class with no safe sync at any frequency. identity.db holds
+** private keys each wrapped under a passphrase, inside a SQLCipher container
+** whose key is PUBLIC by design -- QUEUE 49 keeps the known key for its
+** per-page HMAC (tamper detection), not for secrecy. Publishing it hands every
+** wrapped key to anyone with repo read access, to attack offline at leisure
+** with no rate limit.
+**
+** Matched on the BASENAME so a path dressed up as ../../identity.db is caught.
+** A check in code rather than a line in a document, because SYNC.md already
+** says so and a document cannot refuse. */
+int viki_cache_refuse_private(const char *zPath){
+    static const char *azPrivate[] = {
+        "identity.db", "identity.db-wal", "identity.db-journal", "identity.db-shm", NULL
+    };
+    const char *base;
+    int i;
+    if( !zPath ) return 0;
+    base = strrchr(zPath, '/');
+    base = base ? base + 1 : zPath;
+    for( i = 0; azPrivate[i]; i++ ){
+        if( strcmp(base, azPrivate[i]) == 0 ){
+            fprintf(stderr,
+                "viki: REFUSING to publish '%s'.\n"
+                "  It is a PRIVATE blob (SYNC.md): passphrase-wrapped private keys inside a\n"
+                "  container whose key is public by design, so publishing hands every wrapped\n"
+                "  key to anyone with repo read access to attack offline.\n"
+                "  Private blobs have no safe sync at any frequency.\n", zPath);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static const struct {
     const char *zBase;    /* file name inside the model directory */
     const char *zUv;      /* stable unversioned-file name */
@@ -353,6 +389,7 @@ static int push_model(const char *zFossil){
     for( i = 0; i < VIKI_N_MODEL_FILE; i++ ){
         char *argvAdd[] = { (char*)zFossil, "uv", "add", zLocal[i], "--as",
                             (char*)aModelFile[i].zUv, NULL };
+        if( viki_cache_refuse_private(zLocal[i]) ){ rc = 1; break; }
         fprintf(stderr, "viki cache push:   %-30s %s\n", aModelFile[i].zUv,
                 fmt_mb(file_size(zLocal[i]), zSize, sizeof(zSize)));
         if( run(argvAdd) != 0 ){
@@ -513,6 +550,11 @@ int viki_cmd_cache_push_opts(const char *zCacheDbPath, unsigned mFlags){
     char zSnap[2048];
     char *argvAdd[7];
     int rc, rcModel = 0;
+
+    /* Refuse a private blob BEFORE snapshotting it -- a snapshot of identity.db
+    ** is still identity.db, and leaving a decrypted-ish copy on disk on the way
+    ** to a refusal would be its own small leak. */
+    if( viki_cache_refuse_private(zCacheDbPath) ) return 1;
 
     /* Snapshot first -- never publish the live WAL-backed file. See
     ** cache_snapshot(). */

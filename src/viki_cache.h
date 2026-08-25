@@ -61,3 +61,19 @@ const char *viki_fossil_user(void);
 const char *viki_model_dir(void);
 
 #endif
+
+/* REFUSE TO PUBLISH A PRIVATE BLOB. Returns 1 (and explains) when zPath names
+** something that must never leave a device -- today that is identity.db and
+** its journals.
+**
+** SYNC.md classes a blob as derived / grow-only / owned / private, and private
+** is the only one with no safe sync at any frequency. identity.db holds
+** private keys each wrapped under a passphrase, inside a SQLCipher container
+** whose key is PUBLIC by design (QUEUE 49: the known key is kept for its
+** per-page HMAC, i.e. tamper detection, not for secrecy). Publishing it hands
+** every wrapped key to anyone with repo read access, to attack offline at
+** leisure and without a rate limit.
+**
+** A check in code rather than a line in a document, because the document
+** already said so and a document cannot refuse. */
+int viki_cache_refuse_private(const char *zPath);
