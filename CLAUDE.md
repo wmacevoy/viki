@@ -614,6 +614,15 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   cannot be diffed, deduped or delta-synced, and every sync is a full transfer.
   That is the strongest argument for keeping truth in Fossil artifacts, which
   merge and carry history, rather than in blobs. `identity.db` is `private` and
-  `viki_cache_refuse_private()` now enforces it in code rather than in prose.
+  `viki_cache_refuse_private()` enforces it in code rather than in prose.
+  **All of that is a GUARDRAIL, not a security boundary** (SYNC.md 0b): a tribe
+  member holds the key and has SQL — via SQLCipher directly, `libfossilsee`, or
+  plain `fossil` — so viki-layer policy stops accidents and stops nothing else.
+  The layer that *is* defensible is the ARTIFACT layer: artifacts are
+  content-addressed and Merkle-linked, so tampering is detectable by any peer,
+  while `uv` blobs are name-addressed with no hash in the protocol at all. Live
+  consequence: `viki cache pull` reports the model "verified against the epoch
+  pin", but the pin (`viki-manifest.json`) is **itself a uv blob** — so the
+  check catches corruption, not an adversary.
 - **Out of scope for Milestone 1**: Flutter app, VPS deployment, calendar
   projection, voice, MCP server. Do not start them.
