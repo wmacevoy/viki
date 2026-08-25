@@ -75,5 +75,11 @@ const char *viki_model_dir(void);
 ** leisure and without a rate limit.
 **
 ** A check in code rather than a line in a document, because the document
-** already said so and a document cannot refuse. */
+** already said so and a document cannot refuse.
+**
+** IT IS A GUARDRAIL, NOT A SECURITY CONTROL, and calling it one would be
+** theater (SYNC.md 0b). A tribe member holds the key: they can open the repo
+** with SQLCipher directly, link libfossilsee, or just run `fossil uv add` and
+** publish whatever they like. This stops a careless script and a confused
+** agent -- a real and foreseeable failure -- and it stops nothing else. */
 int viki_cache_refuse_private(const char *zPath);

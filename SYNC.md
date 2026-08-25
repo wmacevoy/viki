@@ -49,6 +49,72 @@ none of those, and encrypted blobs cannot even be compared.
 
 ---
 
+## 0b. THIS IS A SAFETY POLICY, NOT A SECURITY BOUNDARY
+
+> *"fossil artifacts seem like the defensible layer. it's why fossil seems like
+> a foundation. anyone linking libfossilsee will have the sqlite api to break
+> synchronization. the rest is security theater."* — Warren, 2026-08-25
+
+Correct, and it applies to code committed an hour before he said it. Everything
+below prevents **mistakes**. Against a tribe member it prevents nothing at all,
+and describing it otherwise would be exactly the theater he names.
+
+**A tribe member holds the key.** They can open the repo with SQLCipher
+directly, link `libfossilsee`, or just run `fossil` — and write anything they
+like into `blob`, `unversioned`, or `event`. `viki_cache_refuse_private()` stops
+a careless script and a confused agent. It does not stop a person, and it was
+never going to.
+
+The distinction worth keeping:
+
+| against | what actually protects |
+|---|---|
+| a **non-member** | SQLCipher. Real, and the only real one. |
+| a **member** | nothing at the viki layer. They have SQL. |
+| an **accident** | policy like §2. Worth having, worth naming correctly. |
+
+### And the asymmetry that makes artifacts the defensible layer
+
+This is the technical content of Warren's point, and it is not a preference:
+
+- **Fossil artifacts are content-addressed and Merkle-linked.** A manifest names
+  its blobs by hash; the sync protocol exchanges artifacts *by hash*. Tampering
+  is therefore **detectable by any peer** — the hash simply will not match.
+- **`uv` blobs are name-addressed and latest-wins.** There is no hash in the
+  protocol and no chain. A receiving peer **cannot distinguish a legitimate new
+  version from a substituted one.**
+
+So the layer that is defensible is the layer whose integrity is checkable
+without trusting the sender. That is artifacts, and it is why Fossil is the
+foundation rather than an implementation detail.
+
+### The circular verification this exposes in viki, today
+
+`viki cache pull` prints `model.onnx sha256 verified against the epoch pin`.
+The pin is `viki-manifest.json` — **which is itself a uv blob**
+(`aModelFile[]`, `viki_cache.c:70`).
+
+    viki-model/model.onnx    uv blob, replaceable
+    viki-model/vocab.txt     uv blob, replaceable
+    viki-model/viki-manifest.json   uv blob, replaceable  <-- attests the two above
+
+An attacker who can replace the model can replace the manifest that vouches for
+it, in the same push. The check catches **corruption and accident**, which is
+worth having and is what D-12 needed. It is not an integrity guarantee, and the
+log line reads as though it were.
+
+**The fix follows directly from the asymmetry:** anchor the blob hashes in a
+**versioned artifact**. Commit `viki-manifest.json` to the repo, and have `pull`
+verify the uv bytes against the *committed* copy rather than the uv copy. Then
+the Merkle chain attests the blobs, the cheap latest-wins channel still carries
+the bytes, and "verified against the epoch pin" becomes true rather than
+circular.
+
+**Not done — it changes D-12's distribution contract** (the manifest stops being
+purely unversioned) and that is Warren's call, not a patch to slip in.
+
+---
+
 ## 1. The test: is the merge decidable *without understanding the data*?
 
 The substrate must not need to know what a table means. That is only satisfiable
@@ -82,6 +148,11 @@ No conflict is possible, because a collision means the rows are equal.
 latest-wins by default, which is the one option that loses data without saying
 so. A tool that refuses is annoying; a tool that silently drops a peer's work is
 not usable at all.
+
+**All four classes are advisory** (§0b). They describe what a *cooperating* peer
+should do, and a peer that ignores them is indistinguishable from one that never
+heard of them. That is not a flaw to fix at this layer — it is the reason truth
+belongs in artifacts.
 
 ### The escape hatch, and it is the important half
 
