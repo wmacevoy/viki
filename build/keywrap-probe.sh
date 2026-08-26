@@ -31,8 +31,8 @@ printf '%s' "$KEY" > tribe.key
 
 echo "== identity.db =="
 "$I" init --db id.db >/dev/null
-PUB=$(printf 'pass one\n' | "$I" add warren --db id.db)
-PUB2=$(printf 'pass two\n' | "$I" add agent  --db id.db)
+PUB=$(printf 'pass one\n' | "$I" add warren --db id.db 2>/dev/null)
+PUB2=$(printf 'pass two\n' | "$I" add agent  --db id.db 2>/dev/null)
 case "$PUB" in age1*) ok "W1 add mints an age recipient" ;; *) no "W1 (got '$PUB')" ;; esac
 
 # The container is SQLCipher under a KNOWN key: the secrecy is per-identity,
@@ -93,6 +93,40 @@ case "$OUT" in *"$TK"*) no "R4 a wrong passphrase still yielded the key" ;;
 OUT=$(printf 'pass one\n' | "$I" tribe key other --db id.db 2>&1 || true)
 case "$OUT" in *"$TK"*) no "R5 another identity's tribe opened with the wrong passphrase" ;;
                     *) ok "R5 CONTROL: a tribe owned by another identity needs ITS passphrase" ;; esac
+
+echo "== signing: authority, where the Merkle chain gives only integrity =="
+# Warren: "infrastructure versions are signed? i think that closes the loop."
+# A versioned artifact is Merkle-linked, so INTEGRITY is checkable -- nobody can
+# alter it after the fact undetected. But any tribe member can COMMIT one, so
+# integrity is not authority. The signature is the missing half.
+printf 'pass one\n' | "$I" add signer --db id.db >/dev/null 2>&1
+SPUB=$("$I" signpub signer --db id.db 2>/dev/null || true)
+case "$SPUB" in ?*) ok "S1 an identity mints an ed25519 signing key" ;;
+                 *) no "S1 no signing key minted" ;; esac
+
+printf '{"model_id":"epoch-1","model_sha256":"deadbeef"}' > pin.json
+SIG=$(printf 'pass one\n' | "$I" sign signer -i pin.json --db id.db 2>/dev/null || true)
+case "$SIG" in ?*) ok "S2 it signs an epoch pin" ;; *) no "S2 signing produced nothing" ;; esac
+
+# VERIFICATION MUST NEED NO KEYS AND NO PASSPHRASE -- a peer checking a pin
+# holds nothing, and if verifying required a secret it would be useless.
+if "$I" verify -p "$SPUB" -i pin.json -s "$SIG" >/dev/null 2>&1
+then ok "S3 verification needs NO identity.db and NO passphrase"
+else no "S3 verification failed on a good signature"; fi
+
+printf '{"model_id":"epoch-1","model_sha256":"deadbeee"}' > pin.json
+rc=0; "$I" verify -p "$SPUB" -i pin.json -s "$SIG" >/dev/null 2>&1 || rc=$?
+if [ "$rc" -ne 0 ]; then ok "S4 CONTROL: one changed byte fails verification"
+else no "S4 tampered file still verified"; fi
+
+# A DIFFERENT signer must not verify -- otherwise the signature proves nothing
+# about WHO, which is the only thing it was added for.
+printf 'pass two\n' | "$I" add other --db id.db >/dev/null 2>&1
+OPUB=$("$I" signpub other --db id.db 2>/dev/null || true)
+printf '{"model_id":"epoch-1","model_sha256":"deadbeef"}' > pin.json
+rc=0; "$I" verify -p "$OPUB" -i pin.json -s "$SIG" >/dev/null 2>&1 || rc=$?
+if [ "$rc" -ne 0 ]; then ok "S5 CONTROL: another identity's key does not verify it"
+else no "S5 a different signer verified -- the signature proves nothing about who"; fi
 
 echo "== identity.db is PRIVATE: refused by code, not by convention =="
 # SYNC.md classes blobs derived / grow-only / owned / private. `private` is the

@@ -17,6 +17,22 @@
 ** must find them), so they are spelled out here once and nowhere else. */
 #define VIKI_UV_MODEL_MANIFEST "viki-model/viki-manifest.json"
 
+/* THE VERSIONED EPOCH PIN, in the checkout rather than in uv.
+**
+** Warren, 2026-08-25: "state is artifacts. infrastructure is versioned
+** artifacts." The model BYTES are neither -- they are 23MB of derived,
+** replaceable payload, and D-12 puts them in uv for exactly that reason. The
+** PIN is infrastructure: it declares which epoch this tribe is on, and that
+** claim has to be checkable.
+**
+** Verifying uv bytes against a uv manifest is circular: whoever can replace
+** model.onnx replaces the manifest vouching for it in the same push, and
+** neither carries a hash in the sync protocol. A VERSIONED file is
+** content-addressed and Merkle-linked through its check-in manifest, so a peer
+** can detect substitution without trusting the sender. Same bytes, same
+** channel, an attestation that is worth something. */
+#define VIKI_VERSIONED_MANIFEST "viki-model.json"
+
 /* Push order is deliberate: blobs first, MANIFEST LAST. The manifest is
 ** the epoch pin (VIKI_DESIGN.md), and it is also what the skip-if-
 ** unchanged check below reads, so an interrupted push that got the model
@@ -399,6 +415,29 @@ static int push_model(const char *zFossil){
             break;
         }
     }
+
+    /* PUBLISHING AN EPOCH IS AN INFRASTRUCTURE CHANGE, so it leaves a versioned
+    ** declaration behind. Written, not committed: a commit on someone's behalf
+    ** is a surprise, and the pin is only meaningful once a human has put it in
+    ** the timeline deliberately. Until then `pull` says so out loud. */
+    if( rc == 0 ){
+        unsigned char *pMan = read_whole_file(zLocal[VIKI_MANIFEST_IX], NULL);
+        if( pMan ){
+            FILE *f = fopen(VIKI_VERSIONED_MANIFEST, "wb");
+            if( f ){
+                fputs((const char*)pMan, f);
+                fclose(f);
+                fprintf(stderr,
+                    "viki cache push:\n"
+                    "viki cache push:   wrote %s -- COMMIT IT to make the epoch pin verifiable.\n"
+                    "viki cache push:     fossil add %s && fossil commit -m 'model epoch %s'\n"
+                    "viki cache push:   Until it is committed, a puller verifies the model against\n"
+                    "viki cache push:   a uv blob that whoever replaced the model could also replace.\n",
+                    VIKI_VERSIONED_MANIFEST, VIKI_VERSIONED_MANIFEST, zModelId);
+            }
+            free(pMan);
+        }
+    }
     return rc;
 }
 
@@ -615,6 +654,17 @@ static int pull_model(const char *zFossil){
     long long nTotal = 0;
     int i;
 
+    /* PREFER THE VERSIONED PIN. If the checkout carries viki-model.json, that
+    ** is the epoch declaration and it is Merkle-attested; the uv copy is then
+    ** only a convenience for peers who have not pulled the checkout yet. */
+    pManifest = read_whole_file(VIKI_VERSIONED_MANIFEST, NULL);
+    if( pManifest ){
+        fprintf(stderr, "viki cache pull:   epoch pin from %s (versioned, Merkle-attested)\n",
+                VIKI_VERSIONED_MANIFEST);
+        zTmpManifest[0] = 0;
+        goto have_manifest;
+    }
+
     temp_path(zTmpManifest, sizeof(zTmpManifest), "manifest");
     if( uv_export_quiet(zFossil, VIKI_UV_MODEL_MANIFEST, zTmpManifest) != 0 ){
         fprintf(stderr,
@@ -629,6 +679,17 @@ static int pull_model(const char *zFossil){
 
     pManifest = read_whole_file(zTmpManifest, NULL);
     if( !pManifest ){ unlink(zTmpManifest); return 1; }
+    /* Fell back to the uv manifest. Say plainly that the check is circular --
+    ** it still catches corruption, which is what D-12 needed, but a log line
+    ** reading "verified" without this qualification claims more than it can. */
+    fprintf(stderr,
+        "viki cache pull:   epoch pin from uv '%s' -- UNVERIFIED SOURCE.\n"
+        "viki cache pull:     uv is name-addressed and latest-wins, so whoever can replace the\n"
+        "viki cache pull:     model can replace this pin too. The sha256 check below catches\n"
+        "viki cache pull:     CORRUPTION, not substitution. Commit %s to fix that.\n",
+        VIKI_UV_MODEL_MANIFEST, VIKI_VERSIONED_MANIFEST);
+
+have_manifest:
     if( manifest_field((char*)pManifest, "model_id", zModelId, sizeof(zModelId)) != 0 ){
         snprintf(zModelId, sizeof(zModelId), "(unknown)");
     }

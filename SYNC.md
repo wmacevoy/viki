@@ -113,6 +113,75 @@ circular.
 **Not done — it changes D-12's distribution contract** (the manifest stops being
 purely unversioned) and that is Warren's call, not a patch to slip in.
 
+### But a versioned artifact gives INTEGRITY, not AUTHORITY
+
+> *"infrastructure versions are signed? i think that closes the loop."*
+> — Warren, 2026-08-25
+
+It does, and the gap it closes is a real one that §0b's asymmetry does not
+cover on its own. Committing `viki-manifest.json` makes it **tamper-evident**:
+Merkle-linked, hash-addressed, and any alteration after the fact is visible to
+every peer. What it does not make it is **authoritative** — every tribe member
+can commit, so a member pushing a new epoch pin produces an artifact that is
+just as well-formed, just as hash-linked, and just as accepted as the real one.
+
+Integrity answers *"has this changed?"*. Authority answers *"who said it?"*.
+The Merkle chain answers only the first, and an epoch pin is a statement about
+what the tribe should run — a claim that needs an author.
+
+    versioned artifact  ->  nobody can alter it undetected     (integrity)
+    signature           ->  one named identity asserted it     (authority)
+
+So signing is not a second copy of the integrity check. It is the other half,
+and it is why the loop closes here rather than at the commit.
+
+**Built 2026-08-25.** `viki-identity` mints an Ed25519 signing key alongside
+the X25519 recipient, wrapped under the same passphrase-derived unlock key:
+
+```
+viki-identity add warren            # mints both; stdout is the age recipient
+viki-identity signpub warren        # the ed25519 public key
+viki-identity sign warren -i viki-manifest.json     -> base64 signature
+viki-identity verify -p <pub> -i viki-manifest.json -s <sig>
+```
+
+Three properties that are asserted rather than assumed (`build/keywrap-probe.sh`
+S1–S5):
+
+- **Verification needs no identity.db and no passphrase** (S3). A peer checking
+  a pin holds no secret; if verifying required one the whole thing would be
+  unusable at exactly the moment it matters — a fresh clone.
+- **One changed byte fails** (S4), and **a different identity's key does not
+  verify it** (S5). Without S5 the signature would prove only that *something*
+  signed, which is integrity again under a new name.
+
+The keys are deliberately **separate** — X25519 for wrapping, Ed25519 for
+signing — rather than one key doing both. They are two different powers, and an
+identity that may read the tribe key is not automatically one whose epoch pins
+should be believed. They share the unlock key but not the nonce: nonce byte 0
+distinguishes the two wraps, because two plaintexts under one AEAD key with one
+nonce is a catastrophic reuse, not a shortcut.
+
+### What signing does NOT close: the trust anchor
+
+A verifier needs the signer's public key from somewhere, and this is the point
+past which cryptography stops helping. Today that is **trust on first use, with
+history** — the public key lives in `identity.db` and is published like any
+other recipient, so substituting one is possible for anyone who can push.
+
+The mitigation is the same asymmetry as everywhere else in this file: put the
+key list in a **versioned artifact**, and a substitution stops being invisible.
+It becomes a commit, with an author and a timestamp, sitting in a chain that
+cannot be rewritten quietly. That does not prevent it — §0b, a member holds the
+key and has SQL — but it converts an undetectable swap into one that shows up
+in `fossil timeline`. Detection is the achievable goal at this layer;
+prevention was never on offer.
+
+**Not built:** nothing commits the key list yet, and `viki cache pull` does not
+check a signature. Signing exists as a tool; wiring it into the distribution
+path is the next step, and it is the same commit that would fix the circular
+verification above.
+
 ---
 
 ## 1. The test: is the merge decidable *without understanding the data*?

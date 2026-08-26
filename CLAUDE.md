@@ -237,11 +237,21 @@ sh build/promise-probe.sh <empty-dir>       # THE PROMISE LEDGER, 24 assertions.
                                             #   every CONTROL is a `grep -c == 0` and grep exits
                                             #   1 on zero, so set -e would abort the suite
                                             #   exactly when the code was correct
-sh build/keywrap-probe.sh <empty-dir>       # key custody, 9 assertions. The INTEROP three
+sh build/keywrap-probe.sh <empty-dir>       # key custody, 22 assertions. The INTEROP three
                                             #   (I1-I3) are the ones that matter and they SKIP
                                             #   without `age` on PATH rather than passing:
                                             #   an early build passed its own round-trip while
                                             #   emitting keys real age rejected
+                                            #   The S-series is SIGNING: a versioned artifact
+                                            #   is tamper-evident (integrity) but any tribe
+                                            #   member can commit one, so it is not AUTHORITY.
+                                            #   ed25519 supplies the missing half. Verification
+                                            #   deliberately needs NO identity.db and NO
+                                            #   passphrase (S3) -- a peer checking an epoch pin
+                                            #   holds no secret. S5 is the one that matters:
+                                            #   another identity's key must NOT verify, or the
+                                            #   signature proves nothing about WHO. See SYNC.md
+                                            #   for the trust-anchor question it does not close
 sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests under CONTEST:
                                             #   a long same-topic document must bury the one
                                             #   chunk naming the identifier, or every

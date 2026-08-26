@@ -56,7 +56,26 @@ static const char *SCHEMA =
     "CREATE TABLE IF NOT EXISTS identity("
     "  name     TEXT PRIMARY KEY,"
     "  pubkey   TEXT NOT NULL,"      /* age1... -- public, stored in the clear */
-    "  wrapped  BLOB NOT NULL,"      /* the 32-byte secret, AEAD-wrapped */
+    "  wrapped  BLOB NOT NULL,"
+    /* ED25519 SIGNING KEY, wrapped under the same passphrase.
+    **
+    ** Warren, 2026-08-25: "infrastructure versions are signed? i think that
+    ** closes the loop." It does, and this is the gap it closes. A versioned
+    ** artifact is Merkle-linked, so its INTEGRITY is checkable -- nobody can
+    ** alter it after the fact undetected. But any tribe member can COMMIT one,
+    ** so integrity is not authority: a member could commit an epoch pin naming
+    ** a poisoned model and the chain would happily attest it. Fossil records a
+    ** committer name, and that name is an unauthenticated string.
+    **
+    ** A signature supplies the missing half: the Merkle chain says the bytes
+    ** did not change, the signature says who declared them.
+    **
+    ** SEPARATE FROM THE X25519 KEY, deliberately. age recipients are X25519 and
+    ** signing wants Ed25519; deriving one from the other is a standard but
+    ** error-prone conversion, and reusing one key for two algorithms is a
+    ** documented footgun. Two keys, one passphrase, no cleverness. */
+    "  signwrap BLOB,"
+    "  signpub  TEXT,"      /* the 32-byte secret, AEAD-wrapped */
     "  salt     BLOB NOT NULL,"
     "  iters    INTEGER NOT NULL,"
     /* Which factors the unlock key was derived from. "passphrase" today;
@@ -123,6 +142,8 @@ static sqlite3 *open_db(const char *zPath, int bCreate){
     /* Additive columns for a registry that predates sync state. Duplicate-
     ** column errors are the expected outcome and are discarded, same idiom as
     ** viki_db.c's migration list. */
+    sqlite3_exec(db, "ALTER TABLE identity ADD COLUMN signwrap BLOB", NULL, NULL, NULL);
+    sqlite3_exec(db, "ALTER TABLE identity ADD COLUMN signpub TEXT", NULL, NULL, NULL);
     sqlite3_exec(db, "ALTER TABLE tribe ADD COLUMN etag TEXT", NULL, NULL, NULL);
     sqlite3_exec(db, "ALTER TABLE tribe ADD COLUMN last_pull TEXT", NULL, NULL, NULL);
     return db;
@@ -159,12 +180,14 @@ static int cmd_add(const char *zDb, const char *zName){
     sqlite3 *db = open_db(zDb, 1);
     unsigned char sk[X25519_LEN], pk[X25519_LEN], salt[SALT_LEN], uk[32];
     unsigned char wrapped[WRAP_LEN], nonce[12];
-    char pass[512], pub[128], iso[32];
+    unsigned char ssk[32], spk[32], swrapped[32 + TAG_LEN];
+    char pass[512], pub[128], iso[32], spub[128];
     sqlite3_stmt *st;
     time_t now = time(NULL);
 
     if( RAND_bytes(sk, X25519_LEN) != 1 || RAND_bytes(salt, SALT_LEN) != 1 )
         die("RAND_bytes failed");
+    if( RAND_bytes(ssk, 32) != 1 ) die("RAND_bytes failed");
     if( !x25519_pub(sk, pk) ) die("x25519 failed");
     bech_encode("age", pk, X25519_LEN, pub);
 
@@ -173,12 +196,28 @@ static int cmd_add(const char *zDb, const char *zName){
     memset(pass, 0, sizeof(pass));
     memset(nonce, 0, sizeof(nonce));      /* salt is unique per identity */
     if( aead(1, uk, nonce, sk, X25519_LEN, wrapped) != WRAP_LEN ) die("wrap failed");
-    memset(sk, 0, sizeof(sk)); memset(uk, 0, sizeof(uk));
+    /* The signing key rides the same unlock key and the same nonce policy: the
+    ** salt is unique per identity, and these are two different plaintexts under
+    ** ONE key, so they need DIFFERENT nonces. */
+    {
+        unsigned char n2[12];
+        memset(n2, 0, sizeof(n2));
+        n2[0] = 1;
+        {
+            EVP_PKEY *e = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, ssk, 32);
+            size_t n = 32;
+            if( !e || EVP_PKEY_get_raw_public_key(e, spk, &n) != 1 ) die("ed25519 keygen failed");
+            EVP_PKEY_free(e);
+        }
+        if( aead(1, uk, n2, ssk, 32, swrapped) != 32 + TAG_LEN ) die("sign-key wrap failed");
+        b64enc(spk, 32, spub);
+    }
+    memset(sk, 0, sizeof(sk)); memset(ssk, 0, sizeof(ssk)); memset(uk, 0, sizeof(uk));
 
     strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
     if( sqlite3_prepare_v2(db,
-        "INSERT INTO identity(name,pubkey,wrapped,salt,iters,factors,created)"
-        " VALUES(?1,?2,?3,?4,?5,'passphrase',?6)", -1, &st, NULL) != SQLITE_OK )
+        "INSERT INTO identity(name,pubkey,wrapped,salt,iters,factors,created,signwrap,signpub)"
+        " VALUES(?1,?2,?3,?4,?5,'passphrase',?6,?7,?8)", -1, &st, NULL) != SQLITE_OK )
         die("prepare failed");
     sqlite3_bind_text(st, 1, zName, -1, SQLITE_STATIC);
     sqlite3_bind_text(st, 2, pub, -1, SQLITE_STATIC);
@@ -186,11 +225,19 @@ static int cmd_add(const char *zDb, const char *zName){
     sqlite3_bind_blob(st, 4, salt, SALT_LEN, SQLITE_STATIC);
     sqlite3_bind_int(st, 5, KDF_ITERS);
     sqlite3_bind_text(st, 6, iso, -1, SQLITE_STATIC);
+    sqlite3_bind_blob(st, 7, swrapped, 32 + TAG_LEN, SQLITE_STATIC);
+    sqlite3_bind_text(st, 8, spub, -1, SQLITE_STATIC);
     if( sqlite3_step(st) != SQLITE_DONE )
         fprintf(stderr, "viki-identity: %s\n", sqlite3_errmsg(db)), exit(1);
     sqlite3_finalize(st);
     sqlite3_close(db);
+    /* STDOUT IS EXACTLY THE RECIPIENT, ONE LINE, AND NOTHING ELSE. Callers do
+    ** PUB=$(viki-identity add ...) and pass the result straight to `wrap -r`.
+    ** A second line on stdout silently produces a two-line recipient, which is
+    ** how adding the signing key broke `wrap` while `add` still looked fine.
+    ** The signing key is informational here; `signpub <name>` retrieves it. */
     printf("%s\n", pub);
+    fprintf(stderr, "signing key (ed25519, base64): %s\n", spub);
     return 0;
 }
 
@@ -489,19 +536,112 @@ static int cmd_pull_all(const char *zDb){
     return okCount > 0 ? 0 : 1;
 }
 
+/* ---- signing: authority, where the Merkle chain gives only integrity ---- */
+
+/* Unwraps the identity's Ed25519 key. Nonce byte 0 = 1 distinguishes it from
+** the X25519 wrap, which shares the unlock key. */
+static int load_signing_key(const char *zDb, const char *zName, unsigned char *ssk){
+    sqlite3 *db = open_db(zDb, 0);
+    sqlite3_stmt *st;
+    char pass[512];
+    int ok = 0;
+    if( sqlite3_prepare_v2(db, "SELECT signwrap,salt,iters FROM identity WHERE name=?1",
+                           -1, &st, NULL) != SQLITE_OK ) die("prepare failed");
+    sqlite3_bind_text(st, 1, zName, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) == SQLITE_ROW ){
+        const unsigned char *w = sqlite3_column_blob(st, 0);
+        int wlen = sqlite3_column_bytes(st, 0);
+        const unsigned char *salt = sqlite3_column_blob(st, 1);
+        int iters = sqlite3_column_int(st, 2);
+        if( !w || wlen != 32 + TAG_LEN ){
+            fprintf(stderr, "viki-identity: '%s' has no signing key.\n"
+                            "  It predates signing support; create a new identity.\n", zName);
+        }else{
+            unsigned char uk[32], n2[12];
+            read_pass("passphrase: ", pass, sizeof(pass));
+            unlock_key(pass, salt, iters, NULL, 0, uk);
+            memset(pass, 0, sizeof(pass));
+            memset(n2, 0, sizeof(n2)); n2[0] = 1;
+            ok = aead(0, uk, n2, w, wlen, ssk) == 32;
+            memset(uk, 0, sizeof(uk));
+        }
+    }else{
+        fprintf(stderr, "viki-identity: no such identity: %s\n", zName);
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    if( !ok ) die("wrong passphrase, or no signing key");
+    return 0;
+}
+
+static int cmd_sign(const char *zDb, const char *zName, const char *zIn){
+    unsigned char ssk[32], *buf, sig[64];
+    size_t siglen = sizeof(sig);
+    int n;
+    EVP_PKEY *k;
+    EVP_MD_CTX *ctx;
+    char b64[256];
+
+    if( !zIn ) die("sign needs -i <file>");
+    buf = readall(zIn, &n);
+    load_signing_key(zDb, zName, ssk);
+    k = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, ssk, 32);
+    memset(ssk, 0, sizeof(ssk));
+    if( !k ) die("bad signing key");
+    ctx = EVP_MD_CTX_new();
+    /* Ed25519 is one-shot: no separate digest, no Update loop. */
+    if( !ctx || EVP_DigestSignInit(ctx, NULL, NULL, NULL, k) != 1
+             || EVP_DigestSign(ctx, sig, &siglen, buf, (size_t)n) != 1 )
+        die("signing failed");
+    EVP_MD_CTX_free(ctx); EVP_PKEY_free(k); free(buf);
+    b64enc(sig, (int)siglen, b64);
+    printf("%s\n", b64);
+    return 0;
+}
+
+static int cmd_verify(const char *zPubB64, const char *zIn, const char *zSigB64){
+    unsigned char pk[32], sig[64], *buf;
+    int n, plen, slen;
+    EVP_PKEY *k;
+    EVP_MD_CTX *ctx;
+    int ok;
+
+    if( !zPubB64 || !zIn || !zSigB64 ) die("verify needs -p <pubkey> -i <file> -s <sig>");
+    plen = b64dec(zPubB64, pk, sizeof(pk));
+    slen = b64dec(zSigB64, sig, sizeof(sig));
+    if( plen != 32 ) die("public key is not 32 bytes of base64");
+    if( slen != 64 ) die("signature is not 64 bytes of base64");
+    buf = readall(zIn, &n);
+    k = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL, pk, 32);
+    if( !k ) die("bad public key");
+    ctx = EVP_MD_CTX_new();
+    ok = ctx && EVP_DigestVerifyInit(ctx, NULL, NULL, NULL, k) == 1
+             && EVP_DigestVerify(ctx, sig, (size_t)slen, buf, (size_t)n) == 1;
+    EVP_MD_CTX_free(ctx); EVP_PKEY_free(k); free(buf);
+    if( ok ){ printf("OK\n"); return 0; }
+    /* Loud, and nonzero. A verification that fails quietly is worse than none:
+    ** it invites a caller to treat "no output" as success. */
+    fprintf(stderr, "viki-identity: SIGNATURE DOES NOT VERIFY for '%s'.\n"
+                    "  The file was changed, or it was signed by a different identity.\n", zIn);
+    return 1;
+}
+
 int main(int argc, char **argv){
     const char *zDb = "identity.db", *zName = NULL, *zIn = NULL, *zOut = NULL;
+    const char *zPub = NULL, *zSig = NULL;
     int i;
     if( argc < 2 ){
         fprintf(stderr,
           "usage: viki-identity init|list [--db f]\n"
-          "       viki-identity add|pub <name> [--db f]\n"
+          "       viki-identity add|pub|signpub <name> [--db f]\n"
           "       viki-identity unwrap <name> -i file.age [-o out] [--db f]\n"
           "       viki-identity tribe add <tribe> -r <identity> [--key-file f]\n"
           "                           [--url U] [--cache C] [--caching none|optional|required]\n"
           "       viki-identity tribe key <tribe>        (prints it; costs a passphrase)\n"
           "       viki-identity tribe pull <tribe>|--all (https; stores it encrypted)\n"
           "       viki-identity tribe list\n"
+          "       viki-identity sign <name> -i <file>          -> base64 ed25519 signature\n"
+          "       viki-identity verify -p <pub> -i <file> -s <sig>   (no keys needed)\n"
           "Public keys are age recipients; files are age v1 (`age -d` reads them).\n");
         return 2;
     }
@@ -539,8 +679,23 @@ int main(int argc, char **argv){
         if( !strcmp(argv[i], "--db") && i+1 < argc ) zDb = argv[++i];
         else if( !strcmp(argv[i], "-i") && i+1 < argc ) zIn = argv[++i];
         else if( !strcmp(argv[i], "-o") && i+1 < argc ) zOut = argv[++i];
+        /* `verify` needs these, and the generic loop runs BEFORE dispatch --
+        ** so an unknown flag dies here rather than reaching the subcommand.
+        ** The `tribe` block above sidesteps it by parsing its own; two flags
+        ** are not worth a third parser. */
+        else if( !strcmp(argv[i], "-p") && i+1 < argc ) zPub = argv[++i];
+        else if( !strcmp(argv[i], "-s") && i+1 < argc ) zSig = argv[++i];
         else if( argv[i][0] != '-' && !zName ) zName = argv[i];
         else die("unknown option");
+    }
+    if( !strcmp(argv[1], "sign") ){
+        if( !zName ) die("sign needs a <name>");
+        return cmd_sign(zDb, zName, zIn);
+    }
+    if( !strcmp(argv[1], "verify") ){
+        /* No identity.db and no passphrase: verifying is a PUBLIC operation and
+        ** must work for a peer that holds no keys at all. */
+        return cmd_verify(zPub, zIn, zSig);
     }
     if( !strcmp(argv[1], "init") ){ sqlite3_close(open_db(zDb, 1)); printf("%s\n", zDb); return 0; }
     if( !strcmp(argv[1], "list") ){
@@ -561,6 +716,19 @@ int main(int argc, char **argv){
         if( sqlite3_step(st) == SQLITE_ROW ){ printf("%s\n", sqlite3_column_text(st,0)); found = 1; }
         sqlite3_finalize(st); sqlite3_close(db);
         if( !found ) die("no such identity");
+        return 0;
+    }
+    if( !strcmp(argv[1], "signpub") ){
+        sqlite3 *db = open_db(zDb, 0); sqlite3_stmt *st; int found = 0;
+        sqlite3_prepare_v2(db, "SELECT signpub FROM identity WHERE name=?1", -1, &st, NULL);
+        sqlite3_bind_text(st, 1, zName, -1, SQLITE_STATIC);
+        if( sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st,0) != SQLITE_NULL ){
+            printf("%s\n", sqlite3_column_text(st,0)); found = 1;
+        }
+        sqlite3_finalize(st); sqlite3_close(db);
+        /* An identity minted before signing existed has a NULL signpub. Say so
+        ** rather than printing an empty line a caller would pass to `verify`. */
+        if( !found ) die("no such identity, or it predates signing keys");
         return 0;
     }
     if( !strcmp(argv[1], "unwrap") ){
