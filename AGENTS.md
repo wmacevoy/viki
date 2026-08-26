@@ -933,6 +933,38 @@ this file -- against a binary missing three fixes that were sitting in
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
 
+- **TWO AGENT BUILDS PARKED ON BRANCHES, NOT MERGED** (2026-08-26). A v1 audit
+  workflow produced both; adversarial verification returned `sound=false` for
+  each, so neither is in `main`. They are `wip/provenance` and `wip/serve-hash`,
+  both REBASED ONTO CURRENT MAIN and both building — the "merge decay" worry
+  was measured and is unfounded: the only rebase conflicts were in two
+  documentation files, every C file applied clean, and with `wip/provenance`
+  applied `test/m1.sh` is 90/0/0, `forum-e2e` 26/0 and `fossilsee-probe` 19/0.
+  So there is no clock on this and no decision that has to be made under one.
+
+  `wip/provenance` — `viki when <path>` / `viki since <ref>`, 1032 lines of new
+  C plus a 375-assertion probe, and it hoists the framed-`fossil sql` protocol
+  out of `viki_index.c` into `viki_index.h` so provenance and the extractors
+  share one protocol. **Known defects, from the verifier:** its W2 — the
+  assertion the probe's own header calls the one that matters most — stays
+  green after `AND ml.fid <> 0` is added, i.e. after every deletion is dropped
+  from the query; `viki since` reports `(not indexed)` for files that ARE
+  indexed on any tree indexed by absolute path; `--json` swallows the
+  "could not look" diagnostic, so it cannot be told from "no history" (which is
+  VIKIVERSE_V1 2.9, the requirement the change claims to meet); and the probe
+  exits 0 having asserted nothing when `vendor/fossil-see` is uninitialized,
+  which CLAUDE.md says is its normal state.
+
+  `wip/serve-hash` — the HTML page renders `<hash>#<ix>`, closing KICKOFF
+  deliverable 2 on its last surface. **Known defects:** S13 asserts only that
+  the abbreviated hash is absent, never that the `#<ix>` half is, so it cannot
+  detect the failure it is named for; S11 has no data-dependence control, and
+  the `#<chunk_ix>` half is never shown to be data rather than a literal.
+
+  Neither is a design problem; both are probes that do not test what they say.
+  Landing either means repairing its assertions first and re-running the
+  mutation the verifier used.
+
 - **THE KEYWORD LEG: DEPTH, NOT SELECTIVITY** (2026-08-26). `VIKI_CANDIDATE_POOL`
   40 → 80: recall@5 0.512 → 0.558, recall@k 0.698 → 0.744, held-out recall@k
   0.833 → 0.917, MRR 0.424 → 0.434, recall@1 unchanged at 0.349 (a deeper pool
