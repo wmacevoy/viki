@@ -10,6 +10,28 @@ Read `SCOPES.md` first for the L0-L3 split and the placement test; this file
 assumes them and does not restate them. Read `CLAUDE.md` for what v1 actually
 does. Where this file and reality disagree, reality wins and this file is stale.
 
+**What v1 has shipped that this file assumed was still ahead** (checked
+2026-08-26, and the reason to check again before building anything here):
+
+- **Overlap** (SS 10 item 2) -- done and measured; see that item.
+- **The `(model, chunking)` epoch key** -- done. SS 3c is written as though it
+  is still load-bearing; it is, until ranges land, and SS 3c already says it
+  survives as belt-and-braces rather than being reverted.
+- **`--k` truncates rather than steering retrieval**, and the candidate pool is
+  a tuned constant (80). Anything here that reasons about pool depth should use
+  that number, not the old `topK * 4`.
+- **The serve page cites its sources.** SS 9's citation break therefore touches
+  FOUR surfaces, not three: CLI, `/api/ask`, the wasm edge, and now the HTML
+  page.
+- **`viki fts-query` / `--pool`** exist as hidden subcommands, because
+  `test/retrieval-eval.py` may not mirror `src/`. Anything v2 adds that the
+  harness needs to know should arrive the same way.
+
+**And what this file resolves for v1**, recorded in `VIKIVERSE_V1.md` in place:
+SS 6a/6b decide the shape of v1's SS 2.11 ("One API, several consumers"), and
+SS 3/SS 5 decide how v1's remaining P0.4 work gets built -- which is why
+structure-aware chunking should NOT be built under the current schema.
+
 Every claim below is tagged:
 
     DECIDED     Warren settled it in conversation, quoted and dated.

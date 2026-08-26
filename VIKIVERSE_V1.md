@@ -54,6 +54,12 @@ ingest, a clock, and the honesty to say what it cannot see.
 
 ## 2. Requirements
 
+> **Where v2 has since decided something, it is noted inline.** `V2_DESIGN.md`
+> (2026-08-26, PROVISIONAL) does not replace this file — it answers questions
+> this one left open (§2.11 most of all) and changes *how* two items get built
+> (§2.7's chunking, and citations). Where the two disagree, the disagreement is
+> called out in place rather than resolved silently.
+
 `MUST` blocks v1. `SHOULD` is v1 if cheap, v1.1 otherwise. Each is written so it
 can be falsified.
 
@@ -324,6 +330,19 @@ question and gets citable results from a written contract alone.
 **Status:** `/api/ask` exists, loopback-only, no auth. **The contract and auth
 are the v1 work.**
 
+**V2_DESIGN.md §6 gives this requirement a decided shape, and it narrows the v1
+job rather than widening it.** MCP is a **local stdio face**, not a remote
+authenticated server: one artifact covers Claude Code, Claude Desktop and
+Cowork, with no auth, no TLS and no hub exposure. Only claude.ai in a browser
+needs the remote server, and that is deliberately not first. So the "auth" half
+of the v1 work above is **not on the critical path for the consumers that
+actually exist today** — a stdio face has no network surface to authenticate.
+
+**And `viki sql` stays OFF that face** (V2 §6b). The reason is aggregation, not
+squeamishness: `ask --k 5` returns five chunks, `sql` returns the corpus in one
+call, which is the injection jackpot. That also closes SCOPES.md §7.4 on better
+grounds than the loopback argument it was resting on.
+
 ---
 
 ## 3. Explicitly OUT of v1
@@ -460,6 +479,15 @@ See FINDINGS.md for both tables.
 **What remains on P0.4:** chunk boundaries that respect structure — still the
 only untried idea aimed at RIGHT DOCUMENT, WRONG CHUNK, which stands at 20 of
 43 — and the coverage-closed regression that overlap introduced.
+
+**V2_DESIGN.md §3 and §5 supersede how that half gets built**, without changing
+what it is for. Under range-addressed chunks a boundary is `(blob_id, start,
+end)` rather than an ordinal, so structure-respecting boundaries and a
+multi-scale tree stop needing a re-chunk of stored text and become additional
+rows over the same blob. **Do not build structure-aware chunking under the
+current schema** — it would be re-done. V2 §5c is explicit that overlap and the
+tree solve different problems and were deliberately not shipped together;
+overlap is done, the tree waits on §3.
 
 **And chunking is blocked by a defect the measurement exposed.** `chunk_params`
 is in D-11's determinism claim but in neither the cache key nor the skip test,

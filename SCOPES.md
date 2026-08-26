@@ -251,7 +251,14 @@ and the network of tribes needs its own word or none at all.
    the product.** "vikiverse is a generalized tool for this kind of problem."
    The set of tribes on one device is *the verse*; whether that word survives
    contact with anyone but us is a separate question.
-4. **Should `viki sql` be exposed over HTTP and MCP too?** §2 says every face
-   should carry both rungs, which argues yes. Against: an HTTP-reachable SQL
-   console is a much larger surface than `/api/ask`, even read-only, and
-   loopback is thinner protection than a CLI a person typed.
+4. ~~**Should `viki sql` be exposed over HTTP and MCP too?**~~ **Settled
+   2026-08-26 (V2_DESIGN.md §6b): no, not on the MCP face.** The argument that
+   closed it is not the loopback one this question was resting on — that was a
+   perimeter argument, and §0b of SYNC.md is the reason perimeter arguments are
+   weak here. It is **aggregation**: `ask --k 5` returns five chunks, `sql`
+   returns the corpus in one call. Against a prompt-injected client that is the
+   difference between leaking a snippet and leaking everything, so the raw rung
+   stays where its caller is a person or an agent already holding the key.
+   §2's "every face should carry both rungs" is therefore **amended**: it holds
+   for faces whose caller already has the key, and not for a face built to be
+   driven by untrusted text.
