@@ -72,6 +72,8 @@ static char *build_or_query(const char *zQuery){
     return out;
 }
 
+char *viki_ask_fts_query(const char *zQuery){ return build_or_query(zQuery); }
+
 static viki_ask_result *find_or_add(viki_ask_result *pool, int *n, const char *hash, int chunk_ix){
     int i;
     for( i = 0; i < *n; i++ ){

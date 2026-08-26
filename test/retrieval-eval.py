@@ -209,6 +209,59 @@ def resolve_ground_truth(db, queries):
 
 # --------------------------------------------------------------- BM25 replay --
 
+def viki_fts_query(zquery):
+    """The MATCH expression viki ACTUALLY runs, asked of the binary itself.
+
+    THIS USED TO BE A PYTHON REIMPLEMENTATION of src/viki_ask.c's
+    build_or_query(), and the reimplementation is exactly the failure this
+    repo keeps hitting: one claim living in two files, rotting in one. The
+    "keyword-leg selectivity" figure and the KEYWORD_TOO_DEEP /
+    KEYWORD_NO_MATCH diagnoses are computed from this string, so while it was
+    a mirror those numbers described the harness's MODEL of viki -- and went
+    on describing the old model after the C changed, reporting an unchanged
+    selectivity for a query that was no longer being run.
+
+    Falls back to the local copy when the binary predates `viki fts-query`,
+    because comparing an old binary against a new one is a thing this harness
+    exists to do. A fallback is announced, never silent.
+    """
+    global _FTS_FALLBACK_WARNED
+    try:
+        p = subprocess.run([VIKI_BIN_FOR_FTS, "fts-query", zquery],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode == 0 and p.stdout.strip():
+            return p.stdout.strip()
+        if p.returncode != 0 and not p.stdout.strip():
+            return None          # no terms -- the leg genuinely does not run
+    except Exception:
+        pass
+    if not _FTS_FALLBACK_WARNED:
+        sys.stderr.write(
+            "retrieval-eval: this binary has no `fts-query`; selectivity and the\n"
+            "                keyword diagnoses fall back to a LOCAL COPY of\n"
+            "                build_or_query and may not describe what it runs.\n")
+        _FTS_FALLBACK_WARNED = True
+    return build_or_query(zquery)
+
+
+def viki_pool_size(viki_bin):
+    """VIKI_CANDIDATE_POOL, from the binary under test."""
+    try:
+        p = subprocess.run([viki_bin, "fts-query", "--pool"],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode == 0 and p.stdout.strip().isdigit():
+            return int(p.stdout.strip())
+    except Exception:
+        pass
+    sys.stderr.write("retrieval-eval: binary has no `fts-query --pool`; assuming %d\n"
+                     % CANDIDATE_POOL)
+    return CANDIDATE_POOL
+
+
+_FTS_FALLBACK_WARNED = False
+VIKI_BIN_FOR_FTS = "viki"
+
+
 def build_or_query(zquery):
     """Byte-for-byte replica of build_or_query() in src/viki_ask.c.
 
@@ -241,7 +294,7 @@ def bm25_full_ranking(db, zquery):
     query at all -- a vocabulary problem) rather than `KEYWORD_TOO_DEEP`
     (it matched, at rank 212, and the pool cut it off -- a ranking problem).
     Those two want completely different fixes."""
-    fts = build_or_query(zquery)
+    fts = viki_fts_query(zquery)
     if fts is None:
         return {}, 0
     try:
@@ -519,7 +572,24 @@ def main():
     deg_env = dict(base_env)
     deg_env["VIKI_MODEL_DIR"] = os.path.join(work, "no-such-model-directory")
 
-    pool_size = min(args.k * 4, CANDIDATE_POOL)
+    global VIKI_BIN_FOR_FTS
+
+    VIKI_BIN_FOR_FTS = viki
+
+    # THE POOL DEPTH IS ASKED OF THE BINARY, not mirrored. It used to be
+
+    # min(args.k*4, CANDIDATE_POOL) with CANDIDATE_POOL a constant in this
+
+    # file -- a second copy of src/viki_ask.h. When the C pool moved 40->80
+
+    # this kept saying 40, so KEYWORD_TOO_DEEP went on counting chunks the
+
+    # pool now reaches. viki also stopped scaling the pool by k (FINDINGS.md:
+
+    # --k changed WHICH results won), so the min() is gone with it.
+
+    pool_size = viki_pool_size(viki)
+
 
     selected = [q for q in queries
                 if args.split == "all" or q.split == args.split]

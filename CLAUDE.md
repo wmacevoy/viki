@@ -616,6 +616,23 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   real but it is ~4 queries on n=43, the predicted mechanism is only weakly
   supported, and it COSTS the coverage-closed class (short artifacts gain
   nothing from overlap and compete against more file chunks).
+- **The keyword leg's lever is DEPTH, not selectivity.** The eval reports the
+  OR-of-terms MATCH selecting a median 244 of 245 chunks, which reads like a
+  defect and is not: `bm25()` already discounts common terms by IDF, so
+  dropping stopwords from the MATCH deletes weak-but-correctly-signed evidence.
+  It was built and measured a **regression** (recall@1 0.349 → 0.302);
+  FINDINGS.md has the table. What helped was raising
+  `VIKI_CANDIDATE_POOL` 40 → 80: recall@5 0.512 → 0.558, recall@k
+  0.698 → 0.744, held-out recall@k 0.833 → 0.917, recall@1 unchanged (deeper
+  candidates can only rank below what was already found). 160 gives recall@k
+  back.
+- **`test/retrieval-eval.py` must not mirror `src/`.** It carried its own
+  Python `build_or_query()` and its own `CANDIDATE_POOL`, and both went stale
+  the moment the C changed — reporting an unchanged selectivity for a query
+  viki was no longer running, and counting `KEYWORD_TOO_DEEP` against a pool
+  that had doubled. It now asks the binary: `viki fts-query "<q>"` and
+  `viki fts-query --pool` (both hidden). Anything else the harness needs from
+  viki's internals should arrive the same way, not by retyping it.
 - **`--k` truncates; it does not steer.** The candidate pool is a constant
   (`VIKI_CANDIDATE_POOL`), deliberately not `topK * 4` — under the old sizing a
   rank-2 hit could VANISH by asking for fewer results, and the eval harness

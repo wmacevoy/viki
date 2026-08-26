@@ -553,6 +553,27 @@ int main(int argc, char **argv){
         return 1;
     }
 
+    /* Hidden (not in usage()): prints the FTS5 MATCH expression the keyword leg
+    ** actually runs. test/retrieval-eval.py uses it instead of reimplementing
+    ** build_or_query in Python -- a mirror that described the harness's model
+    ** of viki rather than viki, and went stale the moment the C changed. */
+    if( strcmp(sub, "fts-query") == 0 ){
+        char *z;
+        /* `--pool` reports the candidate depth, for the same reason the query
+        ** itself is exposed: the harness had its own copy of that constant
+        ** too, and a stale copy mislabels every KEYWORD_TOO_DEEP. */
+        if( argc >= 3 && strcmp(argv[2], "--pool") == 0 ){
+            printf("%d\n", VIKI_CANDIDATE_POOL);
+            return 0;
+        }
+        if( argc < 3 ){ fprintf(stderr, "usage: viki fts-query \"<query>\" | --pool\n"); return 1; }
+        z = viki_ask_fts_query(argv[2]);
+        if( !z ) return 1;              /* no terms: the leg does not run */
+        printf("%s\n", z);
+        free(z);
+        return 0;
+    }
+
     if( strcmp(sub, "fossilsee-status") == 0 ){
         /* Debug/regression command, not in usage(): reports whether the
         ** OPTIONAL in-process fossil path (libfossilsee) loaded, and if

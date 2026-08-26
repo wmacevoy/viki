@@ -4,7 +4,38 @@
 #include <sqlite3.h>
 #include "embed.h"
 
-#define VIKI_CANDIDATE_POOL 40
+/* HOW DEEP EACH LEG FETCHES BEFORE FUSION. Measured 2026-08-26 on corpus fp
+** 1b1e3c962c1e8cad, varying only this constant:
+**
+**    pool    recall@1   recall@5   recall@k     MRR    held-out recall@k
+**      40      0.349      0.512      0.698     0.424        0.833
+**      80      0.349      0.558      0.744     0.434        0.917
+**     160      0.349      0.558      0.721     0.432        0.917
+**
+** 80 it is. recall@1 does not move and should not: a deeper pool adds
+** candidates that can only rank BELOW the ones already found, so it buys
+** recall@5/@k and costs nothing at the top. 160 fetches twice as much and
+** gives recall@k back.
+**
+** This is the actual keyword-leg fix. The tempting one -- the OR-of-terms
+** MATCH selects a median 244 of 245 chunks, so drop stopwords from it -- was
+** built and MEASURED A REGRESSION (recall@1 0.349 -> 0.302); see FINDINGS.md.
+** The leg's problem was never how many chunks it matched, it was how few of
+** the ranking it was allowed to keep.
+**
+** Stack cost: sizeof(viki_ask_result) is 1128 bytes, so the pool is ~90 KB.
+** `ask --verse` already heap-allocates its pool for exactly this reason. */
+#define VIKI_CANDIDATE_POOL 80
+
+/* The FTS5 MATCH expression `viki ask`'s keyword leg actually runs.
+**
+** Exposed ONLY so test/retrieval-eval.py can stop carrying its own Python
+** reimplementation of it. That mirror computed the harness's "keyword-leg
+** selectivity" figure and its KEYWORD_TOO_DEEP / KEYWORD_NO_MATCH diagnoses,
+** which means those described the harness's model of viki rather than viki --
+** and they silently kept describing the old model when the C changed. Caller
+** frees; returns NULL if the query has no terms. */
+char *viki_ask_fts_query(const char *zQuery);
 
 /* One bit per retrieval leg. Recorded on the candidate itself so a leg can
 ** contribute to a candidate's RRF score AT MOST ONCE, however many rows that

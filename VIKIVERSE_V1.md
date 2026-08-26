@@ -448,8 +448,18 @@ being repaired), and it costs the coverage-closed class. **Boundaries that
 respect structure is NOT done** — that is the remaining half of this item, and
 the one that would actually address RIGHT DOCUMENT, WRONG CHUNK.
 
-**Keyword-leg selectivity is untouched** and is now the largest single lever:
-the OR-of-terms MATCH still selects a median of 189 of 190 chunks.
+**Keyword leg addressed 2026-08-26 — and the premise above was wrong.**
+Selectivity is not the lever. Dropping stopwords from the MATCH was built and
+measured a regression (recall@1 0.349 → 0.302): `bm25()` already discounts
+common terms by IDF, so a stopword is weak evidence pointing the right way, and
+removing it removes evidence. The leg was ranking fine and being *truncated*
+early. Raising the candidate pool 40 → 80 gives recall@5 0.512 → 0.558,
+recall@k 0.698 → 0.744, held-out recall@k 0.833 → 0.917, recall@1 unchanged.
+See FINDINGS.md for both tables.
+
+**What remains on P0.4:** chunk boundaries that respect structure — still the
+only untried idea aimed at RIGHT DOCUMENT, WRONG CHUNK, which stands at 20 of
+43 — and the coverage-closed regression that overlap introduced.
 
 **And chunking is blocked by a defect the measurement exposed.** `chunk_params`
 is in D-11's determinism claim but in neither the cache key nor the skip test,

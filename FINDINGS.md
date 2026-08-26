@@ -12,6 +12,75 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## The keyword leg's problem was DEPTH, not selectivity -- and dropping stopwords made it worse
+
+2026-08-26. Recorded because the obvious fix is wrong, and the diagnostic that
+suggests it is phrased in a way that invites it.
+
+`test/retrieval-eval.sh` reports that the OR-of-terms MATCH selects a **median
+of 244 of 245 chunks**, 42 of 43 queries matching >90% of the corpus, and says
+"BM25 is ranking the whole corpus, not a candidate set". That reads like a
+defect. The natural fix is to stop OR-ing stopwords -- and `viki_ask.c` already
+has `lit_is_stop()`, used by the literal leg, sitting a few functions away.
+
+### It was built, and it is a regression
+
+Same corpus (`fp 1b1e3c962c1e8cad`), varying only the binary:
+
+| | recall@1 | recall@5 | recall@k | MRR | held-out recall@1 |
+|---|---|---|---|---|---|
+| OR every term | **0.349** | 0.512 | 0.698 | **0.424** | **0.417** |
+| stopwords dropped | 0.302 | 0.488 | 0.628 | 0.384 | 0.333 |
+
+Reverted. **`bm25()` already discounts a common term by IDF**, so a stopword's
+contribution is small AND in the right direction: it is weak evidence that a
+chunk is on topic, and deleting it deletes evidence. Matching many chunks is
+not a defect when the ranking function is sound -- it is what BM25 is for.
+
+### What actually helped: pool depth
+
+`KEYWORD_TOO_DEEP` -- gold chunk matched, but below the candidate cutoff -- is
+a *depth* failure and responds to depth:
+
+| pool | recall@1 | recall@5 | recall@k | MRR | held-out recall@k |
+|---|---|---|---|---|---|
+| 40 | 0.349 | 0.512 | 0.698 | 0.424 | 0.833 |
+| **80** | 0.349 | **0.558** | **0.744** | **0.434** | **0.917** |
+| 160 | 0.349 | 0.558 | 0.721 | 0.432 | 0.917 |
+
+`VIKI_CANDIDATE_POOL` is now 80. recall@1 does not move and should not: deeper
+candidates can only rank below the ones already found.
+
+### The wrong assumption it replaces
+
+That a keyword leg matching almost everything is ranking badly. It was ranking
+fine and being *truncated* early. The leg's problem was never how many chunks
+it matched, it was how few of the ranking it was allowed to keep.
+
+---
+## The eval harness carried its own copy of viki's query builder, and it rotted on cue
+
+2026-08-26. `test/retrieval-eval.py` reimplemented `build_or_query()` in Python
+and hardcoded `CANDIDATE_POOL`. Both are the failure this repo keeps naming:
+one claim in two files, rotting in one.
+
+It bit within the hour. After the stopword experiment above changed the C, the
+harness went on reporting **the same selectivity figure** -- because it was
+describing its own model of a query viki was no longer running. The
+`KEYWORD_TOO_DEEP` count did the same thing when the pool moved 40 → 80: it
+stayed at 5 until the mirror was removed, then correctly fell to 4.
+
+The recall/MRR numbers were never affected -- those shell out to a real
+`viki ask` -- so the damage was confined to the *diagnoses*, which is precisely
+the part an agent reads to decide what to fix next.
+
+Fixed by asking the binary: `viki fts-query "<q>"` prints the MATCH expression
+the keyword leg runs, and `viki fts-query --pool` prints the candidate depth.
+Both hidden. The harness falls back to its local copy for a binary too old to
+have them -- and **announces the fallback**, because comparing an old build
+against a new one is a thing this harness exists to do.
+
+---
 ## `--k` changed WHICH results won, not just how many were shown
 
 2026-08-26. Found while measuring chunk overlap, in a probe that had been

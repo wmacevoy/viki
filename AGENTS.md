@@ -933,6 +933,27 @@ this file -- against a binary missing three fixes that were sitting in
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
 
+- **THE KEYWORD LEG: DEPTH, NOT SELECTIVITY** (2026-08-26). `VIKI_CANDIDATE_POOL`
+  40 → 80: recall@5 0.512 → 0.558, recall@k 0.698 → 0.744, held-out recall@k
+  0.833 → 0.917, MRR 0.424 → 0.434, recall@1 unchanged at 0.349 (a deeper pool
+  adds candidates that can only rank below the ones already found). 160 was
+  measured too and gives recall@k back.
+  **The obvious fix is a regression and is recorded as one.** The eval says the
+  MATCH selects a median 244 of 245 chunks; dropping stopwords from it took
+  recall@1 0.349 → 0.302 and held-out 0.417 → 0.333. `bm25()` already discounts
+  common terms by IDF — the leg was ranking fine and being truncated early.
+  **The harness stopped mirroring `src/`.** It carried a Python
+  `build_or_query()` and a hardcoded `CANDIDATE_POOL`; both went stale the
+  moment the C moved, reporting an unchanged selectivity for a query no longer
+  run and counting KEYWORD_TOO_DEEP against a pool that had doubled (it stuck
+  at 5, then correctly fell to 4 once the mirror was gone). Recall/MRR were
+  never affected — those shell out to real `viki ask` — so the damage was
+  confined to the diagnoses, which is the part an agent reads to decide what to
+  do next. Now: `viki fts-query "<q>"` and `viki fts-query --pool`, both hidden,
+  with an ANNOUNCED fallback for older binaries.
+  NOT verified: no measurement of pool depth at verse scale; whether 80 is
+  right for a 139k-chunk corpus is untested.
+
 - **CHUNK OVERLAP, AND `--k` STOPPED STEERING RETRIEVAL** (2026-08-26).
   Chunks are 40 lines with a 10-line overlap. Measured on one corpus varying
   only the binary (`fp 1b1e3c962c1e8cad`): recall@1 0.256 → 0.349, MRR
