@@ -234,9 +234,17 @@ The substrate must not need to know what a table means. That is only satisfiable
 when rows are **immutable** and **keyed by content** — then union *is* merge:
 order-independent, idempotent, commutative. A grow-only set.
 
-viki's own cache passes by construction rather than by luck. The chunk key is
-`(content_hash, model_id, chunk_ix)`, and D-11 makes an embedding a
-deterministic function of exactly those — so two peers that see the same
+viki's own cache passes by construction rather than by luck — **but only since
+2026-08-26, and the gap is instructive.** The chunk key is
+`(content_hash, model_id, chunk_ix)` where `model_id` is now the composed epoch
+`"<model>/c<chunk_lines>"`. Until then `chunk_params` was in D-11's determinism
+claim and in neither the key nor the skip test, so two peers that chunked
+differently produced rows that collided on this key while holding *different
+text*, and `INSERT OR IGNORE` resolved it first-writer-wins. Grow-only union is
+safe when a collision means the rows are EQUAL; a compile-time constant reads
+like a guarantee and was actually an unenforced precondition (FINDINGS.md).
+With chunking in the key, D-11 makes an embedding a deterministic function of
+exactly those — so two peers that see the same
 content compute *identical rows*, and the merge is:
 
 ```sql

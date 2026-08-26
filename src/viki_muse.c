@@ -278,7 +278,12 @@ static int resolve_model(sqlite3 *db, viki_embedder *emb, const char *zWant,
     *pCount = 0;
     out[0] = '\0';
     if( zWant || emb ){
-        const char *id = zWant ? zWant : viki_embedder_model_id(emb);
+        /* The STORED key (embed.h), not the bare model id -- same reason as
+        ** viki_ask.c's vector leg. An explicit --model wins as before. */
+        char zEpoch[192];
+        const char *id;
+        viki_cache_epoch_id(emb, zEpoch, sizeof(zEpoch));
+        id = zWant ? zWant : zEpoch;
         if( sqlite3_prepare_v2(db,
                 "SELECT count(*) FROM viki_chunk WHERE model_id=?1 AND embedding IS NOT NULL",
                 -1, &st, NULL) == SQLITE_OK ){

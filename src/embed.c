@@ -218,6 +218,17 @@ void viki_embedder_close(viki_embedder *e){
 }
 
 const char *viki_embedder_model_id(const viki_embedder *e){ return e->modelId; }
+
+/* THE ONE DERIVATION OF THE CACHE EPOCH. See embed.h for why chunking belongs
+** in this key and what broke when only the writer composed it.
+**
+** Composed HERE rather than folded into the manifest's model_id: that value is
+** a DISTRIBUTED one (D-12's epoch pin, signed since 2026-08-25), and a local
+** compile-time constant must not quietly rewrite what the pin says. This is
+** the cache's key, not the model's name. */
+void viki_cache_epoch_id(const viki_embedder *e, char *zBuf, size_t nBuf){
+    snprintf(zBuf, nBuf, "%s/c%d", e ? e->modelId : VIKI_MODEL_NONE, VIKI_CHUNK_LINES);
+}
 int viki_embedder_dim(const viki_embedder *e){ return e->dim; }
 
 int viki_embed(viki_embedder *e, const char *zText, float *outVec){

@@ -139,6 +139,19 @@ if [ -d "$VIKI_MODEL_DIR" ] \
     MODEL_ID="$(sed -n 's/.*"model_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
                   "$VIKI_MODEL_DIR/viki-manifest.json" | head -1)"
     [ -n "$MODEL_ID" ] || die "model at '$VIKI_MODEL_DIR' has a viki-manifest.json with no model_id"
+    # THE MANIFEST ID AND THE CACHE EPOCH ARE DIFFERENT THINGS, since
+    # 2026-08-26. The manifest pins the MODEL; the cache is keyed by
+    # (model, chunking) -- "<model_id>/c<lines>" -- because chunk_params is
+    # part of D-11's determinism claim and used to be in neither the key nor
+    # the skip test, so peers that chunked differently silently double-indexed
+    # (FINDINGS.md). Assertions about the PIN keep using $MODEL_ID; assertions
+    # about what is STORED use $EPOCH_RE.
+    #
+    # A REGEX, not a literal: pinning "/c40" here would make this file a second
+    # copy of a constant that lives in embed.h, and the pair would rot apart.
+    # The property under test is that the epoch carries the model AND a chunk
+    # parameter, which is exactly what this matches.
+    EPOCH_RE="$MODEL_ID/c[0-9][0-9]*"
     printf '  model present: %s (%s)\n' "$MODEL_ID" "$VIKI_MODEL_DIR"
 else
     printf '\n'
@@ -585,8 +598,8 @@ check "A2 index is honest about running without a model" \
 # deterministic property of the corpus.
 check "A3 index chunked all 3 planted documents" \
       '$GREP -qE "^viki index: [0-9]+ file\(s\) scanned, 3 \(re\)chunked" "$LOG/a.index.err"' "$LOG/a.index.err"
-check "A4 index reports model_id=none" \
-      '$GREP -q "(model_id=none)\$" "$LOG/a.index.err"' "$LOG/a.index.err"
+check "A4 index reports the no-model epoch (model_id=none/c<lines>)" \
+      '$GREP -qE "\(model_id=none/c[0-9]+\)\$" "$LOG/a.index.err"' "$LOG/a.index.err"
 check "A5 the wiki page was indexed" \
       '$GREP -q "1 wiki page(s), 1 (re)chunked" "$LOG/a.index.err"' "$LOG/a.index.err"
 # NONZERO, not merely rc=0. An unresolvable fossil user makes this leg
@@ -648,8 +661,8 @@ else
 
     ( cd "$H" && VIKI_MODEL_DIR="$VIKI_MODEL_DIR" "$VIKI_BIN" index . \
         >"$LOG/b.index.out" 2>"$LOG/b.index.err" </dev/null ) || true
-    check "B1 index records the pinned model_id" \
-          '$GREP -q "(model_id=$MODEL_ID)\$" "$LOG/b.index.err"' "$LOG/b.index.err"
+    check "B1 index records the pinned model_id, and chunking with it" \
+          '$GREP -qE "\(model_id=$EPOCH_RE\)\$" "$LOG/b.index.err"' "$LOG/b.index.err"
 
     if [ "$HAVE_SQLITE3" = 1 ]; then
         # Corroborates that indexing really embedded, rather than writing
@@ -660,7 +673,7 @@ else
                       "$VIKI_MODEL_DIR/viki-manifest.json" | head -1)"
         EXPECT_BYTES=$(( MODEL_DIM * 4 ))
         check "B2 every chunk carries a real embedding blob ($MODEL_DIM floats)" \
-              '[ "$(sqlite3 "$H/.viki/cache.db" "SELECT count(*) FROM viki_chunk WHERE model_id='"'"'$MODEL_ID'"'"' AND (embedding IS NULL OR length(embedding) <> $EXPECT_BYTES);")" = "0" ] && [ "$(sqlite3 "$H/.viki/cache.db" "SELECT count(*) FROM viki_chunk WHERE model_id='"'"'$MODEL_ID'"'"';")" -ge 5 ]'
+              '[ "$(sqlite3 "$H/.viki/cache.db" "SELECT count(*) FROM viki_chunk WHERE model_id LIKE '"'"'$MODEL_ID/c%'"'"' AND (embedding IS NULL OR length(embedding) <> $EXPECT_BYTES);")" = "0" ] && [ "$(sqlite3 "$H/.viki/cache.db" "SELECT count(*) FROM viki_chunk WHERE model_id LIKE '"'"'$MODEL_ID/c%'"'"';")" -ge 5 ] && [ "$(sqlite3 "$H/.viki/cache.db" "SELECT count(DISTINCT model_id) FROM viki_chunk;")" = "1" ]'
     else
         skip_ "B2 every chunk carries a real embedding blob" "no sqlite3 on PATH"
     fi
@@ -668,7 +681,7 @@ else
     ( cd "$H" && VIKI_MODEL_DIR="$VIKI_MODEL_DIR" "$VIKI_BIN" ask "$Q_KEYWORD" \
         >"$LOG/b.kw.out" 2>"$LOG/b.kw.err" </dev/null ) || true
     check "B3 ask announces hybrid mode naming the model_id" \
-          '$GREP -q "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=$MODEL_ID)" "$LOG/b.kw.err"' "$LOG/b.kw.err"
+          '$GREP -qE "viki ask: hybrid mode \(FTS5 BM25 \+ ndvss cosine, model_id=$EPOCH_RE\)" "$LOG/b.kw.err"' "$LOG/b.kw.err"
     check "B4 PLANTED ANSWER (with model): keyword query ranks barn.md first" \
           'head -1 "$LOG/b.kw.out" | $GREP -qE "${RANK1}\./docs/barn\.md\$"' "$LOG/b.kw.out"
 
@@ -883,7 +896,7 @@ if [ "$HAVE_MODEL" = 1 ]; then
     ( cd "$F" && VIKI_MODEL_DIR="$PULLED_MODEL" "$VIKI_BIN" ask "$Q_WITNESS_SEMANTIC" \
         >"$LOG/m.hyb.out" 2>"$LOG/m.hyb.err" </dev/null ) || true
     check "M7 SELF-CONTAINED: the fresh clone runs HYBRID retrieval on the PULLED model" \
-          '$GREP -q "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=$MODEL_ID)" "$LOG/m.hyb.err" \
+          '$GREP -qE "viki ask: hybrid mode \(FTS5 BM25 \+ ndvss cosine, model_id=$EPOCH_RE\)" "$LOG/m.hyb.err" \
            && head -1 "$LOG/m.hyb.out" | $GREP -qE "${RANK1}\./docs/uncommitted-witness\.md\$"' \
           "$LOG/m.hyb.err"
 

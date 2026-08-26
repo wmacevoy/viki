@@ -214,5 +214,56 @@ else
     kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 fi
 
+# ---- E: the epoch key carries CHUNKING, not just the model -----------------
+#
+# THE BUG THIS STANDS AGAINST (FINDINGS.md, 2026-08-26): the cache key was
+# (content_hash, model_id, chunk_ix) and chunk_params was in neither it nor the
+# skip test, so two peers built with different VIKI_CHUNK_LINES produced rows
+# that collided on that key while holding DIFFERENT text. cache_merge_in's
+# INSERT OR IGNORE then resolved it first-writer-wins, and one document's lines
+# ended up indexed twice with nothing reporting it.
+#
+# The peer's rows are fabricated with sqlite3 rather than by building a second
+# viki, and that is the right trade here: the property under test is what the
+# KEY and the MERGE do with foreign rows, and both of those are real code. A
+# second binary would only be re-deriving rows this can state directly.
+echo "== E: chunking is part of the cache epoch =="
+E="$DIR/spokeE"
+mk_spoke "$E" "epoch key test document"
+EPOCH=$( sqlite3 "$E/.viki/cache.db" "SELECT DISTINCT model_id FROM viki_chunk LIMIT 1;" )
+case "$EPOCH" in
+  */c[0-9]*) ok "E1 the epoch id carries the chunk parameter ($EPOCH)" ;;
+  *)         bad "E1 the epoch id carries the chunk parameter" "got '$EPOCH'" ;;
+esac
+
+# A peer at the SAME model but a different chunking, on the same content.
+EH=$( sqlite3 "$E/.viki/cache.db" "SELECT content_hash FROM viki_chunk LIMIT 1;" )
+FOREIGN="${EPOCH%/c*}/c999"
+sqlite3 "$E/.viki/cache.db"   "INSERT INTO viki_chunk(content_hash,model_id,chunk_ix,chunk_text,embedding)
+     VALUES('$EH','$FOREIGN',0,'text from a peer that chunks differently',NULL);" 2>/dev/null
+
+NCLASH=$( sqlite3 "$E/.viki/cache.db"   "SELECT count(*) FROM viki_chunk WHERE content_hash='$EH' AND chunk_ix=0;" )
+[ "$NCLASH" = "2" ]   && ok "E2 two chunkings of one document COEXIST rather than colliding"   || bad "E2 two chunkings coexist" "rows at chunk_ix 0: $NCLASH (want 2)"
+
+# CONTROL, and the one that gives E2 its meaning: under the OLD key the same
+# two rows were indistinguishable. Insert a row that differs ONLY in text and
+# watch the primary key refuse it -- which is exactly what used to happen
+# silently across a merge.
+DUP=$( sqlite3 "$E/.viki/cache.db"   "INSERT INTO viki_chunk(content_hash,model_id,chunk_ix,chunk_text,embedding)
+     VALUES('$EH','$EPOCH',0,'DIFFERENT TEXT, SAME KEY',NULL);" 2>&1 )
+case "$DUP" in
+  *UNIQUE*|*constraint*) ok "E3 CONTROL: same (hash,epoch,ix) with different text is still ONE row -- which is why chunking had to enter the key" ;;
+  *)                     bad "E3 CONTROL: the key did not reject a same-key different-text row" "got '$DUP'" ;;
+esac
+
+# And a re-index must not re-chunk what is already present under this epoch:
+# the suffix must be STABLE, or every run re-embeds the whole corpus.
+( cd "$E" && "$VIKI" index . >"$LOG/e.reindex.err" 2>&1 )
+if grep -qE '0 \(re\)chunked' "$LOG/e.reindex.err"; then
+    ok "E4 the epoch id is stable across runs (re-index re-chunks nothing)"
+else
+    bad "E4 the epoch id is stable across runs" "$(grep 'file(s) scanned' "$LOG/e.reindex.err")"
+fi
+
 printf '\n%d passed, %d failed\n' "$nPass" "$nFail"
 [ "$nFail" -eq 0 ] || exit 1

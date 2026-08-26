@@ -68,17 +68,38 @@ reads like a guarantee and is actually an unenforced precondition: grow-only
 union is safe when a collision means the rows are EQUAL, and here a collision
 means they are different.
 
-### The fix, not yet taken
+### The fix, taken 2026-08-26
 
-Fold chunking into `model_id` (`"minilm-l6-v2/40"`) rather than adding a
-column. Mixed epochs already coexist correctly — m1's J1-J4 cover exactly
-that — so this reuses a mechanism already proven instead of adding one, and it
-converts silent corruption into ordinary cache fragmentation, which is a
-disclosed cost (CLAUDE.md, "the composition recipe is part of the sharing
-contract"). It is an epoch bump in effect, so it is Warren's call.
+Warren: *"bump the model"*. The stored key is now
+`"<model_id>/c<chunk_lines>"`, derived once by `viki_cache_epoch_id()`
+(`embed.c`). Differently-chunked peers merge as two epochs — ordinary,
+disclosed cache fragmentation — instead of silently corrupting one. The same
+repro now yields:
 
-`VIKI_CHUNK_LINES` is now `#ifndef`-guarded so the two binaries above can be
-built at all; that is the only code change this entry carries.
+```
+none/c20 | 5 chunks     each epoch complete and internally consistent
+none/c40 | 3 chunks     no collision, no double-indexed lines
+```
+
+`build/cache-probe.sh` E1–E4 is the standing proof. Composed at the cache layer
+rather than folded into the manifest's `model_id`, because that value is
+**distributed** (D-12's epoch pin, signed) and a local compile-time constant
+must not quietly rewrite what the pin says.
+
+**Two things this cost, both worth recording because both were found by
+measurement rather than by reading the diff:**
+
+1. **The first cut composed the key only in the WRITER.** `viki ask`'s vector
+   leg went on filtering by the bare model id, matched nothing, and hybrid
+   retrieval silently became BM25-only. m1's B2/B5/B7/J4 caught it. That is why
+   the derivation now lives in one function in `embed.h` used by every writer
+   and every reader, rather than being spelled out where it is needed.
+2. **Every pre-existing cache loses its vector leg until re-indexed** — and
+   `ask` went on announcing "hybrid mode" while doing so. Found by re-running
+   `test/retrieval-eval.sh` against an existing corpus and seeing hybrid score
+   *exactly* the BM25-only control. `viki ask` now checks its own announcement:
+   no vectors under this epoch, but some under another, prints a loud WARNING
+   naming both. The cache is derived (D-10), so `viki index` is the whole fix.
 
 ---
 ## A third retrieval leg turned an m1 assertion into a coin flip, and one green run hid it

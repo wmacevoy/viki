@@ -577,6 +577,40 @@ void viki_ask_defaults(viki_ask_opts *o){
     o->minCos = VIKI_MIN_COS_DEFAULT;
 }
 
+/* Rows with a usable embedding under exactly this epoch. */
+static int vectors_for_epoch(sqlite3 *db, const char *zEpoch){
+    sqlite3_stmt *st;
+    int n = 0;
+    if( sqlite3_prepare_v2(db,
+            "SELECT count(*) FROM viki_chunk WHERE model_id=?1 AND embedding IS NOT NULL",
+            -1, &st, NULL) != SQLITE_OK ) return 0;
+    sqlite3_bind_text(st, 1, zEpoch, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) == SQLITE_ROW ) n = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    return n;
+}
+
+/* The largest OTHER epoch that does have vectors, so the warning can name what
+** the cache actually holds rather than only what it lacks. */
+static int other_epoch_with_vectors(sqlite3 *db, const char *zEpoch,
+                                    char *zOut, size_t nOut){
+    sqlite3_stmt *st;
+    int n = 0;
+    zOut[0] = 0;
+    if( sqlite3_prepare_v2(db,
+            "SELECT model_id, count(*) FROM viki_chunk"
+            " WHERE model_id<>?1 AND embedding IS NOT NULL"
+            " GROUP BY model_id ORDER BY 2 DESC LIMIT 1",
+            -1, &st, NULL) != SQLITE_OK ) return 0;
+    sqlite3_bind_text(st, 1, zEpoch, -1, SQLITE_STATIC);
+    if( sqlite3_step(st) == SQLITE_ROW ){
+        snprintf(zOut, nOut, "%s", (const char*)sqlite3_column_text(st, 0));
+        n = sqlite3_column_int(st, 1);
+    }
+    sqlite3_finalize(st);
+    return n;
+}
+
 int viki_ask_query(sqlite3 *db, const char *zQuery, int topK, viki_embedder *emb,
                     viki_ask_result *results, int maxResults){
     viki_ask_opts o;
@@ -611,8 +645,14 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
 
     if( emb ){
         float *qvec = malloc(sizeof(float) * (size_t)viki_embedder_dim(emb));
+        /* THE STORED KEY, not the bare model id. Chunks are written under
+        ** "<model_id>/c<chunk_lines>" (embed.h), so filtering by the model id
+        ** alone matches nothing and hybrid retrieval degrades to BM25 without
+        ** saying so. m1 B2/B5/B7/J4 caught exactly that. */
+        char zEpoch[192];
+        viki_cache_epoch_id(emb, zEpoch, sizeof(zEpoch));
         if( viki_embed(emb, zQuery, qvec) == 0 ){
-            run_vector(db, qvec, viki_embedder_dim(emb), viki_embedder_model_id(emb), poolSize, pool, &n);
+            run_vector(db, qvec, viki_embedder_dim(emb), zEpoch, poolSize, pool, &n);
         }
         free(qvec);
     }
@@ -888,8 +928,34 @@ int viki_cmd_ask_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder *
     if( optsIn ) opts = *optsIn; else viki_ask_defaults(&opts);
 
     if( emb ){
-        fprintf(stderr, "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=%s)\n\n",
-                viki_embedder_model_id(emb));
+        char zEpoch[192], zOther[192];
+        int nOther = 0;
+        viki_cache_epoch_id(emb, zEpoch, sizeof(zEpoch));
+        fprintf(stderr, "viki ask: hybrid mode (FTS5 BM25 + ndvss cosine, model_id=%s)\n",
+                zEpoch);
+        /* AND CHECK THE ANNOUNCEMENT IS TRUE.
+        **
+        ** "hybrid mode" printed while the vector leg matches nothing is a
+        ** coverage lie, and the epoch change of 2026-08-26 created a way to
+        ** produce one at scale: every cache indexed before it holds embeddings
+        ** under the BARE model id, so the new filter finds no rows and every
+        ** answer silently comes from BM25 alone. It was found by re-running
+        ** test/retrieval-eval.sh against an existing corpus and seeing hybrid
+        ** score EXACTLY the BM25-only control -- not by reading the diff.
+        **
+        ** One cheap query, and only in the wrapper that already announces:
+        ** viki_ask_query() stays free of I/O. */
+        if( vectors_for_epoch(db, zEpoch) == 0
+         && (nOther = other_epoch_with_vectors(db, zEpoch, zOther, sizeof(zOther))) > 0 ){
+            fprintf(stderr,
+                "viki ask: WARNING -- this cache has NO vectors under '%s'.\n"
+                "viki ask:   It holds %d embedded chunk(s) under '%s', so it was indexed\n"
+                "viki ask:   before chunking became part of the cache epoch. The vector leg\n"
+                "viki ask:   is contributing NOTHING to the answers below; they are BM25 and\n"
+                "viki ask:   literal only. The cache is derived -- re-run 'viki index' to fix.\n",
+                zEpoch, nOther, zOther);
+        }
+        fprintf(stderr, "\n");
     }else{
         fprintf(stderr,
             "viki ask: degraded mode (BM25 keyword search only -- no embedding "

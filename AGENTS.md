@@ -933,6 +933,30 @@ this file -- against a binary missing three fixes that were sitting in
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
 
+- **CHUNKING ENTERED THE CACHE EPOCH** (2026-08-26). `build/cache-probe.sh`
+  `21 passed, 0 failed` (E1-E4 are the new ones); m1 90/0/0.
+  Stored `model_id` is now `"<manifest model_id>/c<chunk_lines>"`, derived once
+  by `viki_cache_epoch_id()`. **Why:** `chunk_params` is in D-11's determinism
+  claim but was in neither the cache key nor the skip test, so two peers with
+  different `VIKI_CHUNK_LINES` wrote rows colliding on
+  `(content_hash, model_id, chunk_ix)` with different text, and the merge's
+  `INSERT OR IGNORE` silently indexed one document's lines twice — reproduced
+  end to end through real `cache push`/`pull` before the fix, and again after
+  (FINDINGS.md). Differently-chunked peers now coexist as two epochs, reusing
+  the mixed-epoch machinery m1's J1-J4 already prove.
+  **Two defects this introduced and measurement caught, not review:** composing
+  the key only in the WRITER left `viki ask`'s vector leg filtering on the bare
+  id, silently degrading hybrid to BM25 (m1 B2/B5/B7/J4); and every
+  pre-existing cache loses its vector leg until re-indexed, while `ask` went on
+  announcing "hybrid mode" — found by re-running `test/retrieval-eval.sh`
+  against an existing corpus and seeing hybrid score EXACTLY the BM25-only
+  control. `viki ask` now verifies its own announcement and warns, naming both
+  epochs.
+  NOT verified: `viki serve` does not surface the epoch-mismatch warning (the
+  CLI does); nothing prunes a superseded epoch, by design — the index run
+  reports foreign-epoch chunk counts and leaves them, since another epoch may
+  belong to a peer mid-migration and the cache is derived anyway.
+
 - **SIGNED EPOCH PINS, AND `viki cache pull` ACTS ON THEM** (2026-08-25).
   `build/pinsig-probe.sh` `17 passed, 0 failed`; keywrap S1-S5 cover the
   primitive. An identity now mints an **ed25519 signing key** beside its X25519

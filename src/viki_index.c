@@ -19,20 +19,14 @@
 /* rung-0-only placeholder model id, until an ONNX embedding pipeline
 ** exists (VIKI_DESIGN.md rung 1/2; see FINDINGS.md). Chunks stored under
 ** this id have embedding=NULL and are retrievable via FTS5 BM25 only. */
-#define VIKI_MODEL_NONE "none"
+/* VIKI_MODEL_NONE moved to embed.h -- readers need it too. */
 
 /* Naive fixed-size line chunking. No overlap, no token-awareness. A
 ** documented placeholder -- see FINDINGS.md -- not a design decision to
 ** relitigate here (VIKI_DESIGN.md doesn't pin a chunking strategy).
 **
-** OVERRIDABLE ONLY SO IT CAN BE TESTED. This is a chunk_params value in D-11's
-** sense, and it is NOT part of the cache key -- see FINDINGS.md, "chunk_params
-** is missing from the cache key". Building two peers with different values and
-** syncing them produces silent row collisions, which is precisely what the
-** repro there does. Do not change the default without reading that entry. */
-#ifndef VIKI_CHUNK_LINES
-#define VIKI_CHUNK_LINES 40
-#endif
+** VIKI_CHUNK_LINES now lives in embed.h, because it is part of the CACHE
+** EPOCH and every reader needs the same value the writer used. */
 
 static const char *SKIP_DIRS[] = {
     ".git", ".fslckout", "_FOSSIL_", ".viki", "vendor", "build", NULL
@@ -2069,7 +2063,30 @@ int viki_cmd_index_since(sqlite3 *db, const char *zDir, viki_embedder *emb, long
     long newMark = -1;
     char projCode[128] = "";
     char *errmsg = NULL;
-    const char *modelId = emb ? viki_embedder_model_id(emb) : VIKI_MODEL_NONE;
+    char zEpoch[192];
+    const char *modelId = zEpoch;
+
+    /* THE CACHE EPOCH IS (MODEL, CHUNKING), NOT THE MODEL ALONE.
+    **
+    ** D-11 makes an embedding a deterministic function of
+    ** (content_hash, model_id, chunk_params), but chunk_params used to appear
+    ** in neither the cache key nor the skip test -- so two peers built with
+    ** different VIKI_CHUNK_LINES produced rows that COLLIDED on
+    ** (content_hash, model_id, chunk_ix) while holding different text, and
+    ** cache_merge_in's INSERT OR IGNORE resolved it first-writer-wins. The
+    ** reproduced consequence was one document's lines indexed twice with
+    ** nothing reporting it (FINDINGS.md, "chunk_params is missing from the
+    ** cache key").
+    **
+    ** The fix is to compose the parameter INTO the epoch id rather than add a
+    ** column: mixed epochs already coexist correctly and are already tested
+    ** (m1 J1-J4), so differently-chunked peers now merge as two epochs -- which
+    ** is ordinary cache fragmentation, disclosed and harmless -- instead of
+    ** silently corrupting one epoch. Composing here rather than in embed.c is
+    ** deliberate: the model_id in the manifest is a DISTRIBUTED value (D-12's
+    ** epoch pin), and a local compile-time constant must not quietly rewrite
+    ** what the pin says. This is the cache's key, not the model's name. */
+    viki_cache_epoch_id(emb, zEpoch, sizeof(zEpoch));
 
     memset(&auth, 0, sizeof(auth));
 
@@ -2217,6 +2234,39 @@ int viki_cmd_index_since(sqlite3 *db, const char *zDir, viki_embedder *emb, long
         nAttach, nAttachChunked, nUv, nUvChunked);
     fprintf(stderr, "viki index: %d stale source(s) retired, %d orphan chunk(s) removed\n",
             nDropped, nOrphans);
+
+    /* SAY WHEN THE CACHE HOLDS A FOREIGN EPOCH, because the first run after
+    ** this change silently doubles every existing cache: the epoch id gained a
+    ** "/cN" suffix, so nothing matches the skip test and everything re-chunks
+    ** under the new id while the old rows stay put. Old epochs coexisting is
+    ** the DESIGN (gc_orphan_chunks prunes by content_hash only, and m1 J1-J4
+    ** score across epochs deliberately), so this is a fact, not a fault -- and
+    ** a cache that quietly doubled without saying so is the kind of thing this
+    ** project has been bitten by. Not auto-pruned: another epoch may belong to
+    ** a peer mid-migration, and deleting someone else's rows is a judgment.
+    ** The cache is derived (D-10) -- rm .viki/cache.db and re-index is always
+    ** the safe answer. */
+    {
+        sqlite3_stmt *stEp = NULL;
+        if( sqlite3_prepare_v2(db,
+                "SELECT count(*), count(DISTINCT model_id) FROM viki_chunk"
+                " WHERE model_id <> ?1", -1, &stEp, NULL) == SQLITE_OK ){
+            sqlite3_bind_text(stEp, 1, modelId, -1, SQLITE_STATIC);
+            if( sqlite3_step(stEp) == SQLITE_ROW ){
+                int nOther = sqlite3_column_int(stEp, 0);
+                int nEpochs = sqlite3_column_int(stEp, 1);
+                if( nOther > 0 ){
+                    fprintf(stderr,
+                        "viki index: %d chunk(s) under %d OTHER epoch(s) remain in this cache.\n"
+                        "viki index:   Not an error -- epochs coexist by design, and retrieval\n"
+                        "viki index:   scores across them. The cache is derived: to drop them,\n"
+                        "viki index:   rm .viki/cache.db and re-index.\n",
+                        nOther, nEpochs);
+                }
+            }
+            sqlite3_finalize(stEp);
+        }
+    }
     /* Say out loud which namespaces were left untouched. A silent "0
     ** retired" is ambiguous between "nothing was stale" and "this run had
     ** no way to tell", and the difference is exactly what decides whether

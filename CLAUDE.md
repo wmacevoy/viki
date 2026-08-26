@@ -590,6 +590,23 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   ndvss was chosen over sqlite-vec returned a vendored `sqlite3.c` at rank 1.
   Adding the file took the corpus from 9,578 chunks to 779 and moved that
   question's rank-1 hit to `FINDINGS.md`, where the answer is.
+- **The cache epoch is `(model, chunking)`, not the model alone.** Chunks are
+  stored under `model_id = "<manifest model_id>/c<chunk_lines>"`, derived in
+  ONE place — `viki_cache_epoch_id()` in `embed.c` — which every writer and
+  every reader must use. Composing it only in the indexer is a live trap: the
+  vector leg then filters on the bare id, matches nothing, and hybrid
+  retrieval silently becomes BM25-only (m1 B2/B5/B7/J4 catch it). It is
+  composed at the cache layer and NOT folded into the manifest, because the
+  manifest's `model_id` is a distributed, signed value (D-12) that a local
+  compile-time constant must not rewrite. Why chunking is in the key at all:
+  without it, two peers built with different `VIKI_CHUNK_LINES` wrote rows
+  that collided on `(content_hash, model_id, chunk_ix)` with *different text*,
+  and the merge's `INSERT OR IGNORE` silently double-indexed a document's lines
+  (FINDINGS.md, with the repro). `build/cache-probe.sh` E1–E4 is the proof.
+  **Every cache indexed before 2026-08-26 loses its vector leg until
+  re-indexed** — `viki ask` detects exactly that and prints a WARNING rather
+  than announcing hybrid mode over a dead leg; `viki index` is the whole fix,
+  since the cache is derived (D-10).
 - **Known-naive by choice, not by oversight** (see AGENTS.md before "fixing"):
   fixed 40-line chunks with no overlap or token awareness, ASCII-scoped
   tokenizer, no epoch-migration path for a model change, and
