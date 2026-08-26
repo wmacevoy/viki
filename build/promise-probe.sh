@@ -19,9 +19,16 @@ mkdir -p "$DIR"; DIR=$(cd "$DIR" && pwd)
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 V="${VIKI_BIN:-$ROOT/build/dist/viki}"
 [ -x "$V" ] || { echo "no viki at $V"; exit 2; }
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ok(){ PASS=$((PASS+1)); echo "  PASS  $1"; }
 no(){ FAIL=$((FAIL+1)); echo "  FAIL  $1"; }
+# sk() WAS CALLED AT TWO SITES AND NEVER DEFINED. A skipped assertion therefore
+# produced `sk: command not found` on stderr and vanished from the tally, so a
+# run with no sqlite3 printed `PASS=21 FAIL=0`, exit 0, with nothing saying
+# three assertions had not run. CLAUDE.md's "a skipping run still exits 0 --
+# never read exit status alone, read the N passed / N failed / N skipped line"
+# is implemented in test/m1.sh and was missing here.
+sk(){ SKIP=$((SKIP+1)); echo "  SKIP  $1"; }
 chk(){ if [ "$2" = "$3" ]; then ok "$1"; else no "$1 (got '$2' want '$3')"; fi; }
 
 cd "$DIR"
@@ -142,6 +149,31 @@ else
       "$(printf '%s' "$QB" | grep -c 'WHAT I CAN SEE')" "1"
 fi
 
+# THE BRIEF MUST SHOW A PROMISE THAT IS NOT YET LATE.
+# assistant/brief.sh filtered the ledger with `grep -vE '^(       |$)'`, which
+# was written for the note-id continuation line and also matched every row with
+# no risk marker (viki_note.c prints `%-8s ...`, so those begin with NINE
+# spaces). A promise due in three days vanished from AT RISK, leaving only the
+# count -- the brief warned AFTER a miss, when 2.4 asks for the warning before.
+if [ -f "$ROOT/assistant/brief.sh" ]; then
+    # Added HERE, after every counting assertion above, so a new row cannot
+    # perturb their tallies. Deliberately UNOWNED: viki_note.c treats a promise
+    # with no holder as yours, which is what `--me mine` must pick up.
+    BF=$(cap "soonmarker renew the trailer registration")
+    "$V" structure "$BF" --type task --due "$SOON" >/dev/null 2>&1
+    "$V" index . >/dev/null 2>&1        # the ledger is a projection; refresh it
+    BSOON=$(VIKI_BIN="$V" sh "$ROOT/assistant/brief.sh" --me mine --horizon 7d 2>/dev/null \
+            | sed -n '/AT RISK/,/WHAT I CAN SEE/p')
+    chk "B9 the brief lists a promise that is DUE LATER, not just overdue ones" \
+        "$(printf '%s' "$BSOON" | grep -c 'soonmarker')" "1"
+    # CONTROL: it must still be a brief, not a dump of the whole ledger --
+    # the note-id continuation lines are scaffolding and stay out.
+    chk "B10 CONTROL: ...and the note-id continuation lines stay filtered" \
+        "$(printf '%s' "$BSOON" | grep -cE '^[[:space:]]+[^[:space:]]+$')" "0"
+else
+    sk "B9 (no assistant/brief.sh)"; sk "B10 (no assistant/brief.sh)"
+fi
+
 echo "== coverage is stated, not implied (2.5) =="
 chk "P9 the ledger says what it can and cannot see" \
     "$(printf '%s' "$OUT2" | grep -c 'captured and ingested notes only')" "1"
@@ -199,5 +231,5 @@ rm -f captures/dateonly.md
 "$V" index . >/dev/null 2>&1
 
 echo
-echo "PASS=$PASS FAIL=$FAIL"
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]

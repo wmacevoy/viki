@@ -39,7 +39,27 @@ printf 'MORNING BRIEF  %s\n' "$TODAY"
 printf '\nAT RISK\n'
 RISK=$("$V" promises --me "$ME" --horizon "$HORIZON" 2>/dev/null || true)
 if printf '%s' "$RISK" | grep -qE '^(OVERDUE|TODAY|         [0-9])'; then
-  printf '%s\n' "$RISK" | sed -n '3,$p' | grep -vE '^(       |$)'
+  # KEEP EVERY PROMISE ROW, DROP THE SCAFFOLDING.
+  #
+  # This used to be `grep -vE '^(       |$)'` -- drop lines starting with seven
+  # spaces -- which was written for the note-id continuation line and silently
+  # ate every promise that was NOT already overdue. viki_note.c:379 prints
+  # `%-8s %-10s %-12s %s`, so a row with no risk marker begins with NINE spaces
+  # and matched the filter. Measured 2026-08-26: a promise due in three days
+  # vanished from AT RISK entirely, leaving only "0 overdue, 0 due today,
+  # 1 later".
+  #
+  # That inverts what section 2.4 asks for. A brief that lists only what is
+  # ALREADY overdue warns after the miss; the whole point is the warning
+  # BEFORE it.
+  #
+  # So filter by STRUCTURE, not by indentation: a promise row has several
+  # fields, the continuation line is one indented token (the note id), and the
+  # footer lines are the ledger describing its own coverage -- which the brief
+  # states in its own words further down.
+  printf '%s\n' "$RISK" | sed -n '3,$p' \
+    | grep -vE '^[[:space:]]*$|^[[:space:]]+[^[:space:]]+$' \
+    | grep -vE '^[[:space:]]+(undated promises|this ledger sees)'
 else
   # The good morning, stated. This branch is the one that earns trust.
   printf '  nothing due in the next %s.\n' "$HORIZON"

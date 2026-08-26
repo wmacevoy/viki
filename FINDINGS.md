@@ -58,6 +58,40 @@ A URL written inside a comment can now fail R6. That is the right direction to
 err for a component handling private correspondence.
 
 ---
+## The morning brief showed only what was ALREADY late, which inverts what it is for
+
+2026-08-26. Same v1 audit. `assistant/brief.sh` filtered the ledger with
+`grep -vE '^(       |$)'` -- drop lines beginning with seven spaces. That was
+written to remove the note-id continuation line. But `viki_note.c` prints rows
+as `%-8s %-10s %-12s %s`, so a promise with **no risk marker** begins with NINE
+spaces, matched the filter, and was deleted.
+
+```
+AT RISK
+0 overdue, 0 due today, 1 later      <- the promise itself is gone
+```
+
+A promise due in three days did not appear at all. The brief therefore listed
+only what was already OVERDUE or due TODAY -- **a warning after the miss**,
+where VIKIVERSE_V1 2.4 asks for the warning before it. The one feature the
+brief exists to provide was the one it did not have.
+
+Fixed by filtering on STRUCTURE rather than indentation: a promise row has
+several fields, the continuation line is a single indented token, and the
+ledger's coverage footer is dropped because the brief states its coverage in
+its own words. B9/B10 assert both halves; B9 fails against the old brief.
+
+### And the probe could not have caught it
+
+`build/promise-probe.sh` called `sk` at two sites and **never defined it**. A
+skipped assertion produced `sk: command not found` on stderr and vanished from
+the tally, so a run without `sqlite3` printed `PASS=21 FAIL=0`, exit 0, with
+nothing saying three assertions had not run. CLAUDE.md's own doctrine -- "a
+skipping run still exits 0; never read exit status alone, read the N passed,
+N failed, N skipped line" -- is implemented in `test/m1.sh` and was missing
+here. `sk()` is now defined and the summary carries `SKIP=`.
+
+---
 ## A promise due today, written as a bare date, read OVERDUE all day
 
 2026-08-26. Same audit. `risk_of()` compared the due string against `zNow` with
