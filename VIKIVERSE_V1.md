@@ -395,22 +395,58 @@ Four phases. The split is **what is blocked on a decision** versus what is not �
 because the substrate is essentially done and the remaining risk is choices, not
 code.
 
-### Phase 0 — now. Nothing blocks it.
+### Phase 0 — status 2026-08-26
 
-| | work | why now |
+| | work | state |
 |---|---|---|
-| P0.1 | **Promise ledger** (§2.1, §2.2, §2.2b) | `viki_note` already has `who`/`due`/`state`/`closes`/`claimed`/`lease`/`challenge`. Needs a ledger view, agent identity wired in, and supersession queryable as history. No new schema, no external answers. |
-| P0.2 | **Provenance** (§2.8) — `viki when`, `viki since` | A join over `mlink`/`event`, tables Fossil already keeps open. No model, no epoch bump. Answers the questions an agent asks most. |
-| P0.3 | **Verse hygiene** | Eight projects still refuse to index (`darter`, `data-mine-wmacevoy`, `flutter`, +5): each needs a `.vikiignore` naming its dependency tree. An afternoon. |
-| P0.4 | **Retrieval quality at verse scale** | The real open risk — see below. |
+| P0.1 | **Promise ledger** (§2.1, §2.2, §2.2b) | **DONE.** `viki promises` / `viki why`; `build/promise-probe.sh` 24/0. P4 is the assertion that matters: a superseded promise must LEAVE the ledger. |
+| P0.2 | **Provenance** (§2.8) — `viki when`, `viki since` | **NOT BUILT.** Still the next unblocked item: a join over `mlink`/`event`, no model, no epoch bump. |
+| P0.3 | **Verse hygiene** | **DONE.** All 110 registered projects carry a `.vikiignore`. Measured on this repo when the file was introduced: the corpus went from 9,578 chunks to 779, and 83.4% of what it had been indexing was vendored SQLCipher/LibreSSL source. |
+| P0.4 | **Retrieval quality at verse scale** | **OPEN — and still the one that could reorder everything.** |
 
-**P0.4 is the one that could reorder everything.** At 139,000 chunks, MiniLM's
-cosine is doing work it is mediocre at: it scores register and form over
-referent, which is measurable (a true contradiction scored 0.268 while an
-unrelated distractor scored 0.420). Coverage is solved; ranking is now the
-binding constraint. D-11 makes the model an explicit epoch bump, so this is a
-deliberate, testable change with `test/retrieval-eval.sh` as the gate — **not**
-an index problem, and reaching for ANN here would buy faster mediocre answers.
+**Shipped in Phase 0 that the original table did not anticipate**, because
+writing `SCOPES.md` and `SYNC.md` turned up work that had no name yet:
+
+- `viki sql` — the RAW surface (SCOPES §1b). Agents could not do a vector query
+  at all before it: a stock `sqlite3` on `cache.db` gets `no such function:
+  ndvss_cosine_similarity_f`, so `ask` was the only door.
+- `viki coverage` — a query with no judgment in it, and `assistant/brief.sh` as
+  the L3 consumer that supplies the judgment.
+- The literal leg in `viki ask`, which makes `ask ⊇ grep` for exact strings.
+- Key custody signing, and `cache pull` verifying the epoch pin (SYNC.md).
+
+**P0.4 measured 2026-08-26, and it reordered things — but not the way this
+paragraph predicted.** Corpus fp `6cfd14b5fded16b3`, n=43 indexed-answer
+queries: recall@1 0.372, recall@5 0.605, MRR 0.476, against a BM25-only control
+of 0.256 / 0.535 / 0.403. So the vector leg is earning its place. The draft
+above blamed MiniLM's cosine and pointed at an epoch bump. The failure taxonomy
+says the binding constraint is somewhere else:
+
+- **RIGHT DOCUMENT, WRONG CHUNK in 17 of 43 queries** — 12 of them at rank 1.
+  Another chunk *of the gold document* outranks the chunk that holds the answer.
+  **No model change fixes this.** Fixed 40-line chunks with no overlap split an
+  answer away from the vocabulary that would find it.
+- **The keyword leg is not selecting.** The OR-of-terms MATCH selects a median
+  of **189 of 190 chunks**; 42 of 43 queries match >90% of the corpus. `porter
+  unicode61` carries no stopword list, so BM25 is ranking the whole corpus
+  rather than a candidate set.
+- Worst classes are `vocab-mismatch` (recall@1 0.000, MRR 0.028 on dev) and
+  `superseded` (recall@1 0.000, though recall@5 0.800 — it finds them, it just
+  ranks the retired version first).
+
+So the ordered work is **chunking (overlap, and boundaries that respect
+structure)**, then **keyword-leg selectivity**, and only then the model. That is
+cheaper and more testable than an epoch bump, and `test/retrieval-eval.sh`
+gates all three.
+
+**And chunking is blocked by a defect the measurement exposed.** `chunk_params`
+is in D-11's determinism claim but in neither the cache key nor the skip test,
+so two peers that chunk differently silently double-index the same lines —
+reproduced end to end through real `cache push`/`pull`. See FINDINGS.md,
+*"chunk_params is missing from the cache key"*. **Fix that first**, or the first
+chunking change corrupts every cache it syncs with. Recommended fix: fold
+chunking into `model_id`, reusing the mixed-epoch coexistence m1's J1–J4
+already prove.
 
 ### Phase 1 — UNBLOCKED 2026-08-24. Q5 and Q6 answered; see §5c.
 
@@ -420,9 +456,9 @@ an index problem, and reaching for ANN here would buy faster mediocre answers.
 | P1.2 | **Gmail / Outlook / GitHub ingest** (§2.3) | UNBLOCKED — the four readable channels first |
 | P1.2b | **Chrome reader** for Facebook / Discord (§2.3) | BUILT 2026-08-24. Facebook verified against a live logged-in account (30 rows, 28 captured); Discord's message selectors still unverified |
 | P1.2c | **Chrome reader: D2L** (§2.3) | BUILT + VERIFIED 2026-08-24 against a live account: Quick Eval, 20 rows captured. Targets grading OWED, not announcements sent |
-| P1.2d | **Chrome reader: O365 / Outlook / Teams** (§2.3) | NEXT. Same web-only constraint; entry points are `mavnet.coloradomesa.edu/cmu_redir/{outlook,teams,office365}` |
-| P1.3 | **The clock: morning brief** (§2.4) | UNBLOCKED (Q6 answered) — it asks; questions batch into the brief |
-| P1.4 | **Coverage reporting** (§2.5) | ships with P1.3, and now MUST name Signal/WhatsApp/Facebook as unseen |
+| P1.2d | **Chrome reader: O365 / Outlook** (§2.3) | BUILT 2026-08-24 (`edge/chrome/sites/outlook.js`), verified against a live mailbox. **Teams is NOT built.** |
+| P1.3 | **The clock: morning brief** (§2.4) | **DONE** — `assistant/brief.sh`, and deliberately NOT a viki subcommand: it asks questions, and viki structurally cannot (SCOPES §3). |
+| P1.4 | **Coverage reporting** (§2.5) | **DONE** — `viki coverage` reports; the brief decides what "stale" means and prints the bounded SIGN IN list. |
 | P1.5 | **Capture as the bridge** (§2.6) | PROMOTED — the only coverage mechanism unreadable channels have |
 
 This phase is where it stops being a search tool. P1.3 is the first thing you
@@ -448,7 +484,15 @@ Substrate: retrieval core with three legs; nine indexed artifact classes;
 encryption end to end; age-compatible key custody with `identity.db` and a tribe
 registry; the wasm edge, hybrid and encrypted, several tribes at once; an
 installable PWA; snapshot pull over HTTPS; and the verse — 110 projects, one
-question. Tests: m1 90/0/0, plus nine probes.
+question. Since: the promise ledger, `viki sql`, `viki coverage`, the morning
+brief, `.vikiignore`, ed25519 signing and a `cache pull` that verifies the epoch
+pin. Tests: m1 90/0/0, plus eleven probes.
+
+**And the two boundary documents, which are the reason the list above stopped
+sprawling**: `SCOPES.md` (four levels, and the one-line test — *can viki compute
+this without an opinion?*) and `SYNC.md` (what a tribe may carry, and what it
+must refuse). Both were written because the same boundary got crossed twice in
+one day, and both have since caught work before it landed in the wrong place.
 
 ---
 

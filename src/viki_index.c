@@ -23,8 +23,16 @@
 
 /* Naive fixed-size line chunking. No overlap, no token-awareness. A
 ** documented placeholder -- see FINDINGS.md -- not a design decision to
-** relitigate here (VIKI_DESIGN.md doesn't pin a chunking strategy). */
+** relitigate here (VIKI_DESIGN.md doesn't pin a chunking strategy).
+**
+** OVERRIDABLE ONLY SO IT CAN BE TESTED. This is a chunk_params value in D-11's
+** sense, and it is NOT part of the cache key -- see FINDINGS.md, "chunk_params
+** is missing from the cache key". Building two peers with different values and
+** syncing them produces silent row collisions, which is precisely what the
+** repro there does. Do not change the default without reading that entry. */
+#ifndef VIKI_CHUNK_LINES
 #define VIKI_CHUNK_LINES 40
+#endif
 
 static const char *SKIP_DIRS[] = {
     ".git", ".fslckout", "_FOSSIL_", ".viki", "vendor", "build", NULL

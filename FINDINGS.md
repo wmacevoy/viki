@@ -12,6 +12,75 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## chunk_params is missing from the cache key, so two peers that chunk differently silently double-index the same lines
+
+2026-08-26. Found while measuring P0.4 (retrieval quality), and it is a
+**blocker on the fix that measurement points to** rather than a live bug: every
+peer today compiles the same `VIKI_CHUNK_LINES 40`, so nothing is corrupt right
+now. It goes wrong the moment anyone changes chunking, which is exactly what
+the P0.4 numbers argue for.
+
+D-11 says an embedding is a deterministic function of
+`(content_hash, model_id, chunk_params)`. The cache key is
+`PRIMARY KEY(content_hash, model_id, chunk_ix)` (`viki_db.c:32`) and the
+skip-if-present test is `content_hash=?1 AND model_id=?2`
+(`viki_index.c:299`). **`chunk_params` appears in neither.** So the cache
+cannot tell two chunkings apart, and `cache_merge_in`'s
+`INSERT OR IGNORE` (`viki_cache.c:1094`) resolves the collision by
+first-writer-wins on rows whose text is different.
+
+### Repro
+
+One 100-line document, byte-identical on both peers, so identical
+`content_hash`. Peer A built with `VIKI_CHUNK_LINES 40`, peer B with `20`:
+
+```
+A (40-line): 3 chunks   chunk 1 starts "line 41"
+B (20-line): 5 chunks   chunk 1 starts "line 21"      <- same key, different text
+```
+
+B pushes, A pulls (`viki cache push/pull --no-model`, the real path):
+
+```
+chunk_ix  starts at   lines
+   0      line 1       40     <- A's
+   1      line 41      40     <- A's
+   2      line 81      20     <- A's
+   3      line 61      20     <- B's, OVERLAPS A's chunk 1
+   4      line 81      20     <- B's, DUPLICATES A's chunk 2
+
+$ SELECT count(*) ... WHERE chunk_text LIKE '%line 81%'
+2
+```
+
+**Lines 61-100 are now indexed twice, and nothing says so.** Consequences:
+near-duplicate hits eat top-k slots, RRF double-counts one document, and the
+`chunk_ix of chunk_count` that `serve` and `ask` display becomes meaningless
+(chunk 2 of 5 for a document that has either 3 chunks or 5, never both).
+
+### The wrong assumption it replaces
+
+SYNC.md 1 claims viki's cache "passes by construction rather than by luck"
+because the chunk key is `(content_hash, model_id, chunk_ix)` and D-11 makes
+the row a deterministic function of exactly those. That is true only while
+`chunk_params` is a global constant. It is a *compile-time* constant, which
+reads like a guarantee and is actually an unenforced precondition: grow-only
+union is safe when a collision means the rows are EQUAL, and here a collision
+means they are different.
+
+### The fix, not yet taken
+
+Fold chunking into `model_id` (`"minilm-l6-v2/40"`) rather than adding a
+column. Mixed epochs already coexist correctly — m1's J1-J4 cover exactly
+that — so this reuses a mechanism already proven instead of adding one, and it
+converts silent corruption into ordinary cache fragmentation, which is a
+disclosed cost (CLAUDE.md, "the composition recipe is part of the sharing
+contract"). It is an epoch bump in effect, so it is Warren's call.
+
+`VIKI_CHUNK_LINES` is now `#ifndef`-guarded so the two binaries above can be
+built at all; that is the only code change this entry carries.
+
+---
 ## A third retrieval leg turned an m1 assertion into a coin flip, and one green run hid it
 
 2026-08-24. Recorded because the failure mode is "the suite is green sometimes"
