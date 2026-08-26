@@ -37,8 +37,41 @@ DIR="${1:-$HOME/projects}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 V="${VIKI_BIN:-$ROOT/build/dist/viki}"
 REG="${VIKI_VERSE:-$HOME/.viki/verse.tsv}"
-OWNER="${VIKI_VERSE_OWNER:-$(git config --get user.name 2>/dev/null | tr 'A-Z ' 'a-z-')}"
-[ -n "$OWNER" ] || OWNER="$(id -un)"
+# OWNERSHIP MATCHING, and the default was wrong in the way that costs the most.
+#
+# It derived OWNER from `git config user.name` -- "Warren MacEvoy" ->
+# "warren-macevoy" -- and matched that against remote URLs that say
+# "github.com/wmacevoy/...". A REAL NAME IS NOT A FORGE HANDLE. Every one of
+# Warren's own repos therefore classified as CLONE, and a CLONE not ahead of
+# its upstream is skipped, so a rebuild on 2026-08-26 took the verse from 110
+# projects to 33 and said nothing about it (see the loud-skip change below).
+#
+# So: take the handle from THIS repo's own origin URL, which is by construction
+# a repo the user owns, and keep the user.name slug as an additional candidate
+# rather than the only one. Any candidate matching makes it OWN.
+derive_handle(){          # $1 = a remote URL -> the owner path segment
+    printf '%s' "$1" | sed -n \
+      -e 's|^[a-z+]*://[^/]*/\([^/]*\)/.*|\1|p' \
+      -e 's|^[^@]*@[^:]*:\([^/]*\)/.*|\1|p' | head -1 | tr 'A-Z' 'a-z'
+}
+if [ -n "${VIKI_VERSE_OWNER:-}" ]; then
+    OWNERS="$VIKI_VERSE_OWNER"
+else
+    OWNERS="$(derive_handle "$(git -C "$ROOT" config --get remote.origin.url 2>/dev/null)")"
+    NAMESLUG="$(git config --get user.name 2>/dev/null | tr 'A-Z ' 'a-z-')"
+    [ -n "$NAMESLUG" ] && OWNERS="$OWNERS $NAMESLUG"
+    OWNERS="$OWNERS $(id -un)"
+fi
+OWNERS="$(printf '%s' "$OWNERS" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+[ -n "$OWNERS" ] || OWNERS="$(id -un)"
+printf 'ownership matched against: %s\n' "$OWNERS"
+
+owned_remote(){           # $1 = lowercased remote url -> 0 if any candidate matches
+    for o in $OWNERS; do
+        case "$1" in *"/$o/"*|*":$o/"*) return 0 ;; esac
+    done
+    return 1
+}
 [ -x "$V" ] || { echo "no viki at $V"; exit 2; }
 [ -d "$DIR" ] || { echo "no such directory: $DIR"; exit 2; }
 mkdir -p "$(dirname "$REG")"
@@ -112,10 +145,14 @@ for d in "$DIR"/*/; do
   if [ -n "$upstream" ]; then
     kind=FORK
   elif [ -n "$remote" ]; then
-    case "$(printf '%s' "$remote" | tr 'A-Z' 'a-z')" in
-      *"$OWNER"*) kind=OWN ;;
-      *)          kind=CLONE ;;
-    esac
+    # Anchored on the PATH SEGMENT (".../owner/repo"), not a bare substring:
+    # a substring match makes "wmacevoy" own "not-wmacevoy-really/x", and more
+    # importantly makes any repo whose NAME contains the handle look owned.
+    if owned_remote "$(printf '%s' "$remote" | tr 'A-Z' 'a-z')"; then
+      kind=OWN
+    else
+      kind=CLONE
+    fi
   fi
 
   base=""
@@ -136,7 +173,16 @@ for d in "$DIR"/*/; do
       ;;
     CLONE)
       ahead=$(git -C "$d" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
-      if [ "${ahead:-0}" -eq 0 ]; then nSkip=$((nSkip+1)); continue; fi
+      if [ "${ahead:-0}" -eq 0 ]; then
+        # SAY SO. This `continue` printed NOTHING, and on 2026-08-26 it
+        # silently dropped 105 of 110 projects out of the verse after an
+        # ownership-matching change -- the summary counted them and no line
+        # named one. This file's own size-guard comment calls silence
+        # indistinguishable from work the failure 2.9 forbids; this branch was
+        # doing it. A skip is a coverage fact and coverage facts are stated.
+        printf '  %-8s %-32s (someone else'"'"'s, not ahead of upstream)\n' SKIP "$name"
+        nSkip=$((nSkip+1)); continue
+      fi
       base=$(git -C "$d" rev-parse --verify -q '@{upstream}' 2>/dev/null || true)
       nClone=$((nClone+1))
       ;;
@@ -184,15 +230,32 @@ for d in "$DIR"/*/; do
   # exactly the failure VIKIVERSE_V1 2.9 forbids, so: count first, and refuse
   # loudly with the fix in the message. A project that WANTS to be big says so
   # by raising the cap.
+  # THE GUARD MUST COUNT WHAT VIKI WOULD ACTUALLY INDEX.
+  #
+  # It used to apply a hardcoded exclusion list and ignore the project's
+  # .vikiignore entirely -- so `darter` was refused for 8,323 files of which
+  # 6,331 were app/macos/Pods, a directory the DEFAULT .vikiignore already
+  # names. The message said "add a .vikiignore"; adding one could not change
+  # the count. Advice that cannot work is worse than no advice, because the
+  # user does the work and the tool refuses anyway.
+  #
+  # So build the find expression FROM .vikiignore, using viki's own rule
+  # (viki_index.c path_ignored): a pattern with no '/' matches any path
+  # COMPONENT; one with '/' matches that relative path and everything under it.
   MAXF="${VIKI_VERSE_MAX_FILES:-4000}"
-  nCand=$(find "$d" -type f \
-            -not -path '*/.git/*' -not -path '*/node_modules/*' \
-            -not -path '*/.venv/*' -not -path '*/venv/*' -not -path '*/env/*' \
-            -not -path '*/__pycache__/*' -not -path '*/.viki/*' \
-            -not -path '*/vendor/*' -not -path '*/build/*' -not -path '*/dist/*' \
-            2>/dev/null | head -$((MAXF + 1)) | wc -l | tr -d ' ')
+  set -- -not -path '*/.git/*' -not -path '*/.viki/*'
+  if [ -f "$d/.vikiignore" ]; then
+    while IFS= read -r pat; do
+      case "$pat" in ''|'#'*) continue ;; esac
+      case "$pat" in
+        */*) set -- "$@" -not -path "./${pat%/}/*" -not -path "./${pat%/}" ;;
+        *)   set -- "$@" -not -path "*/$pat/*" -not -name "$pat" ;;
+      esac
+    done < "$d/.vikiignore"
+  fi
+  nCand=$( cd "$d" && find . -type f "$@" 2>/dev/null | head -$((MAXF + 1)) | wc -l | tr -d ' ' )
   if [ "${nCand:-0}" -gt "$MAXF" ]; then
-    printf '  %-8s %-32s >%s files -- add a .vikiignore, or raise VIKI_VERSE_MAX_FILES\n' \
+    printf '  %-8s %-32s >%s files AFTER .vikiignore -- name more of its tree, or raise VIKI_VERSE_MAX_FILES\n' \
            BIG "$name" "$MAXF"
     nBig=$((nBig+1)); continue
   fi
