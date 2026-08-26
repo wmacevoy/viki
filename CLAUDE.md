@@ -106,12 +106,20 @@ build/dist/viki why <note-id>            # the supersession chain BOTH ways: wha
                                          # and what replaced it. What an agent reads BEFORE
                                          # starting, so it does not redo a superseded attempt
 build/dist/viki serve [--host H] [--port N]   # 127.0.0.1:8080; / = HTML page, /api/* = JSON
-build/dist/viki cache push|pull [db-path] [--no-model]
+build/dist/viki cache push|pull [db-path] [--no-model] [--require-signature]
                                          # fossil uv add/sync/export -- moves the embedding
                                          # cache AND the pinned model ($VIKI_MODEL_DIR), so a
                                          # fresh clone gets hybrid retrieval from the hub alone.
                                          # The model leg is ON by default; --no-model opts out
-                                         # (viki_cache.h explains why that polarity)
+                                         # (viki_cache.h explains why that polarity).
+                                         # PULL VERIFIES THE EPOCH PIN'S ed25519 SIGNATURE against
+                                         # the checkout's viki-signers.json. A pin that FAILS is
+                                         # always refused; unsigned/uncheckable ones are reported
+                                         # loudly and proceed unless --require-signature. The
+                                         # signer list is read ONLY from the checkout, never uv --
+                                         # it is the one input a signature cannot protect. See
+                                         # SYNC.md; the verifier is `viki-identity` as a
+                                         # SUBPROCESS, because viki links no crypto
 ```
 
 `vendor/fossil-see` is **not** a build dependency — it is a submodule only so a
@@ -259,6 +267,17 @@ sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests un
                                             #   scored 7/7 against a binary with no leg).
                                             #   REFUSES to run without a model, for that reason
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
+sh build/pinsig-probe.sh <empty-dir>         # the EPOCH PIN'S SIGNATURE, where `cache pull`
+                                            #   ACTS on it -- 17 assertions. Distinct from
+                                            #   keywrap's S-series: that proves ed25519 works,
+                                            #   this proves viki OBEYS it. N3/N4 are the point:
+                                            #   a signed pin with NO verifier installed must print
+                                            #   "CANNOT BE CHECKED" and must NOT name a signer,
+                                            #   because viki links no crypto and the verifier is a
+                                            #   SUBPROCESS that may be absent. N0 is a non-vacuity
+                                            #   gate that refuses to run if the pull cannot reach
+                                            #   pull_model -- the first draft scored 7 PASS on
+                                            #   assertions that were all exit-status noise
 sh build/cache-probe.sh <empty-dir>         # the DISTRIBUTION path: push/pull. The only
                                             #   test that runs over real HTTP with a
                                             #   capability-limited user -- which is how

@@ -39,6 +39,19 @@ int viki_cmd_cache_pull(const char *zCacheDbPath);
 ** routine `viki cache push` moves the cache and nothing else. */
 #define VIKI_CACHE_NO_MODEL 0x01u
 
+/* VIKI_CACHE_REQUIRE_SIG -- refuse a model whose epoch pin is not signed by a
+** key listed in the checkout's viki-signers.json.
+**
+** OFF BY DEFAULT, and the polarity is the whole decision. A REJECTED signature
+** is always fatal -- that is evidence, not policy. But "unsigned", "no signer
+** list" and "no verifier installed" are states every tribe is in until it
+** adopts signing, and defaulting to refusal would break each of them on
+** upgrade. So viki always REPORTS the state loudly and acts on it only when
+** the caller asks. Whether a tribe requires signatures is the tribe's
+** judgment, which makes it exactly the kind of thing that belongs behind a
+** flag rather than inside the tool (SCOPES.md 3). */
+#define VIKI_CACHE_REQUIRE_SIG 0x02u
+
 int viki_cmd_cache_push_opts(const char *zCacheDbPath, unsigned mFlags);
 int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags);
 

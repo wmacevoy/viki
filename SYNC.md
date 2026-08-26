@@ -177,10 +177,54 @@ key and has SQL — but it converts an undetectable swap into one that shows up
 in `fossil timeline`. Detection is the achievable goal at this layer;
 prevention was never on offer.
 
-**Not built:** nothing commits the key list yet, and `viki cache pull` does not
-check a signature. Signing exists as a tool; wiring it into the distribution
-path is the next step, and it is the same commit that would fix the circular
-verification above.
+### Wired into `viki cache pull` — 2026-08-25
+
+`pull` now checks the epoch pin's signature before installing a model, and the
+design turns on one distinction that is not the obvious one:
+
+| what | needs the Merkle chain? | why |
+|---|---|---|
+| the **pin** | **no** | a signature is self-authenticating. An attacker who replaces the uv pin still cannot forge one over their replacement, so a verified signature over a uv blob is worth exactly as much as one over a committed file. |
+| the **signer list** | **yes** | nothing else protects it. A verifier that trusts a substituted key list happily verifies the attacker's signature. |
+
+So `viki-signers.json` is read **only from the checkout, never from uv**, and
+the signature is checked on **both** pin paths — including the "unverified
+source" uv one, where it is precisely what makes that path trustworthy.
+
+```
+viki-model.json          the pin        (versioned; may also travel by uv)
+viki-model.json.sig      the signature  (versioned; may also travel by uv)
+viki-signers.json        the anchor     (VERSIONED ONLY -- the whole point)
+```
+
+Five outcomes, each reported explicitly:
+
+| state | meaning | default |
+|---|---|---|
+| `SIGNED by 'x'` | verified against a listed key | proceed |
+| `SIGNATURE REJECTED` | verifies against no listed key — altered, or signed by an unlisted identity | **always refuse** |
+| `CANNOT BE CHECKED` | signed, but no `viki-identity` available | proceed, loudly |
+| no signer list | signed, but no anchor to check against | proceed, loudly |
+| `UNSIGNED` | integrity only, no authority | proceed, loudly |
+
+**Rejection is fatal and is not a policy call** — a pin that fails
+verification is evidence, and installing a model on that basis is the thing
+this exists to prevent. The other three are states every tribe is in until it
+adopts signing, so refusing them by default would break each of them on
+upgrade; `--require-signature` is how a tribe opts into that.
+
+**The state that mattered most to get right is `CANNOT BE CHECKED`.** viki
+links no crypto (four platforms, no fossil-see prerequisite), so the verifier
+is a subprocess and may simply be absent. A check that silently does not run is
+worse than no check because it is believed — the same failure the Chrome
+reader's `blind` status exists to prevent. `build/pinsig-probe.sh` N3/N4 are
+the assertions that hold that line, and N7/N11/N13 assert the pull actually
+*stops* rather than merely exiting nonzero, which it would have done anyway.
+
+**Still not built:** nothing commits the key list automatically, and `push`
+prints the sign-and-commit commands rather than running them — signing costs a
+passphrase, and a push that silently prompts for one is a push that ends up in
+cron with a key in an env var.
 
 ---
 

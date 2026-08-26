@@ -33,6 +33,32 @@
 ** channel, an attestation that is worth something. */
 #define VIKI_VERSIONED_MANIFEST "viki-model.json"
 
+/* THE SIGNATURE AND THE TRUST ANCHOR.
+**
+** Warren, 2026-08-25: "infrastructure versions are signed? i think that closes
+** the loop." A versioned pin is tamper-EVIDENT -- Merkle-linked, so nobody can
+** alter it undetected. It is not AUTHORITATIVE: every tribe member can commit,
+** so a member pushing a bogus epoch produces an artifact just as well-formed as
+** the real one. Integrity answers "has this changed?"; a signature answers
+** "who said it?", and an epoch pin is a claim that needs an author.
+**
+** THE SPLIT THAT MAKES THIS WORK, and it is worth stating because it is not
+** the obvious one: the SIGNATURE is self-authenticating, so it does not care
+** what channel carried it -- a valid signature over the uv pin is worth exactly
+** as much as one over the versioned pin, because an attacker who replaces both
+** blobs still cannot forge it. What DOES need the Merkle chain is the SIGNER
+** LIST, since a verifier that trusts a substituted key list verifies the
+** attacker's signature happily. So:
+**
+**     the pin       may travel by uv        (signature protects it)
+**     the signers   must be VERSIONED       (nothing else protects them)
+**
+** which is why viki-signers.json is read only from the checkout and never
+** from uv, and why the signature check runs on BOTH pin paths. */
+#define VIKI_VERSIONED_SIGNERS "viki-signers.json"
+#define VIKI_VERSIONED_SIG     VIKI_VERSIONED_MANIFEST ".sig"
+#define VIKI_UV_MODEL_SIG      VIKI_UV_MODEL_MANIFEST ".sig"
+
 /* Push order is deliberate: blobs first, MANIFEST LAST. The manifest is
 ** the epoch pin (VIKI_DESIGN.md), and it is also what the skip-if-
 ** unchanged check below reads, so an interrupted push that got the model
@@ -315,6 +341,163 @@ static int uv_export_quiet(const char *zFossil, const char *zUv, const char *zOu
     return run_ex(argv, 1);
 }
 
+/* ------------------------------------------- signature verification -- */
+/*
+** THE VERIFIER IS A SUBPROCESS, for the same reason fossil is: viki links no
+** crypto library and that is a hard constraint (four platforms, no fossil-see
+** prerequisite). `viki-identity` carries LibreSSL from fossil-see's vendor
+** tree, so it is exactly the thing that may be absent.
+**
+** WHICH MAKES ONE STATE LOAD-BEARING: "signed, but I could not check it" must
+** never print like "verified". That is the same failure the Chrome reader's
+** `blind` status exists to prevent -- a check that silently does not run turns
+** into false calm, which is worse than no check because it is believed. Every
+** outcome below is reported explicitly, and --require-signature turns the
+** unknowable ones into refusals for a tribe that wants that policy.
+*/
+typedef enum {
+    VIKI_SIG_OK = 0,        /* verified against a listed signer            */
+    VIKI_SIG_UNSIGNED,      /* no .sig alongside the pin                   */
+    VIKI_SIG_NO_ANCHOR,     /* no viki-signers.json in the checkout        */
+    VIKI_SIG_NO_VERIFIER,   /* viki-identity not available -- CANNOT CHECK */
+    VIKI_SIG_REJECTED       /* did not verify against any listed signer    */
+} VikiSigState;
+
+const char *viki_identity_binary(void){
+    const char *override = getenv("VIKI_IDENTITY_BIN");
+    if( override && override[0] ) return override;
+    if( find_on_path("viki-identity") ) return "viki-identity";
+    return NULL;
+}
+
+/* Trims trailing whitespace/newline in place -- a .sig file written by a shell
+** redirect carries a newline the base64 decoder must not see. */
+static void trim_tail(char *z){
+    size_t n = strlen(z);
+    while( n > 0 && (z[n-1]=='\n' || z[n-1]=='\r' || z[n-1]==' ' || z[n-1]=='\t') ) z[--n] = 0;
+}
+
+/* Walks viki-signers.json, yielding (name, ed25519) pairs in order.
+**
+** DELIBERATELY A SCANNER, NOT A JSON PARSER: it finds the next "name" and then
+** the next "ed25519" after it, so within one object the fields must appear in
+** that order. viki already parses its manifest this way (manifest_field), the
+** file is written by this program, and a real JSON parser is a dependency this
+** binary does not otherwise need. Stated rather than hidden, because a
+** hand-rolled scanner over a security-relevant file is a fair thing to check.
+*/
+static const char *signers_next(const char *p, char *zName, size_t nName,
+                                char *zKey, size_t nKey){
+    const char *q;
+    if( !p ) return NULL;
+    p = strstr(p, "\"name\"");
+    if( !p ) return NULL;
+    if( manifest_field(p, "name", zName, nName) != 0 ) return NULL;
+    q = strstr(p, "\"ed25519\"");
+    if( !q ) return NULL;
+    if( manifest_field(q, "ed25519", zKey, nKey) != 0 ) return NULL;
+    return q + 1;
+}
+
+/*
+** Verify zPinPath against zSigPath using the checkout's signer list.
+** On VIKI_SIG_OK, zWhoOut names the signer that vouched for it.
+*/
+static VikiSigState verify_pin(const char *zPinPath, const char *zSigPath,
+                               char *zWhoOut, size_t nWho){
+    const char *zId;
+    unsigned char *pSig, *pSigners;
+    char zSig[512], zName[128], zKey[256];
+    const char *p;
+    int bAnyTried = 0;
+    VikiSigState rc = VIKI_SIG_REJECTED;
+
+    zWhoOut[0] = 0;
+
+    pSig = read_whole_file(zSigPath, NULL);
+    if( !pSig ) return VIKI_SIG_UNSIGNED;
+    snprintf(zSig, sizeof(zSig), "%s", (const char*)pSig);
+    free(pSig);
+    trim_tail(zSig);
+    if( !zSig[0] ) return VIKI_SIG_UNSIGNED;
+
+    /* The anchor is read from the CHECKOUT only -- never uv. See the comment
+    ** on VIKI_VERSIONED_SIGNERS: this is the one input whose substitution the
+    ** signature cannot detect, so it is the one that must be Merkle-attested. */
+    pSigners = read_whole_file(VIKI_VERSIONED_SIGNERS, NULL);
+    if( !pSigners ) return VIKI_SIG_NO_ANCHOR;
+
+    zId = viki_identity_binary();
+    if( !zId ){ free(pSigners); return VIKI_SIG_NO_VERIFIER; }
+
+    p = (const char*)pSigners;
+    while( (p = signers_next(p, zName, sizeof(zName), zKey, sizeof(zKey))) != NULL ){
+        char *argv[] = { (char*)zId, "verify", "-p", zKey, "-i", (char*)zPinPath,
+                         "-s", zSig, NULL };
+        int x = run_ex(argv, 1);
+        bAnyTried = 1;
+        if( x == 0 ){
+            snprintf(zWhoOut, nWho, "%s", zName);
+            rc = VIKI_SIG_OK;
+            break;
+        }
+        /* 127 is exec failure, not a bad signature. Without this a missing
+        ** verifier would read as REJECTED -- reporting tampering when the only
+        ** fact established is that nothing ran. */
+        if( x == 127 || x < 0 ){ rc = VIKI_SIG_NO_VERIFIER; break; }
+    }
+    if( !bAnyTried && rc != VIKI_SIG_OK ) rc = VIKI_SIG_NO_ANCHOR;   /* empty list */
+    free(pSigners);
+    return rc;
+}
+
+/*
+** Print the outcome and decide whether it stops the pull.
+** Returns 0 to continue, 1 to refuse.
+**
+** REJECTED IS ALWAYS FATAL and is not a policy call: a pin that fails
+** verification is evidence, and installing a model on that basis is the one
+** thing this feature exists to prevent. Everything else is a policy call and
+** obeys bRequire, because refusing an unsigned pin by default would break
+** every tribe that has not adopted signing yet.
+*/
+static int report_sig(VikiSigState st, const char *zWho, int bRequire){
+    switch( st ){
+        case VIKI_SIG_OK:
+            fprintf(stderr, "viki cache pull:   epoch pin SIGNED by '%s' (ed25519, verified)\n", zWho);
+            return 0;
+        case VIKI_SIG_REJECTED:
+            fprintf(stderr,
+                "viki cache pull: SIGNATURE REJECTED on the epoch pin\n"
+                "viki cache pull:   The pin carries a signature that verifies against NONE of the\n"
+                "viki cache pull:   keys in '%s'. Either the pin was altered, or it was signed by\n"
+                "viki cache pull:   an identity this tribe does not list. Both are refusals.\n"
+                "viki cache pull:   Refusing to install -- viki degrades to BM25-only rather than\n"
+                "viki cache pull:   running inference on a model vouched for by nobody.\n",
+                VIKI_VERSIONED_SIGNERS);
+            return 1;
+        case VIKI_SIG_NO_VERIFIER:
+            fprintf(stderr,
+                "viki cache pull:   epoch pin is SIGNED but CANNOT BE CHECKED -- no viki-identity\n"
+                "viki cache pull:     on PATH (set VIKI_IDENTITY_BIN, or sh edge/tools/build-tools.sh).\n"
+                "viki cache pull:     This is NOT a passing check. Nothing was verified.\n");
+            return bRequire;
+        case VIKI_SIG_NO_ANCHOR:
+            fprintf(stderr,
+                "viki cache pull:   epoch pin is signed, but this checkout has no '%s',\n"
+                "viki cache pull:     so there is no trusted key to check it against. Nothing was\n"
+                "viki cache pull:     verified. Commit a signer list to close this.\n",
+                VIKI_VERSIONED_SIGNERS);
+            return bRequire;
+        case VIKI_SIG_UNSIGNED:
+        default:
+            fprintf(stderr,
+                "viki cache pull:   epoch pin is UNSIGNED -- integrity only, no authority.\n"
+                "viki cache pull:     Any tribe member could have published it. See SYNC.md.\n");
+            return bRequire;
+    }
+}
+
 /* ------------------------------------------------------------- push -- */
 
 /* Publishes the pinned model directory as uv blobs. Returns 0 if the
@@ -432,8 +615,17 @@ static int push_model(const char *zFossil){
                     "viki cache push:   wrote %s -- COMMIT IT to make the epoch pin verifiable.\n"
                     "viki cache push:     fossil add %s && fossil commit -m 'model epoch %s'\n"
                     "viki cache push:   Until it is committed, a puller verifies the model against\n"
-                    "viki cache push:   a uv blob that whoever replaced the model could also replace.\n",
-                    VIKI_VERSIONED_MANIFEST, VIKI_VERSIONED_MANIFEST, zModelId);
+                    "viki cache push:   a uv blob that whoever replaced the model could also replace.\n"
+                    "viki cache push:\n"
+                    "viki cache push:   And SIGN it, so the pin carries authority and not just\n"
+                    "viki cache push:   integrity -- any tribe member can commit one:\n"
+                    "viki cache push:     viki-identity sign <you> -i %s > %s\n"
+                    "viki cache push:     fossil add %s\n"
+                    "viki cache push:   Signing is NOT done here on purpose: it costs a passphrase,\n"
+                    "viki cache push:   and a push that silently prompts for one is a push that gets\n"
+                    "viki cache push:   run from cron with a key in an env var.\n",
+                    VIKI_VERSIONED_MANIFEST, VIKI_VERSIONED_MANIFEST, zModelId,
+                    VIKI_VERSIONED_MANIFEST, VIKI_VERSIONED_SIG, VIKI_VERSIONED_SIG);
             }
             free(pMan);
         }
@@ -646,26 +838,38 @@ int viki_cmd_cache_push_opts(const char *zCacheDbPath, unsigned mFlags){
 ** failure and gets said out loud rather than silently degraded, because
 ** the pinned checksum is the only integrity statement viki has about a
 ** binary it is about to load and run inference with. */
-static int pull_model(const char *zFossil){
+static int pull_model(const char *zFossil, int bRequireSig){
     const char *zDir = viki_model_dir();
     char zTmpManifest[4096], zDst[4096], zSize[32];
     char zModelId[128], zWantHash[128], zGotHash[65];
+    char zWho[128];
+    VikiSigState zSigState = VIKI_SIG_UNSIGNED;
     unsigned char *pManifest;
     long long nTotal = 0;
     int i;
 
+    zWho[0] = 0;
+
     /* PREFER THE VERSIONED PIN. If the checkout carries viki-model.json, that
     ** is the epoch declaration and it is Merkle-attested; the uv copy is then
     ** only a convenience for peers who have not pulled the checkout yet. */
+    temp_path(zTmpManifest, sizeof(zTmpManifest), "manifest");
     pManifest = read_whole_file(VIKI_VERSIONED_MANIFEST, NULL);
     if( pManifest ){
+        /* COPY IT TO THE TEMP PATH the rest of this function already uses.
+        ** The first cut set zTmpManifest[0]=0 here, which silently disabled the
+        ** files_equal() "already present -- nothing to fetch" check below and
+        ** made every pull re-export ~23 MB. Same-shaped bug as the two-line
+        ** recipient: a value left empty for one branch, read by another. */
+        FILE *f = fopen(zTmpManifest, "wb");
+        if( f ){ fputs((const char*)pManifest, f); fclose(f); }
         fprintf(stderr, "viki cache pull:   epoch pin from %s (versioned, Merkle-attested)\n",
                 VIKI_VERSIONED_MANIFEST);
-        zTmpManifest[0] = 0;
+        zSigState = verify_pin(VIKI_VERSIONED_MANIFEST, VIKI_VERSIONED_SIG,
+                               zWho, sizeof(zWho));
         goto have_manifest;
     }
 
-    temp_path(zTmpManifest, sizeof(zTmpManifest), "manifest");
     if( uv_export_quiet(zFossil, VIKI_UV_MODEL_MANIFEST, zTmpManifest) != 0 ){
         fprintf(stderr,
             "viki cache pull: no model published on this hub (no uv blob '%s').\n"
@@ -689,7 +893,28 @@ static int pull_model(const char *zFossil){
         "viki cache pull:     CORRUPTION, not substitution. Commit %s to fix that.\n",
         VIKI_UV_MODEL_MANIFEST, VIKI_VERSIONED_MANIFEST);
 
+    /* AND YET THE SIGNATURE STILL COUNTS HERE. The transport is untrusted, but
+    ** a signature is self-authenticating -- an attacker who replaces the uv pin
+    ** cannot forge one over their replacement. A verified signature on this
+    ** path is worth exactly as much as on the versioned one, which is why the
+    ** check is not skipped for being "the unverified source". */
+    {
+        char zTmpSig[4096];
+        temp_path(zTmpSig, sizeof(zTmpSig), "manifest-sig");
+        if( uv_export_quiet(zFossil, VIKI_UV_MODEL_SIG, zTmpSig) == 0 ){
+            zSigState = verify_pin(zTmpManifest, zTmpSig, zWho, sizeof(zWho));
+        }else{
+            zSigState = VIKI_SIG_UNSIGNED;
+        }
+        unlink(zTmpSig);
+    }
+
 have_manifest:
+    if( report_sig(zSigState, zWho, bRequireSig) != 0 ){
+        unlink(zTmpManifest);
+        free(pManifest);
+        return 1;
+    }
     if( manifest_field((char*)pManifest, "model_id", zModelId, sizeof(zModelId)) != 0 ){
         snprintf(zModelId, sizeof(zModelId), "(unknown)");
     }
@@ -957,7 +1182,7 @@ int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags){
         fprintf(stderr, "viki cache pull: --no-model: embedding cache only, model not fetched\n");
         return 0;
     }
-    return pull_model(fossil);
+    return pull_model(fossil, (mFlags & VIKI_CACHE_REQUIRE_SIG) ? 1 : 0);
 }
 
 int viki_cmd_cache_push(const char *zCacheDbPath){

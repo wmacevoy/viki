@@ -64,7 +64,11 @@ static void usage(void){
         "                           viki-model/{model.onnx,vocab.txt,viki-manifest.json}, per D-12.\n"
         "                           An unchanged model epoch is not re-pushed; no model present is\n"
         "                           not an error (peers stay BM25-only). --no-model: cache only.\n"
-        "  cache pull [db-path] [--no-model]\n"
+        "  cache pull [db-path] [--no-model] [--require-signature]\n"
+        "                           --require-signature: refuse a model whose epoch pin is not\n"
+        "                           signed by a key in the checkout's viki-signers.json. A pin that\n"
+        "                           FAILS verification is always refused; this makes unsigned and\n"
+        "                           uncheckable ones refusals too.\n"
         "                           Fetch both back. The model is written to the same directory\n"
         "                           'ask' reads (below) and checked against the manifest's sha256.\n"
         "                           A hub with no model published is not an error.\n"
@@ -524,9 +528,22 @@ int main(int argc, char **argv){
         const char *dbPath = VIKI_DEFAULT_CACHE_DB;
         unsigned mFlags = 0;
         int i;
-        if( argc < 3 ){ fprintf(stderr, "usage: viki cache push|pull [db-path] [--no-model]\n"); return 1; }
+        if( argc < 3 ){
+            fprintf(stderr, "usage: viki cache push|pull [db-path] [--no-model] [--require-signature]\n");
+            return 1;
+        }
         for( i = 3; i < argc; i++ ){
             if( strcmp(argv[i], "--no-model") == 0 ) mFlags |= VIKI_CACHE_NO_MODEL;
+            else if( strcmp(argv[i], "--require-signature") == 0 ) mFlags |= VIKI_CACHE_REQUIRE_SIG;
+            /* An unrecognised "--flag" is REFUSED rather than taken as a path.
+            ** The comment above describes how `--no-model` once became a db
+            ** name; the fall-through that caused it is still here, so a typo
+            ** like `--require-sig` would silently disable the very check the
+            ** user asked for -- the worst possible direction for this flag. */
+            else if( argv[i][0] == '-' && argv[i][1] == '-' ){
+                fprintf(stderr, "viki cache: unknown option '%s'\n", argv[i]);
+                return 1;
+            }
             else dbPath = argv[i];
         }
         if( ensure_viki_dir() ) return 1;

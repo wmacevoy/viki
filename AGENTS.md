@@ -913,7 +913,7 @@ this file -- against a binary missing three fixes that were sitting in
   Chrome, and a node harness exercises the identical call sequence).
 
 - **KEY CUSTODY, and it interoperates with a tool nobody here wrote**
-  (2026-08-23). `build/keywrap-probe.sh` `14 passed, 0 failed, 0 skipped`.
+  (2026-08-23). `build/keywrap-probe.sh` `22 passed, 0 failed, 0 skipped`.
   `edge/tools/viki-key-wrap.c` implements age v1 -- X25519 + HKDF +
   ChaCha20-Poly1305 -- against the LibreSSL fossil-see already vendors, with
   HKDF written from HMAC. Proven against stock `age` 1.3.1 in BOTH directions:
@@ -932,6 +932,40 @@ this file -- against a binary missing three fixes that were sitting in
   passphrase. The second factor is present as STRUCTURE, not function:
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
+
+- **SIGNED EPOCH PINS, AND `viki cache pull` ACTS ON THEM** (2026-08-25).
+  `build/pinsig-probe.sh` `17 passed, 0 failed`; keywrap S1-S5 cover the
+  primitive. An identity now mints an **ed25519 signing key** beside its X25519
+  recipient, and `viki cache pull` verifies the epoch pin against the
+  checkout's `viki-signers.json` before installing a model.
+  **The reason this is not redundant with the Merkle chain**: a versioned pin
+  is tamper-*evident*, but every tribe member can commit, so integrity is not
+  authority. A signature says *who*.
+  **The split that makes it work is not the obvious one.** The signature is
+  self-authenticating, so it does not care what carried it -- a valid signature
+  over the *uv* pin is worth as much as over the committed one, because an
+  attacker replacing both blobs still cannot forge it. What must be versioned
+  is the **signer list**, since a verifier trusting a substituted key list
+  verifies the attacker happily. So `viki-signers.json` is read only from the
+  checkout, never uv, and the check runs on both pin paths.
+  **A REJECTED signature is always fatal; unsigned, anchor-less and
+  uncheckable are reported loudly and proceed** unless `--require-signature`.
+  Rejection is evidence; the rest are states every tribe is in until it adopts
+  signing, and refusing them by default would break each on upgrade.
+  **`CANNOT BE CHECKED` is the state that took the care.** viki links no crypto
+  (four platforms, no fossil-see prerequisite), so the verifier is a
+  `viki-identity` **subprocess** that may be absent -- and a check that silently
+  does not run is worse than no check, because it is believed. N3/N4 hold that
+  line. N7/N11/N13 assert the pull *stops* rather than merely exiting nonzero:
+  this probe publishes no model, so the pull exits 1 regardless, and the first
+  draft of those three were green against a binary with no signature code at
+  all. Non-vacuity measured: the pre-change binary scores `7 passed, 10
+  failed`, and two of its seven pass only because `--require-signature` is
+  unknown there and falls through to being read as a **db path** -- which is
+  the bug N14 exists to catch.
+  NOT verified: no signature is checked on the cache db itself (only the model
+  epoch pin), nothing commits the signer list automatically, and `push` prints
+  the sign-and-commit commands rather than running them.
 
 - **THE TRIBE REGISTRY AND THE PULLER** (2026-08-23). `identity.db` gained
   `tribe(name, url, cache, wrapped, identity, caching, added, etag, last_pull)`.
