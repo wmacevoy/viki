@@ -338,7 +338,22 @@ static int handle_chunk(sbuf *body, sqlite3 *db, const char *query){
 ** pass itself off as viki's marker: that text lands in the excerpt node,
 ** unstyled. The marker strings come from the VIKI_MARK_* macros by C
 ** string concatenation rather than being retyped here, so this page and
-** `viki ask` cannot drift apart. */
+** `viki ask` cannot drift apart.
+**
+** THE CITATION LINE. Every hit carries its `<content_hash>#<chunk_ix>` --
+** the same string `viki ask` prints and `/api/chunk?hash=&ix=` takes -- so
+** the one HUMAN surface can cite what it found. It is abbreviated to
+** VIKI_HASH_ABBREV_STR hex digits (see viki_ask.h for why, and why no
+** ellipsis) and expands in place on click; the full value is also the
+** button's tooltip, so a reader who only hovers still sees all of it.
+** It is a real <button> rather than a clickable <span> so it is reachable
+** by Tab and activates on Enter/Space with no keyboard handling of our own.
+**
+** The hash is viki's own sha256 hex and the chunk_ix an integer, so
+** neither is corpus text -- but they are written with textContent and the
+** .title property regardless, because "this particular string happens to
+** be safe" is the reasoning that puts an innerHTML in a file that had
+** none. */
 static const char *const VIKI_SERVE_HTML =
     "<!doctype html>\n"
     "<html><head>\n"
@@ -352,6 +367,13 @@ static const char *const VIKI_SERVE_HTML =
     "  .meta { color: #666; font-size: 0.85em; }\n"
     "  .snippet { white-space: pre-wrap; }\n"
     "  .frag { color: #a33; font-style: italic; }\n"
+    "  .cite { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n"
+    "          font-size: 0.8em; color: #777; margin: 0.1rem 0 0.35rem 0; }\n"
+    "  button.hash { font: inherit; color: inherit; background: none;\n"
+    "          border: 0; padding: 0; cursor: pointer; text-align: left;\n"
+    "          word-break: break-all; }\n"
+    "  button.hash:hover, button.hash:focus { color: #222;\n"
+    "          text-decoration: underline; }\n"
     "</style>\n"
     "</head><body>\n"
     "<h1>viki</h1>\n"
@@ -383,6 +405,24 @@ static const char *const VIKI_SERVE_HTML =
     "  s.textContent = t;\n"
     "  return s;\n"
     "}\n"
+    /* The citation control. Returns null rather than a half-citation when
+    ** a hit somehow arrives without a hash: a page that prints '#3' on its
+    ** own invites citing a chunk of nothing, which is the same failure as
+    ** a wrong Fossil link. */
+    "function citeEl(hit){\n"
+    "  if (!hit.hash) return null;\n"
+    "  var abbr = hit.hash.slice(0, " VIKI_HASH_ABBREV_STR ") + '#' + hit.chunk_ix;\n"
+    "  var full = hit.hash + '#' + hit.chunk_ix;\n"
+    "  var b = document.createElement('button');\n"
+    "  b.type = 'button';\n"
+    "  b.className = 'hash';\n"
+    "  b.textContent = abbr;\n"
+    "  b.title = full + '  (click to show/hide the full content_hash)';\n"
+    "  b.addEventListener('click', function(){\n"
+    "    b.textContent = (b.textContent === abbr) ? full : abbr;\n"
+    "  });\n"
+    "  return b;\n"
+    "}\n"
     "function renderResults(data){\n"
     "  if (data.error) { statusEl.textContent = 'error: ' + data.error; return; }\n"
     "  statusEl.textContent = data.mode + (data.model_id ? (' / ' + data.model_id) : '') +\n"
@@ -410,6 +450,13 @@ static const char *const VIKI_SERVE_HTML =
     "    meta.appendChild(document.createTextNode(' (chunk ' + hit.chunk_ix +\n"
     "      (hit.chunk_count ? ' of ' + hit.chunk_count : '') + ')'));\n"
     "    div.appendChild(meta);\n"
+    "    var cited = citeEl(hit);\n"
+    "    if (cited) {\n"
+    "      var cite = document.createElement('div');\n"
+    "      cite.className = 'cite';\n"
+    "      cite.appendChild(cited);\n"
+    "      div.appendChild(cite);\n"
+    "    }\n"
     "    var snippet = document.createElement('div');\n"
     "    snippet.className = 'snippet';\n"
     "    if (hit.fragment_head) snippet.appendChild(frag('" VIKI_MARK_HEAD " '));\n"

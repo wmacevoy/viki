@@ -39,7 +39,14 @@
 #   * the JSON API: a client already parsing `snippet` must not silently
 #     start receiving viki's decoration mixed into indexed content (S3).
 #   * the HTML page: it renders untrusted indexed content, so adding
-#     markers must not reach for innerHTML (S5).
+#     markers must not reach for innerHTML (S5) -- asserted twice, once
+#     as a string in the source (S5) and once as a RUNTIME property, by
+#     rendering through a DOM whose innerHTML throws (S8-S15).
+#   * the human surface citing nothing: `/api/ask` carries "hash" and the
+#     page fetched it and dropped it, so the CLI could cite and a person
+#     could not (S7-S15). Grepping the page source for `hit.hash` would
+#     prove only that a string is in a file, so S8-S15 run the page's OWN
+#     <script> against the API's OWN JSON and grade the rendered text.
 #   * a second surface drifting: `viki grep` prints the same kind of
 #     excerpt under the same citable header, so it must mark the same
 #     facts with the SAME strings, not lookalikes of its own (R1-R8).
@@ -47,6 +54,9 @@
 # Usage: sh build/fragment-probe.sh <scratch-dir> [viki-binary]
 #   VIKI_MODEL_DIR   as everywhere else; absent => the hybrid checks SKIP
 #   VIKI_PROBE_PORT  port for the `viki serve` checks (default 18771)
+#   node on PATH     absent => S8-S15 SKIP rather than pass: without a JS
+#                    engine the page's rendering cannot be measured, only
+#                    grepped, and a grep is not evidence here
 set -e
 DIR="${1:?usage: fragment-probe.sh <scratch-dir> [viki-binary]}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -306,7 +316,17 @@ if [ "$PORT_BUSY" = 1 ]; then
              "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
              "S4 chunk_count reports the real extent (the measured count, and 1)" \
              "S5 the HTML page still contains no innerHTML anywhere" \
-             "S6 the page renders the SAME marker strings the CLI prints"
+             "S6 the page renders the SAME marker strings the CLI prints" \
+             "S7 the page's renderer reads hit.hash at all" \
+             "S8 SETUP: the page's OWN script rendered the API's OWN JSON" \
+             "S9 the rendered page carries the content_hash, abbreviated, with #<ix>" \
+             "S10 CONTROL: ... abbreviated -- the full 64 hex is NOT on screen unasked" \
+             "S11 clicking the citation expands it to the CLI's EXACT citation" \
+             "S12 clicking again collapses it back to the abbreviation" \
+             "S13 CONTROL: a hit with no hash renders NO citation, not half of one" \
+             "S14 CONTROL: a different hash renders differently (data, not a constant)" \
+             "S14b CONTROL: a different chunk_ix renders differently, too" \
+             "S15 CONTROL: the runtime innerHTML detector is live (a patched page fails it)"
     do
         skip "$t" "port $PORT is not ours"
     done
@@ -357,6 +377,189 @@ elif command -v curl >/dev/null 2>&1; then
         && grep -q -- "$CUT_MARK" "$LOG/page.html"'
     kill "$SERVE_PID" 2>/dev/null || true
     SERVE_PID=""
+
+    # ------------------------------------------------------------------
+    # THE CITATION. `/api/ask` has always carried "hash"; until 2026-08-26
+    # the page fetched it and threw it away, so the one HUMAN surface could
+    # not cite what it found (KICKOFF.md deliverable 2, met on the CLI and
+    # the JSON API only). These assertions are that gap's standing proof.
+    #
+    # S7 is static and therefore weak on purpose -- `grep hit.hash` proves
+    # a string is in a file, not that a browser renders it, and this
+    # project's signature failure is a green result that proves nothing.
+    # So S8-S15 EXECUTE the page's own <script> against the API's own JSON
+    # in a minimal DOM (render.js below) and grade the TEXT THAT COMES OUT.
+    # That is also what makes the no-innerHTML claim real: the shim's
+    # innerHTML is a throwing accessor, so any renderer that reaches for it
+    # takes every one of S8-S15 down with it, and S15 proves that detector
+    # is live rather than decorative by patching the page and watching it
+    # fail.
+    ck "S7 the page's renderer reads hit.hash at all" \
+       'grep -q "hit\.hash" "$LOG/page.html"'
+
+    if command -v node >/dev/null 2>&1; then
+        cat > "$DIR/render.js" <<'RENDER_JS'
+/* Run viki serve's OWN page script against real /api/ask JSON in a minimal
+** DOM, and print the text the page would show. argv:
+**   render.js <page.html> <api.json> [plain|click|nohash|rehash] [twice]
+** innerHTML is a throwing accessor: a renderer that uses it aborts here. */
+var fs = require('fs'), vm = require('vm');
+var html = fs.readFileSync(process.argv[2], 'utf8');
+var m = html.match(/<script>([\s\S]*?)<\/script>/);
+if (!m) { console.error('NO-SCRIPT'); process.exit(3); }
+var data = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+var mode = process.argv[4] || 'plain';
+if (mode === 'nohash') data.results.forEach(function(h){ delete h.hash; });
+if (mode === 'rehash') data.results.forEach(function(h){
+    h.hash = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'; });
+/* `reix` exists because the fixture is --k 1 on a hit whose chunk_ix HAPPENS
+** to be 1, so every citation assertion matched the literal '#1' and none of
+** them could tell `'#' + hit.chunk_ix` from a hardcoded '#1'. Half the
+** citation was ungraded. 77 is chosen to be a value no fixture produces. */
+if (mode === 'reix') data.results.forEach(function(h){ h.chunk_ix = 77; });
+var made = [];
+function Node(tag){ this.tag = tag; this.children = []; this._text = null; this.handlers = {}; }
+Object.defineProperty(Node.prototype, 'textContent', {
+    get: function(){ return this._text !== null ? this._text
+        : this.children.map(function(c){ return c.textContent; }).join(''); },
+    set: function(v){ this._text = String(v); this.children = []; } });
+Object.defineProperty(Node.prototype, 'innerHTML', {
+    get: function(){ throw new Error('RENDERER-USED-innerHTML'); },
+    set: function(v){ throw new Error('RENDERER-USED-innerHTML'); } });
+Node.prototype.appendChild = function(c){
+    if (this._text !== null) {
+        var t = new Node('#text'); t._text = this._text; this._text = null;
+        this.children.push(t); }
+    this.children.push(c); return c; };
+Node.prototype.addEventListener = function(ev, fn){
+    (this.handlers[ev] = this.handlers[ev] || []).push(fn); };
+Node.prototype.click = function(){ var self = this;
+    (this.handlers['click'] || []).forEach(function(f){ f.call(self, {}); }); };
+var byId = {};
+['f','q','status','results'].forEach(function(id){ byId[id] = new Node('div'); });
+var ctx = { console: console, encodeURIComponent: encodeURIComponent,
+    fetch: function(){ throw new Error('the harness calls renderResults directly'); },
+    document: {
+        getElementById: function(id){ return byId[id] || new Node('div'); },
+        createElement: function(t){ var n = new Node(t); made.push(n); return n; },
+        createTextNode: function(t){ var n = new Node('#text'); n._text = String(t); return n; } } };
+vm.createContext(ctx);
+vm.runInContext(m[1], ctx);
+ctx.renderResults(data);
+if (mode === 'click') {
+    var hs = made.filter(function(n){ return n.className === 'hash'; });
+    hs.forEach(function(n){ n.click(); });
+    if (process.argv[5] === 'twice') hs.forEach(function(n){ n.click(); });
+}
+/* COUNT THE CITATION NODES. S13 ("renders NO citation, not half of one")
+** cannot be written as a regex over the rendered text: the page's own rank
+** marker is '#1', so a pattern matching a bare '#<digit>' fires on every
+** result whether a citation was built or not. The node count is the fact the
+** assertion is actually about. */
+process.stderr.write('CITE-NODES=' +
+    made.filter(function(n){ return n.className === 'hash'; }).length + '\n');
+process.stdout.write(byId['results'].textContent + '\n');
+RENDER_JS
+        render(){ node "$DIR/render.js" "$LOG/page.html" "$LOG/api.mid.json" "$@" \
+                    >"$LOG/render.$1${2:+.$2}.out" 2>"$LOG/render.$1${2:+.$2}.err"; }
+        render plain     || true
+        render click     || true
+        render click twice || true
+        render nohash    || true
+        render rehash    || true
+        render reix      || true
+        # The page must show the hash the SERVER sent, not one it invented,
+        # so every expectation below is derived from api.mid.json and from
+        # `viki ask`'s own output -- never typed in.
+        FULL_HASH=$(sed -n 's/.*"hash":"\([0-9a-f]\{64\}\)".*/\1/p' "$LOG/api.mid.json" | head -1)
+        # THE WIDTH IS READ FROM THE HEADER, not retyped. viki_ask.h says the
+        # abbreviation width "lives once" so the page and this probe cannot
+        # drift -- and the first cut of this probe then hardcoded `cut -c1-12`,
+        # which is a second spelling and makes the claim false. Now changing
+        # VIKI_HASH_ABBREV_STR moves both.
+        ABBREV_N=$(sed -n 's/.*#define VIKI_HASH_ABBREV_STR "\([0-9][0-9]*\)".*/\1/p' \
+                     "$REPO/src/viki_ask.h" | head -1)
+        # NO SILENT FALLBACK. The first cut defaulted to 12 when the read
+        # failed -- and the read DID fail, because this file calls the repo
+        # root $REPO and not $ROOT. At the shipped width of 12 the default
+        # masked it exactly; it surfaced only when the header was set to 8 and
+        # the probe went red against a correct binary. A default that happens
+        # to equal the real value is indistinguishable from a working read.
+        [ -n "$ABBREV_N" ] || { echo "  FAIL  S-setup: cannot read VIKI_HASH_ABBREV_STR from $REPO/src/viki_ask.h"; FAIL=$((FAIL+1)); }
+        ABBR=$(printf '%s' "$FULL_HASH" | cut -c1-"$ABBREV_N")
+        FF_ABBR=$(printf '%*s' "$ABBREV_N" '' | tr ' ' 'f')
+        CLI_CITE=$(head -1 "$LOG/mid.out" | awk '{print $3}')
+
+        ck "S8 SETUP: the page's OWN script rendered the API's OWN JSON" \
+           '[ -s "$LOG/render.plain.out" ] \
+            && grep -q "rrf=" "$LOG/render.plain.out" \
+            && grep -q "docs/long\.md" "$LOG/render.plain.out" \
+            && [ -n "$FULL_HASH" ] && [ -n "$CLI_CITE" ]'
+        ck "S9 the rendered page carries the content_hash, abbreviated, with #<ix>" \
+           'grep -q -- "$ABBR#1" "$LOG/render.plain.out" \
+            && grep -q "CITE-NODES=1" "$LOG/render.plain.err"'
+        # S9 alone also passes if the page dumped all 64 characters, which
+        # is the OTHER way to fail a human surface. This is what makes the
+        # display choice a claim rather than an accident.
+        ck "S10 CONTROL: ... abbreviated -- the full 64 hex is NOT on screen unasked" \
+           '! grep -q -- "$FULL_HASH" "$LOG/render.plain.out"'
+        # THE ONE THAT CLOSES THE DELIVERABLE: what the human can copy off
+        # the page must be byte-identical to what `viki ask` prints for the
+        # same query on the same corpus. Two surfaces, one citation.
+        ck "S11 clicking the citation expands it to the CLI's EXACT citation" \
+           '[ "$CLI_CITE" = "$FULL_HASH#1" ] \
+            && grep -q -- "$CLI_CITE" "$LOG/render.click.out"'
+        ck "S12 clicking again collapses it back to the abbreviation" \
+           'grep -q -- "$ABBR#1" "$LOG/render.click.twice.out" \
+            && ! grep -q -- "$FULL_HASH" "$LOG/render.click.twice.out"'
+        # S13/S14 separate "the page renders the DATA" from "the page
+        # prints a hex-shaped constant": remove the field and the citation
+        # must vanish; change the field and the citation must follow it.
+        # S13 IS NAMED "not half of one" AND USED TO CHECK ONLY THE OTHER HALF.
+        # It asserted the abbreviated hash was absent and said nothing about
+        # `#<ix>`, so a citeEl() that dropped the hash and still emitted
+        # '#' + hit.chunk_ix -- exactly the half-citation the code comments
+        # say must never appear, because it invites citing a chunk of nothing
+        # -- passed it. The second clause is the assertion doing its job.
+        ck "S13 CONTROL: a hit with no hash renders NO citation, not half of one" \
+           '[ -s "$LOG/render.nohash.out" ] \
+            && grep -q "docs/long\.md" "$LOG/render.nohash.out" \
+            && ! grep -q -- "$ABBR" "$LOG/render.nohash.out" \
+            && grep -q "CITE-NODES=0" "$LOG/render.nohash.err"'
+        ck "S14 CONTROL: a different hash renders differently (data, not a constant)" \
+           'grep -q -- "$FF_ABBR#1" "$LOG/render.rehash.out" \
+            && ! grep -q -- "$ABBR" "$LOG/render.rehash.out"'
+        # S14b: THE OTHER HALF OF THE CITATION. S14 varies only the hash, and
+        # the fixture's chunk_ix is 1, so `'#' + hit.chunk_ix` and a literal
+        # '#1' were indistinguishable to every assertion above -- half the
+        # citation was graded and half was assumed.
+        ck "S14b CONTROL: a different chunk_ix renders differently, too" \
+           'grep -q -- "$ABBR#77" "$LOG/render.reix.out" \
+            && ! grep -q -- "$ABBR#1" "$LOG/render.reix.out"'
+        # Every assertion above runs through a DOM whose innerHTML throws,
+        # so they collectively prove the runtime property S5 can only check
+        # as a string. This is the control that says that detector works:
+        # a page patched to assign innerHTML must FAIL the same harness.
+        sed 's/\.textContent = /.innerHTML = /g' "$LOG/page.html" >"$LOG/page.bad.html"
+        node "$DIR/render.js" "$LOG/page.bad.html" "$LOG/api.mid.json" plain \
+            >"$LOG/render.bad.out" 2>"$LOG/render.bad.err" || true
+        ck "S15 CONTROL: the runtime innerHTML detector is live (a patched page fails it)" \
+           'grep -q "RENDERER-USED-innerHTML" "$LOG/render.bad.err" \
+            && ! grep -q -- "$ABBR" "$LOG/render.bad.out"'
+    else
+        for t in "S8 SETUP: the page's OWN script rendered the API's OWN JSON" \
+                 "S9 the rendered page carries the content_hash, abbreviated, with #<ix>" \
+                 "S10 CONTROL: ... abbreviated -- the full 64 hex is NOT on screen unasked" \
+                 "S11 clicking the citation expands it to the CLI's EXACT citation" \
+                 "S12 clicking again collapses it back to the abbreviation" \
+                 "S13 CONTROL: a hit with no hash renders NO citation, not half of one" \
+                 "S14 CONTROL: a different hash renders differently (data, not a constant)" \
+             "S14b CONTROL: a different chunk_ix renders differently, too" \
+                 "S15 CONTROL: the runtime innerHTML detector is live (a patched page fails it)"
+        do
+            skip "$t" "no node on PATH -- S7 is the only citation check left, and it is a grep"
+        done
+    fi
 else
     for t in "S0 SETUP: the JSON API answered both queries" \
              "S1 a middle chunk reports fragment_head AND fragment_tail true" \
@@ -364,7 +567,17 @@ else
              "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
              "S4 chunk_count reports the real extent (the measured count, and 1)" \
              "S5 the HTML page still contains no innerHTML anywhere" \
-             "S6 the page renders the SAME marker strings the CLI prints"
+             "S6 the page renders the SAME marker strings the CLI prints" \
+             "S7 the page's renderer reads hit.hash at all" \
+             "S8 SETUP: the page's OWN script rendered the API's OWN JSON" \
+             "S9 the rendered page carries the content_hash, abbreviated, with #<ix>" \
+             "S10 CONTROL: ... abbreviated -- the full 64 hex is NOT on screen unasked" \
+             "S11 clicking the citation expands it to the CLI's EXACT citation" \
+             "S12 clicking again collapses it back to the abbreviation" \
+             "S13 CONTROL: a hit with no hash renders NO citation, not half of one" \
+             "S14 CONTROL: a different hash renders differently (data, not a constant)" \
+             "S14b CONTROL: a different chunk_ix renders differently, too" \
+             "S15 CONTROL: the runtime innerHTML detector is live (a patched page fails it)"
     do
         skip "$t" "no curl on PATH"
     done

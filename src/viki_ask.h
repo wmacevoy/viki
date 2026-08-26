@@ -123,6 +123,40 @@ char *viki_ask_fts_query(const char *zQuery);
 #define VIKI_MARK_TAIL "<<document continues below>>"
 #define VIKI_MARK_CUT  "<<excerpt truncated>>"
 
+/* How many leading hex digits of a content_hash a surface built for HUMAN
+** EYES shows before it is asked for the rest. Lives here, next to the
+** marker strings and for the same reason: `viki serve`'s page composes its
+** JavaScript by C string concatenation from this header, so the width
+** cannot drift from what a probe checks.
+**
+** IT IS A STRING because its only consumer is that JavaScript
+** (`hit.hash.slice(0, N)`). An int would need a second, hand-kept spelling
+** to reach the page, which is exactly the drift this pattern exists to
+** stop.
+**
+** WHY ABBREVIATE AT ALL. The hash is the citable identity and a page that
+** omits it cannot cite (KICKOFF.md deliverable 2) -- but ten hits is ten
+** 64-character hex strings, and a wall of hex is skipped by the eye, which
+** is a different way of failing to cite. So the page shows a prefix and
+** keeps the whole value one hover or one click away, never further.
+**
+** WHY 12. It is the short-hash convention this page already lives inside:
+** Fossil's own web UI -- which every `hit.url` links into -- abbreviates
+** artifact hashes to a prefix, and git does the same at 7. 12 hex digits
+** is 48 bits, comfortably past both, and its real job is smaller than
+** collision resistance: telling ten hits in one result set apart. The full
+** value is what gets cited, and the page hands that over verbatim.
+**
+** NO ELLIPSIS, ON PURPOSE, and this is the same rule as the marker block
+** above. ' ... ' and '<<...>>' are viki's two "something is missing"
+** notations and they are kept in disjoint alphabets so a reader cannot
+** merge them; a third notation on the citation line would undo that for a
+** fact the reader already knows (hashes are long, prefixes are prefixes).
+** The abbreviation is instead disclosed by the CONTROL: the short form
+** sits in a button whose tooltip is the full `<hash>#<ix>` and whose click
+** expands it in place. */
+#define VIKI_HASH_ABBREV_STR "12"
+
 typedef struct {
     char hash[65];     /* content_hash: sha256 of the source text, the citable identity */
     int chunk_ix;
