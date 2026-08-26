@@ -933,6 +933,29 @@ this file -- against a binary missing three fixes that were sitting in
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
 
+- **CHUNK OVERLAP, AND `--k` STOPPED STEERING RETRIEVAL** (2026-08-26).
+  Chunks are 40 lines with a 10-line overlap. Measured on one corpus varying
+  only the binary (`fp 1b1e3c962c1e8cad`): recall@1 0.256 → 0.349, MRR
+  0.381 → 0.424, held-out recall@1 0.333 → 0.417, +26% chunks; overlap 20 costs
+  +77% chunks and buys nothing. **Reported honestly in FINDINGS.md**: the
+  predicted mechanism (boundaries no longer splitting an answer from its
+  vocabulary) is only weakly supported — RIGHT DOCUMENT, WRONG CHUNK moved 21→20
+  — and what actually improved is the vector leg ("fusion helped" 3→5, "fusion
+  HURT" 2→0). It also COSTS the coverage-closed class (0.333 → 0.200 recall@1),
+  because short artifacts gain nothing and face 26% more competitors. Net is
+  ~+4/−2 queries on n=43/n=15: real, deterministic, and thin.
+  Separately, `viki_ask_query_opts()` sized its pool as `min(topK*4, POOL)`, so
+  `--k` changed WHICH results won: a rank-2 hit vanished entirely at k=5. The
+  pool is now constant and results are a true prefix. **The eval harness could
+  not have caught it** — it runs at k=10 where both formulas give 40;
+  `build/literal-probe.sh`'s hostile fixture did.
+  `build/fragment-probe.sh` now READS the chunk layout back from the cache
+  (`viki sql`) instead of predicting "3 chunks" from 120 lines, and prints it —
+  three of its assertions failed on arithmetic when overlap landed, which is a
+  test coupled to a constant rather than to behaviour.
+  NOT verified: no measurement of overlap at verse scale (139k chunks); the
+  coverage-closed regression is not addressed, only recorded.
+
 - **CHUNKING ENTERED THE CACHE EPOCH** (2026-08-26). `build/cache-probe.sh`
   `21 passed, 0 failed` (E1-E4 are the new ones); m1 90/0/0.
   Stored `model_id` is now `"<manifest model_id>/c<chunk_lines>"`, derived once

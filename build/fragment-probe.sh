@@ -69,18 +69,31 @@ mkdir -p "$DIR/bm25/docs" "$DIR/vec/docs" "$DIR/nomodel" "$DIR/logs"
 LOG="$DIR/logs"
 
 # ------------------------------------------------------------- the corpus --
-# THREE chunks exactly. viki_index.c cuts every 40 lines, so 120 lines is
-# chunk_ix 0,1,2 -- and the three planted tokens sit one per chunk, each
-# unique in the corpus, so a one-word query names one chunk with no
-# ranking assumptions at all. Line numbers 5/50/100 are deliberately not
-# on a chunk boundary: a token AT the boundary would not distinguish a
-# correct implementation from one that is off by one chunk.
+# A MULTI-CHUNK document. It used to say "THREE chunks exactly", computed from
+# 120 lines at 40 lines per chunk -- correct until chunking gained an OVERLAP
+# (embed.h, 2026-08-26), after which the same 120 lines are FOUR windows and
+# three assertions failed on arithmetic rather than on behaviour.
+#
+# So the counts are now READ BACK from the cache after indexing (LAST_IX /
+# N_CHUNK below) instead of being predicted here. What this file tests is
+# MARKING -- does a middle chunk say it has text above and below, does the last
+# chunk omit the tail marker -- and none of that should depend on how many
+# chunks a given build produces.
+#
+# The three planted tokens are still one per region and unique in the corpus,
+# so a one-word query names one chunk with no ranking assumptions. Line numbers
+# are deliberately not on a chunk boundary: a token AT the boundary would not
+# distinguish a correct implementation from one that is off by one chunk.
+# gammamarker sits at line 110 rather than 100 because with a 40-line window
+# and a 30-line stride, lines 101-120 are the only ones the FINAL window does
+# not share with its predecessor -- which is what "the last chunk" has to mean
+# for F7 to be about markers and not about overlap.
 i=1
 while [ "$i" -le 120 ]; do
     case "$i" in
         5)   echo "The alphamarker survey was filed with the county clerk." ;;
         50)  echo "The betamarker inspection found corrosion on the flange." ;;
-        100) echo "The gammamarker rebuild finished ahead of the estimate." ;;
+        110) echo "The gammamarker rebuild finished ahead of the estimate." ;;
         *)   echo "Routine line $i of the maintenance log, nothing notable recorded." ;;
     esac
     i=$((i+1))
@@ -114,6 +127,20 @@ cp "$DIR/bm25/docs/long.md" "$DIR/vec/docs/long.md"   # hybrid phase: ONE docume
 
 ( cd "$DIR/bm25" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" index . ) \
     >"$LOG/index.out" 2>"$LOG/index.err" || true
+
+# READ THE LAYOUT BACK rather than predicting it. `viki sql` is used instead of
+# a stock sqlite3 so this needs no extra dependency and works on any cache viki
+# can open. A build with different chunk params changes these numbers and must
+# not change a single assertion below.
+layout(){ "$VIKI" sql "$1" 2>/dev/null | tail -1 | tr -d ' '; }
+N_CHUNK=$( cd "$DIR/bm25" && layout "SELECT count(*) FROM viki_chunk c
+             JOIN viki_source s ON s.content_hash=c.content_hash
+             WHERE s.path LIKE '%long.md'" )
+LAST_IX=$( cd "$DIR/bm25" && layout "SELECT max(chunk_ix) FROM viki_chunk c
+             JOIN viki_source s ON s.content_hash=c.content_hash
+             WHERE s.path LIKE '%long.md'" )
+: "${N_CHUNK:=3}" "${LAST_IX:=2}"
+printf '  layout: long.md is %s chunk(s), last index %s\n' "$N_CHUNK" "$LAST_IX"
 
 # ------------------------------------------------------------- helpers --
 # BM25-only and --k 1: every query below names a token that occurs in
@@ -155,8 +182,8 @@ ck "F6 ... but it DOES carry a tail marker (F5 is not 'markers never print')" \
 
 echo "== C. the LAST chunk has no tail marker -- and still has a head one =="
 ask last gammamarker
-ck "F7 SETUP: the gammamarker query lands on chunk #2 (the last one)" \
-   '[ "$(hit_ix "$LOG/last.out")" = "2" ]'
+ck "F7 SETUP: the gammamarker query lands on the LAST chunk" \
+   '[ "$(hit_ix "$LOG/last.out")" = "$LAST_IX" ]'
 ck "F8 CONTROL: the LAST chunk carries NO tail marker" \
    '[ "$(nmark "$LOG/last.out" "$TAIL_MARK")" -eq 0 ]'
 ck "F9 ... but it DOES carry a head marker (F8 is not 'markers never print')" \
@@ -211,6 +238,11 @@ echo "== G. the VECTOR leg's excerpt is a truncated prefix, and says so =="
 if [ -f "$MODEL/model.onnx" ] && [ -f "$MODEL/vocab.txt" ] && [ -f "$MODEL/viki-manifest.json" ]; then
     ( cd "$DIR/vec" && VIKI_MODEL_DIR="$MODEL" "$VIKI" index . ) \
         >"$LOG/vindex.out" 2>"$LOG/vindex.err" || true
+    VLAST_IX=$( cd "$DIR/vec" && VIKI_MODEL_DIR="$MODEL" layout \
+        "SELECT max(chunk_ix) FROM viki_chunk c
+           JOIN viki_source s ON s.content_hash=c.content_hash
+          WHERE s.path LIKE '%long.md'" )
+    : "${VLAST_IX:=2}"
     # No token here occurs anywhere in the corpus, so the BM25 leg is
     # empty and every hit -- and every excerpt -- comes from rung 2.
     ( cd "$DIR/vec" && VIKI_MODEL_DIR="$MODEL" "$VIKI" ask "zzqxwv unrelatedtoken" --k 3 ) \
@@ -234,9 +266,9 @@ if [ -f "$MODEL/model.onnx" ] && [ -f "$MODEL/vocab.txt" ] && [ -f "$MODEL/viki-
         && [ "$(vblock 0 | grep -o -- "$HEAD_MARK" | wc -l)" -eq 0 ] \
         && [ "$(vblock 0 | grep -o -- "$TAIL_MARK" | wc -l)" -eq 1 ]'
     ck "V5 CONTROL: the LAST chunk is truncated but has NO tail marker" \
-       '[ "$(vblock 2 | grep -o -- "$CUT_MARK" | wc -l)" -eq 1 ] \
-        && [ "$(vblock 2 | grep -o -- "$HEAD_MARK" | wc -l)" -eq 1 ] \
-        && [ "$(vblock 2 | grep -o -- "$TAIL_MARK" | wc -l)" -eq 0 ]'
+       '[ "$(vblock $VLAST_IX | grep -o -- "$CUT_MARK" | wc -l)" -eq 1 ] \
+        && [ "$(vblock $VLAST_IX | grep -o -- "$HEAD_MARK" | wc -l)" -eq 1 ] \
+        && [ "$(vblock $VLAST_IX | grep -o -- "$TAIL_MARK" | wc -l)" -eq 0 ]'
 else
     for t in "V1 SETUP: the vector leg answered a query the keyword leg cannot" \
              "V2 the vector leg's 140-char prefix excerpt is marked truncated" \
@@ -272,7 +304,7 @@ if [ "$PORT_BUSY" = 1 ]; then
              "S1 a middle chunk reports fragment_head AND fragment_tail true" \
              "S2 CONTROL: a single-chunk document reports BOTH false" \
              "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
-             "S4 chunk_count reports the real extent (3 chunks, and 1)" \
+             "S4 chunk_count reports the real extent (the measured count, and 1)" \
              "S5 the HTML page still contains no innerHTML anywhere" \
              "S6 the page renders the SAME marker strings the CLI prints"
     do
@@ -312,8 +344,8 @@ elif command -v curl >/dev/null 2>&1; then
     # from indexed content. `<<` appears in no marker-free JSON body.
     ck "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
        '! grep -q "<<" "$LOG/api.mid.json"'
-    ck "S4 chunk_count reports the real extent (3 chunks, and 1)" \
-       'grep -q "\"chunk_count\":3" "$LOG/api.mid.json" \
+    ck "S4 chunk_count reports the real extent (the measured count, and 1)" \
+       'grep -q "\"chunk_count\":$N_CHUNK" "$LOG/api.mid.json" \
         && grep -q "\"chunk_count\":1" "$LOG/api.solo.json"'
     # The page renders indexed content, which is untrusted markup. Adding
     # markers must not have reached for innerHTML to do it.
@@ -330,7 +362,7 @@ else
              "S1 a middle chunk reports fragment_head AND fragment_tail true" \
              "S2 CONTROL: a single-chunk document reports BOTH false" \
              "S3 the JSON snippet is NOT decorated (booleans, not string mutation)" \
-             "S4 chunk_count reports the real extent (3 chunks, and 1)" \
+             "S4 chunk_count reports the real extent (the measured count, and 1)" \
              "S5 the HTML page still contains no innerHTML anywhere" \
              "S6 the page renders the SAME marker strings the CLI prints"
     do

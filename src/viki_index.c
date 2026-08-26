@@ -341,12 +341,17 @@ static int insert_chunks(sqlite3 *db, const char *hash, const char *text, size_t
 
     while( p < end ){
         const char *chunk_start = p;
+        /* Where the NEXT window starts: STRIDE lines in, not LINES in. The two
+        ** differ by VIKI_CHUNK_OVERLAP so consecutive chunks share text and no
+        ** answer is cut away from the vocabulary that finds it (embed.h). */
+        const char *next_start = NULL;
         int lines = 0;
         while( p < end && lines < VIKI_CHUNK_LINES ){
             const char *nl = memchr(p, '\n', (size_t)(end - p));
             if( !nl ){ p = end; lines++; break; }
             p = nl + 1;
             lines++;
+            if( lines == VIKI_CHUNK_STRIDE ) next_start = p;
         }
         {
             size_t clen = (size_t)(p - chunk_start);
@@ -383,6 +388,16 @@ static int insert_chunks(sqlite3 *db, const char *hash, const char *text, size_t
             sqlite3_reset(stFts);
         }
         ix++;
+
+        /* REWIND TO THE STRIDE, so the next window overlaps this one.
+        **
+        ** Only when there is more text: at end-of-input the final window has
+        ** already covered the tail, and rewinding would emit a chunk that is a
+        ** strict suffix of the one just written -- forever, since p would
+        ** never reach `end` again. next_start is NULL for a document shorter
+        ** than one stride, which is the same case. */
+        if( p >= end ) break;
+        if( next_start ) p = next_start;
     }
 
     sqlite3_finalize(stChunk);

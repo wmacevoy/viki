@@ -147,11 +147,11 @@ if [ -d "$VIKI_MODEL_DIR" ] \
     # (FINDINGS.md). Assertions about the PIN keep using $MODEL_ID; assertions
     # about what is STORED use $EPOCH_RE.
     #
-    # A REGEX, not a literal: pinning "/c40" here would make this file a second
+    # A REGEX, not a literal: pinning "/c40o10" here would make this file a second
     # copy of a constant that lives in embed.h, and the pair would rot apart.
     # The property under test is that the epoch carries the model AND a chunk
     # parameter, which is exactly what this matches.
-    EPOCH_RE="$MODEL_ID/c[0-9][0-9]*"
+    EPOCH_RE="$MODEL_ID/c[0-9][0-9]*o[0-9][0-9]*"
     printf '  model present: %s (%s)\n' "$MODEL_ID" "$VIKI_MODEL_DIR"
 else
     printf '\n'
@@ -598,8 +598,8 @@ check "A2 index is honest about running without a model" \
 # deterministic property of the corpus.
 check "A3 index chunked all 3 planted documents" \
       '$GREP -qE "^viki index: [0-9]+ file\(s\) scanned, 3 \(re\)chunked" "$LOG/a.index.err"' "$LOG/a.index.err"
-check "A4 index reports the no-model epoch (model_id=none/c<lines>)" \
-      '$GREP -qE "\(model_id=none/c[0-9]+\)\$" "$LOG/a.index.err"' "$LOG/a.index.err"
+check "A4 index reports the no-model epoch (model_id=none/c<lines>o<overlap>)" \
+      '$GREP -qE "\(model_id=none/c[0-9]+o[0-9]+\)\$" "$LOG/a.index.err"' "$LOG/a.index.err"
 check "A5 the wiki page was indexed" \
       '$GREP -q "1 wiki page(s), 1 (re)chunked" "$LOG/a.index.err"' "$LOG/a.index.err"
 # NONZERO, not merely rc=0. An unresolvable fossil user makes this leg

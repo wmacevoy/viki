@@ -227,7 +227,8 @@ const char *viki_embedder_model_id(const viki_embedder *e){ return e->modelId; }
 ** compile-time constant must not quietly rewrite what the pin says. This is
 ** the cache's key, not the model's name. */
 void viki_cache_epoch_id(const viki_embedder *e, char *zBuf, size_t nBuf){
-    snprintf(zBuf, nBuf, "%s/c%d", e ? e->modelId : VIKI_MODEL_NONE, VIKI_CHUNK_LINES);
+    snprintf(zBuf, nBuf, "%s/c%do%d", e ? e->modelId : VIKI_MODEL_NONE,
+             VIKI_CHUNK_LINES, VIKI_CHUNK_OVERLAP);
 }
 int viki_embedder_dim(const viki_embedder *e){ return e->dim; }
 

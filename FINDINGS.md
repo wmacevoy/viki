@@ -12,6 +12,81 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## `--k` changed WHICH results won, not just how many were shown
+
+2026-08-26. Found while measuring chunk overlap, in a probe that had been
+passing for weeks against a fixture built to catch exactly this class of thing.
+
+`viki_ask_query_opts()` sized its candidate pool as
+`min(topK * 4, VIKI_CANDIDATE_POOL)`, so every retrieval leg fetched fewer
+candidates for a smaller `k`. Fusion then ran over a different input set and
+produced a different ORDER -- not a truncation of the same order.
+
+### Repro
+
+`build/literal-probe.sh`'s fixture: one 20-chunk document (`dense.md`) on the
+same topic, contesting one chunk that names an identifier (`passing.md`).
+
+```
+$ viki ask "how does framed_next parse the counted framing" --k 10
+[1] dense.md   [2] passing.md   [3..10] dense.md
+
+$ viki ask "how does framed_next parse the counted framing" --k 5
+[1..5] dense.md                          <- passing.md is GONE, not demoted
+```
+
+**Asking for fewer results removed a rank-2 hit entirely.** No caller predicts
+that from a parameter named `k`, and an agent that narrows `k` to save context
+would silently lose the answer it was narrowing toward.
+
+### The wrong assumption it replaces
+
+That `k` is a display parameter. It was a retrieval-depth parameter wearing a
+display parameter's name. The pool array is `VIKI_CANDIDATE_POOL`-sized
+regardless, so the shallow pool bought no memory -- only a little less SQL.
+
+Fixed: `poolSize = VIKI_CANDIDATE_POOL` always, so `k` truncates a
+fixed-depth ranking and results are a true prefix (verified k=3 ⊂ k=5 ⊂ k=10).
+
+**It was invisible at the eval's own default.** `test/retrieval-eval.sh` runs
+at `k=10`, where `min(10*4, 40)` is already 40 -- so the harness measured the
+fixed pool and the old one as identical, and could never have caught this. The
+probe with a hostile fixture did.
+
+---
+## Chunk overlap: the measured fix for RIGHT DOCUMENT, WRONG CHUNK -- and it is a trade
+
+2026-08-26. Same corpus, `corpus fp 1b1e3c962c1e8cad`, varying only the binary,
+which is the only comparison this harness supports.
+
+| overlap | chunks | recall@1 | recall@5 | recall@k | MRR | coverage-closed r@1 | held-out r@1 |
+|---|---|---|---|---|---|---|---|
+| 0 | 194 | 0.256 | 0.535 | 0.698 | 0.381 | **0.333** | 0.333 |
+| 5 | 218 | 0.326 | 0.488 | 0.651 | 0.401 | 0.267 | 0.417 |
+| **10** | 245 | **0.349** | 0.512 | 0.698 | **0.424** | 0.200 | 0.417 |
+| 20 | 343 | 0.326 | 0.535 | 0.628 | 0.420 | 0.267 | 0.417 |
+
+10 is the setting: best recall@1 and MRR, recall@k level with the baseline,
++26% chunks. 20 costs +77% chunks and buys nothing.
+
+### Two honest qualifications
+
+**The predicted mechanism is only weakly supported.** The hypothesis was that
+overlap stops an answer being cut away from the vocabulary that finds it, which
+should collapse RIGHT DOCUMENT, WRONG CHUNK. That count barely moved: 21 of 43
+to 20 of 43, with rank-1 instances 11 to 9. What actually improved is the
+VECTOR leg -- "fusion helped" went 3 to 5 and "fusion HURT" went 2 to 0. A
+window with more surrounding context embeds better; that is a different claim
+from the one the change was made on, and it is the one the data supports.
+
+**It costs the coverage-closed class**, whose answers live in check-in
+comments, tech notes and attachments: recall@1 0.333 to 0.200, MRR 0.513 to
+0.413. Those artifacts are short -- one chunk either way -- so they gain
+nothing from overlap while competing against 26% more file chunks. The net over
+both reports is roughly +4 queries and -2 on n=43/n=15, which is a real gain and
+a thin one; it is deterministic, not sampled, but it is four queries.
+
+---
 ## chunk_params is missing from the cache key, so two peers that chunk differently silently double-index the same lines
 
 2026-08-26. Found while measuring P0.4 (retrieval quality), and it is a

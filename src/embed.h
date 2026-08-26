@@ -53,7 +53,31 @@ const char *viki_embedder_model_id(const viki_embedder *e);
 #define VIKI_CHUNK_LINES 40
 #endif
 
-/* Writes "<model_id>/c<chunk_lines>" into zBuf. A NULL embedder yields the
+/* CHUNK OVERLAP, added 2026-08-26 because it was the measured top failure.
+**
+** test/retrieval-eval.sh's taxonomy found RIGHT DOCUMENT, WRONG CHUNK in 17 of
+** 43 queries, 12 of them at rank 1: another chunk of the gold DOCUMENT
+** outranked the chunk holding the answer. No model change addresses that.
+** Fixed-size chunks with no overlap cut an answer away from the vocabulary
+** that would find it -- a definition on line 39 and its subject on line 41 end
+** up in different chunks and neither retrieves well.
+**
+** Overlapping windows give every boundary a second chance: consecutive chunks
+** advance by STRIDE and share OVERLAP lines, so any span of <= OVERLAP lines
+** appears whole in at least one chunk. The cost is roughly
+** LINES/STRIDE times more chunks -- more storage, more embedding time, and
+** more near-duplicate candidates for the pool to sort out. */
+#ifndef VIKI_CHUNK_OVERLAP
+#define VIKI_CHUNK_OVERLAP 10
+#endif
+
+/* How far the window advances. A stride of 0 or less would never terminate,
+** so it is clamped rather than trusted: an override is a build flag, and a
+** build flag that hangs the indexer is a bad way to find out. */
+#define VIKI_CHUNK_STRIDE \
+    ((VIKI_CHUNK_LINES - VIKI_CHUNK_OVERLAP) > 0 ? (VIKI_CHUNK_LINES - VIKI_CHUNK_OVERLAP) : 1)
+
+/* Writes "<model_id>/c<chunk_lines>o<overlap>" into zBuf. A NULL embedder yields the
 ** degraded-path id ("none/c40"), which needs the suffix for exactly the same
 ** reason: a no-model peer still stores chunk_text, and two no-model peers that
 ** chunk differently collide just as readily. */

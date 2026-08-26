@@ -624,10 +624,24 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
     char *ftsQuery;
     viki_ask_result pool[VIKI_CANDIDATE_POOL];
     int n = 0;
-    int poolSize = topK * 4 < VIKI_CANDIDATE_POOL ? topK * 4 : VIKI_CANDIDATE_POOL;
+    /* THE POOL IS A CONSTANT, NOT A FUNCTION OF topK.
+    **
+    ** It used to be min(topK*4, VIKI_CANDIDATE_POOL), which made `--k` steer
+    ** RETRIEVAL and not just display: each leg fetched fewer candidates for a
+    ** smaller k, so fusion ran over a different input and the answer CHANGED.
+    ** Measured on build/literal-probe.sh's fixture, where one 20-chunk
+    ** document contests one chunk naming the identifier:
+    **
+    **     --k 10   [1] dense.md  [2] passing.md  [3..] dense.md
+    **     --k 5    [1..5] dense.md            <- passing.md GONE, not demoted
+    **
+    ** Asking for FEWER results removed a rank-2 hit entirely, which is not a
+    ** behaviour any caller would predict from a parameter named k. Results are
+    ** now a true prefix: k truncates a fixed-depth ranking. The pool array is
+    ** VIKI_CANDIDATE_POOL-sized regardless, so this costs a little more SQL at
+    ** small k and no memory at all. */
+    int poolSize = VIKI_CANDIDATE_POOL;
     int nOut;
-
-    if( poolSize < 1 ) poolSize = 1;
 
     ftsQuery = build_or_query(zQuery);
     if( ftsQuery ){

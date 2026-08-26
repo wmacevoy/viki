@@ -439,6 +439,18 @@ structure)**, then **keyword-leg selectivity**, and only then the model. That is
 cheaper and more testable than an epoch bump, and `test/retrieval-eval.sh`
 gates all three.
 
+**Overlap done 2026-08-26.** 40-line windows, 10-line overlap. Same corpus
+(`fp 1b1e3c962c1e8cad`), varying only the binary: recall@1 0.256 → 0.349,
+MRR 0.381 → 0.424, held-out recall@1 0.333 → 0.417, at +26% chunks. Read
+FINDINGS.md before building on it: the predicted mechanism is only weakly
+supported (the improvement is the vector leg getting better, not boundaries
+being repaired), and it costs the coverage-closed class. **Boundaries that
+respect structure is NOT done** — that is the remaining half of this item, and
+the one that would actually address RIGHT DOCUMENT, WRONG CHUNK.
+
+**Keyword-leg selectivity is untouched** and is now the largest single lever:
+the OR-of-terms MATCH still selects a median of 189 of 190 chunks.
+
 **And chunking is blocked by a defect the measurement exposed.** `chunk_params`
 is in D-11's determinism claim but in neither the cache key nor the skip test,
 so two peers that chunk differently silently double-index the same lines —

@@ -607,8 +607,22 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   re-indexed** — `viki ask` detects exactly that and prints a WARNING rather
   than announcing hybrid mode over a dead leg; `viki index` is the whole fix,
   since the cache is derived (D-10).
+- **Chunks are 40 lines with a 10-line overlap** (`VIKI_CHUNK_LINES` /
+  `VIKI_CHUNK_OVERLAP`, both in `embed.h`; the window advances by
+  `VIKI_CHUNK_STRIDE`, clamped so an override cannot hang the indexer).
+  Overlap was measured in, not assumed: same corpus, varying only the binary,
+  recall@1 0.256 → 0.349 and MRR 0.381 → 0.424 at +26% chunks, with 20 costing
+  +77% chunks for nothing. Read FINDINGS.md before changing it — the gain is
+  real but it is ~4 queries on n=43, the predicted mechanism is only weakly
+  supported, and it COSTS the coverage-closed class (short artifacts gain
+  nothing from overlap and compete against more file chunks).
+- **`--k` truncates; it does not steer.** The candidate pool is a constant
+  (`VIKI_CANDIDATE_POOL`), deliberately not `topK * 4` — under the old sizing a
+  rank-2 hit could VANISH by asking for fewer results, and the eval harness
+  could not see it because it runs at k=10 where the two formulas coincide
+  (FINDINGS.md). Results are a true prefix: k=3 ⊂ k=5 ⊂ k=10.
 - **Known-naive by choice, not by oversight** (see AGENTS.md before "fixing"):
-  fixed 40-line chunks with no overlap or token awareness, ASCII-scoped
+  fixed 40-line chunks with no token awareness, ASCII-scoped
   tokenizer, no epoch-migration path for a model change, and
   `VIKI_FTS_EPOCH_SLACK = 4` (`viki_ask.c`) — the BM25 leg over-fetches 4×
   and stops at `poolSize` distinct chunks, so a cache holding more than 4
