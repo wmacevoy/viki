@@ -933,7 +933,30 @@ this file -- against a binary missing three fixes that were sitting in
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
 
-- **TWO AGENT BUILDS PARKED ON BRANCHES, NOT MERGED** (2026-08-26). A v1 audit
+- **`viki serve` CITES ITS SOURCES** (2026-08-26). `build/fragment-probe.sh`
+  `48 passed, 0 failed, 0 skipped`. The HTML page renders
+  `<content_hash>#<chunk_ix>` per hit, so KICKOFF deliverable 2 is met on all
+  three surfaces rather than the CLI and `/api/ask` only. 12 hex digits in a
+  `<button>` that expands on click; `textContent` and `.title`, never
+  `innerHTML`.
+  **Landed from `wip/serve-hash` only after its probe was repaired**, which the
+  adversarial verifier had shown did not test what it claimed: S13 ("renders NO
+  citation, not half of one") asserted only that the abbreviated hash was
+  absent and never that the `#<ix>` half was, so a half-citation passed the
+  assertion named after it; and nothing varied `chunk_ix`, so
+  `'#' + hit.chunk_ix` and a literal `'#1'` were indistinguishable. S13 now
+  counts citation NODES — the page's own rank marker is `#1`, so a regex over
+  rendered text cannot answer this — and S14b mutates `chunk_ix` to 77. Both of
+  the verifier's mutations now fail the suite: 47/1 each.
+  A third defect surfaced while fixing those: the probe hardcoded `cut -c1-12`
+  while the docs claimed the width "lives once". It now reads the header, and
+  that read was broken (`$ROOT` for `$REPO`) behind a `:=12` default that
+  masked it exactly. Found only by setting the header to 8 and watching a
+  correct binary go red. Verified at 12 and 8: 48/0 both.
+  NOT verified: macOS arm64 only; the S-series needs `node`; CI does not run
+  `fragment-probe.sh` at all.
+
+- **ONE AGENT BUILD STILL PARKED, NOT MERGED** (2026-08-26). A v1 audit
   workflow produced both; adversarial verification returned `sound=false` for
   each, so neither is in `main`. They are `wip/provenance` and `wip/serve-hash`,
   both REBASED ONTO CURRENT MAIN and both building — the "merge decay" worry

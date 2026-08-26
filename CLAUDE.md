@@ -651,12 +651,21 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   `0 (re)chunked`, and the replaced text still answers at rank 1. Real
   limitation, not just a test artifact; it is why `test/m1.sh` section 7
   follows every mutation with `touch -t 202001010000`. See FINDINGS.md.
-- **`viki serve`'s HTML page renders no `content_hash`.** The CLI hit line
-  and `/api/ask`'s `"hash"` both carry it, but the page shows only
-  rank/rrf/source/`chunk_ix of chunk_count` plus the fragment markers — so
-  the one *human* surface cannot cite a source, and nothing in `test/m1.sh`
-  covers `serve` at all (`build/fragment-probe.sh`'s S-series is its only
-  automated coverage, and only of the fragment fields).
+- **`viki serve`'s HTML page cites its sources** (since 2026-08-26), which
+  closes KICKOFF deliverable 2 on the last of its three surfaces. Every hit
+  renders `<hash>#<chunk_ix>` — the same string `viki ask` prints and
+  `/api/chunk?hash=&ix=` takes — abbreviated to `VIKI_HASH_ABBREV_STR` hex
+  digits in a real `<button>` (keyboard-reachable, no key handling of our own)
+  that expands in place on click, with the full value as its tooltip.
+  `textContent` and `.title` only; the file still contains no `innerHTML`.
+  **The width lives ONCE, in `viki_ask.h`**: the page composes its JavaScript
+  from it by C string concatenation and `build/fragment-probe.sh` READS it back
+  out of the header, so setting it to 8 moves both and the suite stays green —
+  which is what makes "lives once" a fact instead of a comment. That read was
+  itself broken at first behind a `:=12` default that masked it exactly,
+  because the default equalled the real value; there is no default now.
+  Still true: **nothing in `test/m1.sh` covers `serve` at all**, and
+  `build/fragment-probe.sh`'s S-series is its only automated coverage.
 - **`viki index` invalidates, and its scoping rule is load-bearing.** Superseded
   and deleted sources are retired from `viki_source`, then chunks no longer
   referenced by any live source are deleted from **both** `viki_chunk` and
