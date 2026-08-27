@@ -622,6 +622,18 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   for `fork()`/BSD sockets), so `viki.exe` links `msys-2.0.dll` — bundled by
   `build.sh`. ONNX Runtime is native and needs UTF-16 model paths regardless
   (`-DVIKI_WIN_ORT_PATH`) and `cygpath -m` paths, since it has no MSYS awareness.
+- **Captured text is UNTRUSTED and must never become note syntax.**
+  `note_parse_file()` gives `@` in column 0 structural meaning and `@note` ends
+  the previous block, while the Chrome reader POSTs whatever a Facebook,
+  Discord, D2L or Outlook message said. Until 2026-08-27 `viki capture` wrote
+  its text verbatim, so a message someone else wrote could forge a promise and
+  **silently retire a real one** via `@closes` (FINDINGS.md, with the repro).
+  `write_body()` prefixes a space to any body line starting `@`; `write_field()`
+  stops at the first newline — **both** are needed, because a field value
+  carrying a newline injects a line without touching the body, and a body-only
+  fix passes its own test. `build/promise-probe.sh` F1–F5, where F4 (the text
+  is still stored) and F5 (a real `--closes` still works) are what stop the
+  attack assertions being satisfied by refusing or by breaking supersession.
 - **`.vikiignore` decides what is in the corpus, and the corpus is the
   product.** One glob per line, `#` comments, at the indexed root; a pattern
   with no `/` matches any path COMPONENT, one with `/` matches the whole

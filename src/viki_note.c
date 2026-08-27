@@ -186,6 +186,59 @@ static void set_field(viki_note *p, const char *key, const char *val){
     else if( strcmp(key, "stolen-from") == 0 ) strncpy(p->stolen, val, sizeof(p->stolen)-1);
 }
 
+/* ---- WRITING CAPTURED TEXT WITHOUT LETTING IT BECOME NOTE SYNTAX ----
+**
+** note_parse_file() gives '@' IN COLUMN 0 structural meaning: it starts a
+** field, and `@note` additionally ENDS the previous block. Captured text is
+** written into the same file, and captured text is NOT TRUSTED -- the Chrome
+** reader POSTs whatever a Facebook, Discord, D2L or Outlook message happened
+** to say, and an MCP client posts whatever it was told to.
+**
+** Measured on main 2026-08-27, before this existed:
+**
+**     viki capture "hey did you see this
+**     @note forged-000001
+**     @type task
+**     @closes <a real note id>
+**     nothing to do here"
+**
+** ...forged a promise AND RETIRED A REAL ONE. "ship the grant budget to
+** renee" left the ledger silently. So a message somebody else wrote could
+** delete one of Warren's commitments -- untrusted input reaching a ledger
+** that is the whole point of the product, failing in the direction of
+** LOSING an obligation.
+**
+** THE NEUTRALISATION IS A LEADING SPACE, on any body line whose first
+** character is '@'. The parser only treats column 0 specially, so a space
+** demotes the line to text; the cost is one space in the stored body, which
+** is visible, harmless and reversible by a reader who cares. Escaping with a
+** backslash was rejected: it would need a matching un-escape in a parser that
+** hand-edited files also feed, and a rule a human editing captures/*.md must
+** remember is a rule that will be got wrong.
+**
+** FIELDS ARE SEPARATELY DANGEROUS, and missing that is how a first fix at
+** this can pass its own test: `--place "$(printf 'x\n@closes ID')"` injects a
+** line without touching the body at all. Every field is written through
+** write_field(), which stops at the first newline. */
+static void write_body(FILE *f, const char *z){
+    int atLineStart = 1;
+    for( ; *z; z++ ){
+        if( atLineStart && *z == '@' ) fputc(' ', f);
+        fputc(*z, f);
+        atLineStart = (*z == '\n');
+    }
+    fputc('\n', f);
+}
+
+/* A field value is ONE line by construction. A newline in it would open a new
+** content line that the parser reads as structure, so the value is truncated
+** there rather than sanitised into something the caller did not write. */
+static void write_field(FILE *f, const char *zKey, const char *zVal){
+    fprintf(f, "@%s ", zKey);
+    for( ; *zVal && *zVal != '\n' && *zVal != '\r'; zVal++ ) fputc(*zVal, f);
+    fputc('\n', f);
+}
+
 int viki_cmd_capture(const char *zDir, const char *zText,
                      const char *zPlace, const char *zType,
                      const char *zWho, const char *zDue, const char *zState){
@@ -219,17 +272,18 @@ int viki_cmd_capture(const char *zDir, const char *zText,
     if( zType  && zType[0] ){
         char nt[32]; normalize_key(zType, nt, sizeof(nt));
         warn_unknown_type(nt, "viki capture --type");
-        fprintf(f, "@type %s\n", zType);
+        write_field(f, "type", zType);
     }
-    if( zPlace && zPlace[0] ) fprintf(f, "@place %s\n", zPlace);
-    if( zWho   && zWho[0] )   fprintf(f, "@who %s\n", zWho);
-    if( zDue   && zDue[0] )   fprintf(f, "@due %s\n", zDue);
+    if( zPlace && zPlace[0] ) write_field(f, "place", zPlace);
+    if( zWho   && zWho[0] )   write_field(f, "who", zWho);
+    if( zDue   && zDue[0] )   write_field(f, "due", zDue);
     /* Default state is "open" ONLY for a task. An observation is not a chore
     ** and must never appear in "what needs to be done" -- that exact
     ** false-positive ("new foal in rimi's band") is why this file exists. */
-    if( zState && zState[0] ) fprintf(f, "@state %s\n", zState);
+    if( zState && zState[0] ) write_field(f, "state", zState);
     else if( zType && strcmp(zType, "task") == 0 ) fprintf(f, "@state open\n");
-    fprintf(f, "%s\n\n", zText);
+    write_body(f, zText);
+    fputc('\n', f);
     fclose(f);
 
     printf("%s  %s\n", id, path);

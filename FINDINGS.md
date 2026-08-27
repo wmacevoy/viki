@@ -12,6 +12,67 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## Text somebody else wrote could delete a promise from the ledger
+
+2026-08-27. Found by an adversarial verifier reviewing a parked MCP branch,
+which reported the defect as living in SHARED code rather than in the branch.
+Reproduced against `main` immediately, and it was live there.
+
+`note_parse_file()` gives `'@'` in column 0 structural meaning: it starts a
+field, and `@note` additionally ENDS the previous block. `viki capture` wrote
+its text with `fprintf(f, "%s\n\n", zText)` -- verbatim.
+
+**Captured text is not trusted.** The Chrome reader POSTs whatever a Facebook,
+Discord, D2L or Outlook message happened to say, and an MCP client posts
+whatever it was told to.
+
+```
+$ viki capture "ship the grant budget to renee" --type task --due 2026-09-01
+$ viki capture "hey did you see this
+@note forged-000001
+@type task
+@closes 20260827-195822-674744
+nothing to do here"
+
+$ viki promises --all
+         (no due)   mine   nothing to do here
+                    forged-000001
+$ ...and "ship the grant budget to renee" is GONE.
+```
+
+A message a stranger wrote forged a promise **and silently retired a real
+one**. A ledger that loses an obligation because of something someone else
+typed is the worst failure this product has; the whole premise is that it can
+be believed.
+
+### Two vectors, and a body-only fix passes its own test
+
+The obvious repair escapes the BODY. It is not enough -- a FIELD value carrying
+a newline opens a content line without touching the body at all:
+
+```
+viki capture "innocent text" --place "$(printf 'ranch\n@closes <id>')"
+```
+
+Both are closed: `write_body()` prefixes a space to any body line starting
+`@` (the parser only treats column 0 specially, so a space demotes it to
+text), and `write_field()` stops at the first newline.
+
+**A leading space rather than a backslash escape**, deliberately: an escape
+needs a matching un-escape in a parser that hand-edited `captures/*.md` also
+feed, and a rule a human editing that file must remember is a rule that will be
+got wrong.
+
+### The controls are half the point
+
+F1-F3 assert the attack fails. **F4 asserts the hostile text was still
+STORED** -- this is neutralisation, not refusal, and a fix that dropped the
+note would pass F1-F3 while losing the observation, which is the other way to
+be wrong. F5 asserts a legitimate `--closes` still retires a promise, so F1-F3
+cannot be satisfied by breaking supersession outright. F1-F3 fail against the
+pre-fix binary (36/3); both controls pass on both.
+
+---
 ## An unvalidated @due did not fail to sort -- it sorted WRONG, toward anxiety
 
 2026-08-27. Found by a v1 audit agent, reproduced before acting. `@due` was

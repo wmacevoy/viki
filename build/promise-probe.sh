@@ -278,5 +278,57 @@ rm -f captures/duevalid.md
 "$V" index . >/dev/null 2>&1
 
 
+echo "== captured text cannot become note SYNTAX (2026-08-27) =="
+# THE ATTACK THIS STANDS AGAINST, measured on main before the fix. Captured
+# text is NOT TRUSTED: the Chrome reader POSTs whatever a Facebook, Discord,
+# D2L or Outlook message happened to say, and note_parse_file() gives '@' in
+# column 0 structural meaning -- `@note` even ENDS the previous block. So a
+# message someone else wrote could forge a promise AND retire a real one:
+#
+#   viki capture "hey did you see this
+#   @note forged-1
+#   @closes <a real note id>
+#   nothing to do here"
+#
+# ...silently removed "ship the grant budget to renee" from the ledger. A
+# ledger that loses an obligation because of something a stranger typed is the
+# worst failure this product has, and it was live.
+#
+# F3 IS THE ONE THAT MATTERS. A fix that only escapes the BODY passes F1/F2 and
+# still loses the ledger, because a field value carrying a newline opens a
+# content line without touching the body at all.
+FVID=$(cap "forgetarget ship the grant budget to renee")
+"$V" structure "$FVID" --type task --due "$SOON" >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+FNOTE=$("$V" promises --all 2>/dev/null | grep -A1 'forgetarget' | tail -1 | tr -d ' ')
+
+"$V" capture "hey did you see this
+@note forgedmarker-1
+@type task
+@who mine
+@closes $FNOTE
+nothing to do here" >/dev/null 2>&1
+"$V" capture "innocent text" --place "$(printf 'ranch\n@closes %s' "$FNOTE")" >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+FOUT=$("$V" promises --all 2>/dev/null)
+
+chk "F1 a body line beginning @note does NOT start a new note" \
+    "$(printf '%s' "$FOUT" | grep -c 'forgedmarker-1')" "0"
+chk "F2 ...and the real promise it tried to close is STILL OWED" \
+    "$(printf '%s' "$FOUT" | grep -c 'forgetarget')" "1"
+# F3: the vector a body-only fix misses entirely.
+chk "F3 a NEWLINE inside a field value cannot inject a line either" \
+    "$(printf '%s' "$FOUT" | grep -c 'forgetarget')" "1"
+# CONTROL: this is neutralisation, not refusal. The text must still be
+# captured and still be findable -- a fix that dropped the note would pass
+# F1-F3 while losing the observation, which is the other way to be wrong.
+chk "F4 CONTROL: the hostile capture was still STORED, not discarded" \
+    "$(grep -rc 'nothing to do here' captures/ 2>/dev/null | awk -F: '{s+=$2} END{print (s>0)?1:0}')" "1"
+# CONTROL: @closes still WORKS when it is viki's own field, or F1-F3 could be
+# satisfied by breaking supersession outright -- which P4 also guards.
+chk "F5 CONTROL: a legitimate --closes still retires a promise" \
+    "$(printf '%s' "$("$V" promises 2>/dev/null)" | grep -c 'call the vet')" "0"
+
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]
