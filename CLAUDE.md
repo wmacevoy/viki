@@ -634,6 +634,21 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   **viki reports the distinction and judges nothing** — `assistant/brief.sh`
   shows an inferred channel but never puts one on the SIGN IN list, because
   sending someone to log in to "TODO" is how a brief stops being believed.
+- **Column 0 of an fgets CHUNK is not column 0 of a LINE.** Both loops in
+  `viki_note.c` read with `fgets(line, 2048, f)`, so a longer line arrives in
+  pieces and byte 0 of every piece after the first is mid-line. Treating it as
+  structural let a body padded to 2047 bytes inject `@closes` and retire a
+  promise *through* the writer-side guard, and made `viki structure`
+  permanently DELETE user text from `captures/*.md` (FINDINGS.md, with repros).
+  `bAtLineStart` gates it in both loops. **The rule belongs in the reader**:
+  `captures/*.md` is hand-edited, so a writer-side rule protects only what viki
+  wrote. Every writer of a field goes through `write_field()` — `emit_field()`
+  on the structure path was missed once and that was a live injection.
+- **Every JSON surface uses `viki_json_escape()`** (`viki_db.h`). An inferred
+  coverage channel is raw note text, and one unescaped quote made
+  `coverage --json` invalid, which made `assistant/brief.sh` report "nothing at
+  all — no captures, no channels" while three channels existed. A second
+  private copy of an escaper is how those two surfaces diverged.
 - **Captured text is UNTRUSTED and must never become note syntax.**
   `note_parse_file()` gives `@` in column 0 structural meaning and `@note` ends
   the previous block, while the Chrome reader POSTs whatever a Facebook,

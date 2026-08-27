@@ -381,5 +381,101 @@ chk "H7 CONTROL: the inferred channel still carries its note count" \
     "$(printf '%s' "$COV" | grep 'PHANTOM' | grep -c '1 note(s)')" "1"
 
 
+echo "== the reader's chunking, and every writer that shares it (2026-08-27) =="
+# WHY ALL OF THIS IS ONE SECTION: it is one root cause with three faces, and
+# the writer-side fix committed earlier the same day did NOT close it.
+#
+# note_parse_file() reads with fgets(line, 2048, f) and treated byte 0 of every
+# CHUNK as column 0. A line longer than the buffer arrives as several chunks,
+# so padding a capture to exactly 2047 bytes re-splits it at a position the
+# writer never saw:
+#
+#   viki capture "$(python3 -c 'print("x"*2047,end="")')@closes <id>"
+#
+# ...retired a real promise, through the fix that was supposed to stop it. The
+# repair belongs in the READER because captures/*.md is hand-edited too.
+G_REAL=$(cap "chunkmarker ship the grant budget to renee")
+"$V" structure "$G_REAL" --type task --who warren --due "$SOON" >/dev/null 2>&1
+G_OTHER=$(cap "chunkother someone mentioned the north gate")
+"$V" index . >/dev/null 2>&1
+G_ID=$("$V" sql "SELECT note_id FROM viki_note WHERE text LIKE '%chunkmarker%'" 2>/dev/null | tr -d ' ')
+
+"$V" capture "$(python3 -c 'import sys; sys.stdout.write("x"*2047)')@closes $G_ID" >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+chk "G1 a body padded to the fgets boundary cannot inject a field" \
+    "$("$V" promises --all 2>/dev/null | grep -c 'chunkmarker')" "1"
+
+# emit_field() on the structure path never got write_field()'s newline guard,
+# so this needed no padding trick at all -- and /api/structure reaches it too.
+"$V" structure "$G_OTHER" --place "$(printf 'ranch\n@closes %s' "$G_ID")" >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+chk "G2 a newline in a --structure field cannot inject a line either" \
+    "$("$V" promises --all 2>/dev/null | grep -c 'chunkmarker')" "1"
+
+# THE DATA-LOSS FACE, and the worst of the three: structure_write() consumed a
+# continuation chunk as a field line, dropped it from the body and never
+# re-emitted it, PERMANENTLY DELETING the user's own words from captures/*.md
+# -- the file D-10 calls truth.
+# G3 RUNS IN ITS OWN DIRECTORY so the byte comparison is over one file, and it
+# asserts on BYTES rather than on a grep: the first version grepped for the
+# marker, which survives whether or not the tail of the line was deleted, so it
+# passed against the very binary that destroys the text (50/3 with G3 green).
+# The defect deletes a SUFFIX; only a length comparison sees that.
+mkdir -p g && ( cd g
+    export VIKI_MODEL_DIR="$DIR/no-model"
+    "$V" capture "$(python3 -c 'import sys; sys.stdout.write("y"*2047 + "@place elsewhere and CHUNKBODYMARKER tail words here")')" >/dev/null 2>&1
+    "$V" index . >/dev/null 2>&1 )
+G3ID=$(grep -h '^@note ' g/captures/*.md 2>/dev/null | head -1 | awk '{print $2}')
+G3BEFORE=$(cat g/captures/*.md 2>/dev/null | wc -c | tr -d ' ')
+( cd g && VIKI_MODEL_DIR="$DIR/no-model" "$V" structure "$G3ID" --type note >/dev/null 2>&1 )
+G3AFTER=$(cat g/captures/*.md 2>/dev/null | wc -c | tr -d ' ')
+chk "G3 SETUP: the fixture really wrote an over-long line and a note id" \
+    "$([ -n "$G3ID" ] && [ "${G3BEFORE:-0}" -gt 2047 ] && echo 1 || echo 0)" "1"
+# structure ADDS an @type line, so the file must grow. It shrank by 40 bytes
+# before the fix, because the continuation chunk was eaten.
+chk "G3b viki structure does not DELETE body text at the chunk boundary" \
+    "$([ "${G3AFTER:-0}" -ge "${G3BEFORE:-0}" ] && echo 1 || echo 0)" "1"
+chk "G3c CONTROL: ...and the tail of that line is still in the file" \
+    "$(grep -hc 'tail words here' g/captures/*.md 2>/dev/null | head -1)" "1"
+
+echo "== coverage --json must stay parseable, and the brief must say when it is not =="
+# An INFERRED channel name is raw note text, so it can carry a quote. One
+# ordinary capture -- `[he said "no"] ...` -- produced invalid JSON, brief.sh's
+# `except: rows = []` reported "nothing at all, no captures, no channels", and
+# three live channels including a DECLARED one vanished from the brief at
+# exit 0. The coverage lie 2.5 exists to prevent, on the surface where it does
+# the most damage.
+"$V" capture '[he said "no"] pasture gate is open' >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+chk "G4 a quote in an inferred channel name still yields valid JSON" \
+    "$("$V" coverage --json 2>/dev/null | python3 -c 'import json,sys
+try:
+    json.load(sys.stdin); print(1)
+except Exception: print(0)')" "1"
+# CONTROL: the channel is still REPORTED, not dropped to make the JSON valid.
+chk "G5 CONTROL: ...and that channel is still present, not silently dropped" \
+    "$("$V" coverage 2>/dev/null | grep -c 'he said')" "1"
+# The other half: an unreadable coverage must not read as an empty one.
+cat > "$DIR/fakeviki" <<'FAKE'
+#!/bin/sh
+case "$1" in
+  coverage) printf '[{"source":"broken",,,}]\n' ;;
+  promises) printf 'viki promises: as of now\nRISK DUE WHO WHAT\n\nnothing owed.\n' ;;
+  structure) printf 'viki structure: 0 capture(s)\n' >&2 ;;
+esac
+exit 0
+FAKE
+chmod +x "$DIR/fakeviki"
+if [ -f "$ROOT/assistant/brief.sh" ]; then
+    GB=$(VIKI_BIN="$DIR/fakeviki" sh "$ROOT/assistant/brief.sh" --me warren 2>/dev/null)
+    chk "G6 unreadable coverage is ANNOUNCED, not reported as no channels" \
+        "$(printf '%s' "$GB" | grep -c 'CANNOT READ COVERAGE')" "1"
+    chk "G7 CONTROL: ...and it does NOT claim there is nothing" \
+        "$(printf '%s' "$GB" | grep -c 'nothing at all')" "0"
+else
+    sk "G6 (no assistant/brief.sh)"; sk "G7 (no assistant/brief.sh)"
+fi
+
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]

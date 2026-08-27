@@ -329,7 +329,7 @@ int viki_db_open(const char *zPath, sqlite3 **out){
 
 /* ---- the raw query surface ------------------------------------------- */
 
-static void sql_json_escape(const char *z){
+void viki_json_escape(const char *z){
     const unsigned char *p = (const unsigned char*)z;
     for( ; p && *p; p++ ){
         switch( *p ){
@@ -392,7 +392,7 @@ int viki_cmd_sql(const char *zPath, const char *zSql, int bJson){
             for( i = 0; i < nCol; i++ ){
                 const char *name = sqlite3_column_name(st, i);
                 printf("%s\"", i ? "," : "");
-                sql_json_escape(name ? name : "?");
+                viki_json_escape(name ? name : "?");
                 printf("\":");
                 switch( sqlite3_column_type(st, i) ){
                     case SQLITE_NULL:    printf("null"); break;
@@ -401,7 +401,7 @@ int viki_cmd_sql(const char *zPath, const char *zSql, int bJson){
                     case SQLITE_BLOB:    printf("\"<%d bytes>\"", sqlite3_column_bytes(st, i)); break;
                     default:
                         printf("\"");
-                        sql_json_escape((const char*)sqlite3_column_text(st, i));
+                        viki_json_escape((const char*)sqlite3_column_text(st, i));
                         printf("\"");
                 }
             }

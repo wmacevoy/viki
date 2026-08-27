@@ -1,4 +1,5 @@
 #include "viki_note.h"
+#include "viki_db.h"
 #include "viki_grep.h"
 
 #include <ctype.h>
@@ -343,9 +344,30 @@ static void note_parse_file(sqlite3_stmt *ins, const char *zPath, int *pN){
     viki_note cur;
     if( !f ) return;
     note_clear(&cur);
+    /* COLUMN 0 OF A CHUNK IS NOT COLUMN 0 OF A LINE.
+    **
+    ** fgets() returns at most sizeof(line)-1 bytes, so a line longer than that
+    ** arrives as SEVERAL chunks and byte 0 of every chunk after the first is
+    ** mid-line. Treating it as column 0 is how captured text kept its power to
+    ** forge notes even after the writer was fixed on 2026-08-27: pad a body to
+    ** exactly 2047 bytes and the reader re-splits it at a position the writer
+    ** never saw, so
+    **
+    **     viki capture "$(python3 -c 'print("x"*2047,end="")')@closes <id>"
+    **
+    ** retired a real promise. Measured; commit 823065e claimed to have closed
+    ** this and had not. THE FIX BELONGS IN THE READER, not the writer, because
+    ** captures/*.md is hand-edited too -- a writer-side rule protects only the
+    ** text viki itself wrote.
+    **
+    ** bAtLineStart tracks whether the PREVIOUS chunk ended the line. */
+    int bAtLineStart = 1;
     while( fgets(line, sizeof(line), f) ){
         size_t n = strlen(line);
+        int bWasStart = bAtLineStart;
+        bAtLineStart = (n > 0 && line[n-1] == '\n');
         while( n > 0 && (line[n-1] == '\n' || line[n-1] == '\r') ) line[--n] = '\0';
+        if( !bWasStart ) continue;      /* a continuation chunk is body, never structure */
         if( line[0] == '@' ){
             char key[32];
             const char *sp = strchr(line + 1, ' ');
@@ -617,9 +639,18 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
             ** already parsing `source` must not start receiving marker words
             ** it cannot tell from a channel name -- the same rule /api/ask
             ** follows for the fragment markers. */
-            printf("%s{\"source\":\"%s\",\"last_seen\":\"%s\",\"notes\":%d,\"declared\":%s}",
-                   n ? "," : "", src ? src : "?", ts ? ts : "", cnt,
-                   (bDeclared || bHere) ? "true" : "false");
+            /* ESCAPED. An inferred channel name is RAW NOTE TEXT -- it is
+            ** whatever sat between the first brackets -- so it can carry a
+            ** quote, and one unescaped quote here blanked the entire morning
+            ** brief (FINDINGS.md). `declared` stays a real boolean rather than
+            ** a decorated name for the same reason /api/ask keeps its fragment
+            ** markers out of `snippet`. */
+            printf("%s{\"source\":\"", n ? "," : "");
+            viki_json_escape(src ? src : "?");
+            printf("\",\"last_seen\":\"");
+            viki_json_escape(ts ? ts : "");
+            printf("\",\"notes\":%d,\"declared\":%s}",
+                   cnt, (bDeclared || bHere) ? "true" : "false");
         }else{
             printf("%-18s %-28s %d note(s)%s\n", src ? src : "?", ts ? ts : "never", cnt,
                    (bDeclared || bHere) ? "" : "   (inferred from text)");
@@ -904,7 +935,12 @@ int viki_cmd_structure_pending(sqlite3 *db, int nMax){
 static int emit_field(FILE *out, const char *key, const char *zNew, const char *zOld){
     const char *v = zNew ? zNew : zOld;
     if( !v || !v[0] ) return 0;
-    fprintf(out, "@%s %s\n", key, v);
+    /* THROUGH write_field(), which stops at the first newline. `viki capture`
+    ** got this guard on 2026-08-27 and THIS PATH WAS MISSED, so
+    ** `viki structure --place "ranch<newline>@closes <id>"` -- and a single
+    ** POST to /api/structure -- injected a real @closes with no padding trick
+    ** at all and retired a promise. Measured. One writer, one rule. */
+    write_field(out, key, v);
     return 1;
 }
 
@@ -937,12 +973,23 @@ static int structure_write(sqlite3 *db, const char *zId, const char *zType,
         warn_unknown_type(nt, "viki structure --type");
     }
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    int bAtLineStart = 1;
     in = fopen(path, "r");
     if( !in ){ perror("viki structure: open"); return 1; }
     out = fopen(tmp, "w");
     if( !out ){ perror("viki structure: temp"); fclose(in); return 1; }
 
+    /* SAME CHUNKING RULE AS note_parse_file(), and here getting it wrong DID
+    ** NOT merely mis-parse -- it DESTROYED the user's own words. A continuation
+    ** chunk beginning '@' was consumed as a field line inside the target block,
+    ** dropped from the body, and never re-emitted, so `viki structure` silently
+    ** deleted 40 bytes of captures/2026-08.md. That file is TRUTH (D-10); the
+    ** projection is disposable and it is not. */
     while( fgets(line, sizeof(line), in) ){
+        size_t ln = strlen(line);
+        int bWasStart = bAtLineStart;
+        bAtLineStart = (ln > 0 && line[ln-1] == '\n');
+        if( !bWasStart ){ fputs(line, out); continue; }   /* pass a continuation through UNTOUCHED */
         if( strncmp(line, "@note ", 6) == 0 ){
             /* Leaving a block: flush any field the caller added that the block
             ** did not already have, before the boundary moves past it. */

@@ -12,6 +12,87 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## The forgery fix was defeated by padding: column 0 of a CHUNK is not column 0 of a LINE
+
+2026-08-27, hours after the fix below claimed to close it. Found by a hunt
+agent, reproduced immediately. **The fix was writer-side and the bug is in the
+reader.**
+
+`note_parse_file()` reads with `fgets(line, 2048, f)`. A line longer than the
+buffer arrives as SEVERAL chunks, and byte 0 of every chunk after the first is
+mid-line -- but the parser treated it as column 0, where `@` is structural.
+So the writer's neutralisation is irrelevant: pad the body to exactly 2047
+bytes and the reader re-splits it wherever it likes.
+
+```
+$ viki capture "ship the grant budget to renee" --type task --due 2026-08-30
+$ viki capture "$(python3 -c 'print("x"*2047,end="")')@closes 20260827-212732-427485"
+$ viki promises --all
+  (nothing owed)                       <- the real promise is gone
+$ viki sql "SELECT note_id, closes FROM viki_note"
+  20260827-212732-566774|20260827-212732-427485    <- injected @closes landed
+```
+
+**Three faces, one root cause**, and the third is the worst:
+
+1. The padding defeat above.
+2. `emit_field()` on the `viki structure` path never got `write_field()`'s
+   newline guard at all, so `--place "ranch<newline>@closes <id>"` injected a
+   line with **no padding trick** -- and `/api/structure` reaches it over HTTP.
+   I fixed one writer and missed its sibling.
+3. `structure_write()` hit the same boundary and **PERMANENTLY DELETED the
+   user's own words** from `captures/*.md`: the continuation chunk was consumed
+   as a field line, dropped from the body, and never re-emitted. 40 bytes gone
+   from the file D-10 calls truth.
+
+Fixed in the READER (`bAtLineStart`, in both loops), because `captures/*.md` is
+hand-edited too -- a writer-side rule only protects text viki itself wrote.
+`emit_field()` now goes through `write_field()`: one writer, one rule.
+
+### The lesson about my own testing
+
+The F-series I wrote for the original fix used SHORT payloads, so every `@` sat
+at a real line start. It could not see this. **A test built from the same
+mental model as the code shares the code's blind spot** -- which is why the
+hunt that found this was told to attack the code rather than review it.
+
+G1/G2/G3b/G3c. And G3 itself was VACUOUS on first writing: it grepped for a
+marker that survives whether or not the tail of the line is deleted, so it
+passed against the very binary that destroys the text. It asserts on BYTES now.
+50/5 against the pre-fix binary.
+
+---
+## One quote in a note blanked the entire morning brief
+
+2026-08-27. `viki coverage --json` printed `"source":"%s"` with no escaping, and
+an INFERRED channel name is raw note text -- whatever sat between the first
+brackets. So an ordinary capture:
+
+```
+$ viki capture '[he said "no"] pasture gate is open'
+$ viki coverage --json
+  [{"source":"he said "no"","last_seen":...     <- invalid JSON
+```
+
+`assistant/brief.sh` parsed that with `except Exception: rows = []` and printed
+**"nothing at all -- no captures, no channels"** while three live channels,
+including a DECLARED one, sat in the cache. Exit 0, no warning.
+
+**Two bugs, and the second is the one that matters.** The escaping is a
+formatting error. Reporting *"I could not read it"* as *"there is nothing"* is
+a coverage lie, on the surface where it does the most damage -- §2.5 exists
+precisely to stop a channel that silently stopped being read from looking like
+a quiet day.
+
+A correct escaper already existed (`sql_json_escape` in `viki_db.c`) and was
+private; it is now `viki_json_escape()` and shared, because a second copy is
+how the two surfaces came to disagree. The brief now names the parse error and
+says explicitly that it is not the same as having no channels.
+
+G4-G7, with G5 as the control that the offending channel is still REPORTED
+rather than dropped to make the JSON parse.
+
+---
 ## Text somebody else wrote could delete a promise from the ledger
 
 2026-08-27. Found by an adversarial verifier reviewing a parked MCP branch,

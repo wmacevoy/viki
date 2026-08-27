@@ -50,4 +50,15 @@ int viki_cmd_sql(const char *zPath, const char *zSql, int bJson);
 ** itself de-duplicates identical registrations). */
 void viki_db_register_ndvss(void);
 
+
+/* Writes z to stdout as the INSIDE of a JSON string -- quotes, backslashes,
+** newlines and control bytes escaped. Shared rather than re-written because a
+** second copy is how `viki coverage --json` came to emit invalid JSON for an
+** ordinary capture: a note whose text began `[he said "no"]` produced an
+** unescaped channel name, assistant/brief.sh's json.load() threw, its
+** `except: rows = []` reported "nothing at all -- no captures, no channels",
+** and three live channels vanished from the morning brief at exit 0
+** (FINDINGS.md). One escaper, every JSON surface. */
+void viki_json_escape(const char *z);
+
 #endif

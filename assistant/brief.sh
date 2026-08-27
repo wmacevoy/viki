@@ -77,8 +77,21 @@ import json, sys, datetime
 # deliberately no thresholds; how long is too long is a judgment about
 # the users day, not a fact about the corpus.
 stale_days = int(sys.argv[1])
-try:    rows = json.load(sys.stdin)
-except Exception: rows = []
+# "COULD NOT READ IT" AND "THERE IS NOTHING" MUST NOT PRINT THE SAME.
+#
+# This was `except Exception: rows = []`, so a malformed line from viki --
+# one ordinary capture containing a quote was enough -- reported as
+# "nothing at all, no captures, no channels" while three live channels
+# including a declared one sat in the cache. Exit 0, no warning, total
+# coverage blackout. That is the exact lie 2.5 exists to prevent, and the
+# brief is the surface where it does the most damage.
+try:
+    rows = json.load(sys.stdin)
+except Exception as e:
+    print("  CANNOT READ COVERAGE -- output from viki did not parse: %s" % e)
+    print("  This is NOT the same as having no channels. Do not read the")
+    print("  absence of a channel below as evidence it is quiet.")
+    sys.exit(0)
 if not rows:
     print("  nothing at all -- no captures, no channels.")
     sys.exit(0)
