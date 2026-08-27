@@ -155,6 +155,14 @@ specific constraint kills them, and without the reason recorded they come back.
   many domains and one domain can have many people. **Refused: domain-as-tribe** --
   every domain would need its own repo, key, sync and cache.
 
+**Calendar interchange**
+
+- **Specified on a branch, not decided** (SS 11). *Because* SS 2.3's v1 job is
+  ingest, and Google/O365 both speak iCalendar on the wire, so an
+  ICS -> projection shredder is needed whichever way OQ-1 resolves. **Refused:
+  reopening D-2 to adopt it** -- the projection is the abstraction boundary, so
+  the authoring representation stays swappable and the decision stays deferrable.
+
 **Refused outright** (SS 7): a SQLCipher patch for access control; per-domain
 encryption of a searchable corpus; ANN; an engine swap; GraphRAG; LLM-generated
 contextual retrieval. Reasons in SS 7 -- each is viki-specific, not a general
@@ -871,3 +879,50 @@ Nothing here is scheduled. If it were:
 `test/retrieval-eval.sh` is the arbiter for anything claiming quality. "A much
 better embedding" is a hypothesis until it is measured against the same held-out
 set, with the old binary re-measured first.
+
+---
+
+## 11. Calendar interchange -- specified on a branch, not decided
+
+**ANALYSIS.** `CALENDAR_DESIGN_V2.md`, on branch `calendar/interchange-v2`,
+specifies an interchange convention for calendars as Fossil artifacts:
+iCalendar payloads in wiki pages at `text/calendar`, resolved by
+`(UID, RECURRENCE-ID) -> max(SEQUENCE, DTSTAMP)` per RFC 5546.
+
+**D-2 stands. This is not adopted.** It is written down so the v2 push can take
+it or reject it on the merits without re-deriving it, and because part of it is
+needed either way.
+
+**What is needed either way.** SS 2.3's v1 job is *ingest* -- "Google Calendar +
+O365 ingest, derived not mirrored" -- and both sources speak iCalendar on the
+wire. So the ICS -> projection shredder is on the critical path regardless of how
+OQ-1 resolves. It is the same component that would later serve authored events.
+Build it for ingest; decide OQ-1 later.
+
+**What is new for OQ-1 when it is revisited.** `CALENDAR_DESIGN.md` SS 3 ruled
+`.ics` out because "a one-file-per-event `.ics` design would produce *file-level*
+merge conflicts needing UI". That objection is correct about the design it
+describes and does not reach this one, which merges at component granularity. The
+real remaining trade is that `ticketchng` gives **field-level** merge and this
+gives **component-level**; tickets win that axis. `CALENDAR_DESIGN_V2.md` SS 4
+and SS 7 carry the full comparison.
+
+**What it already settles, independent of OQ-1:**
+
+- **Fossil's wiki has no merge, no conflict detection, and no stale-edit check**
+  -- `wiki_cmd_commit()` emits a single P card and every caller resolves the
+  parent as the server-side tip. Any design storing documents in wiki pages must
+  read over history, not over leaves, or it loses writes silently.
+  `CALENDAR_DESIGN_V2.md` SS 3 has the citations.
+- **Time zones are resolved, never stored** -- `TZID` by reference per RFC 7809;
+  RFC 7808 offers no way to request a historical tzdata version, so occurrence
+  *instants* are not reproducible as-of a past T even though the *assertions*
+  are. `tzdata_version` belongs in `viki-manifest` for the same reason `model_id`
+  does.
+- **Named time bands stay out of viki** -- "afternoon" and "open enough" are
+  judgments about Warren's day, the class SS 2.4 already put in `assistant/`.
+  viki returns busy intervals and gaps; the assistant decides what counts as
+  open.
+- **Two consumer classes need two contracts** -- clone-holding agents write SQL,
+  so the schema is their API and needs versioned views; stdio/MCP consumers get
+  the verb surface, per SS 6b. Detail in `CALENDAR_DESIGN_V2.md` SS 8.
