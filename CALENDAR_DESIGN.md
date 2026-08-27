@@ -102,8 +102,9 @@ collaborators get queryable reports on day one. If ticket semantics chafe,
 the field model above ports unchanged to Option B later — the projection
 schema and app UI don't care where the deltas come from.
 
-**A third option is specified on branch `calendar/interchange-v2` -- see
-`CALENDAR_DESIGN_V2.md`.** Not adopted; D-2 stands. It matters here for one
+**A third option is specified in `CALENDAR_DESIGN_V2.md`** (on `main` since
+2026-08-27; it lived only on branch `calendar/interchange-v2` before that, so
+this pointer named a file no one could open from a main checkout). Not adopted; D-2 stands. It matters here for one
 reason: SS 3 above rules `.ics` out because a *one-file-per-event* design
 produces file-level merge conflicts. That objection is correct about the design
 it describes and does not reach Option C, which merges at component granularity

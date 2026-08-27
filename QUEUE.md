@@ -2216,8 +2216,11 @@ Extensibility docs, Playwright MCP security notes, Chrome 146 session control.
 are citations, and the claims about merge behaviour are demonstrated in a
 prototype, not in viki.
 
-Branch `calendar/interchange-v2`: `CALENDAR_DESIGN_V2.md` (new) and `V2_DESIGN.md`
-SS 11 (pointer). **D-2 stands; OQ-1 is not forced.**
+`CALENDAR_DESIGN_V2.md` and `V2_DESIGN.md` SS 11, **merged to `main` 2026-08-27**
+from branch `calendar/interchange-v2`. Until then the spec existed only as a git
+object: this entry and `CALENDAR_DESIGN.md` both pointed at a file that `ls`,
+`grep` and every agent working from a main checkout could not see.
+**D-2 stands; OQ-1 is not forced.**
 
 ### Do this part regardless of OQ-1
 
