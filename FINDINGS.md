@@ -12,6 +12,59 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## 28 green assertions proved the ICS parser and never ran the read surface
+
+2026-08-27, the same day the shredder landed. A hunt agent found five defects
+in it, four of them behind a fully green `build/cal-probe.sh`. **Every
+assertion tested the PARSER; not one ran `--from`, `--to` or `--json`** -- the
+surface a morning brief would actually consume.
+
+Two of the five make the feature useless rather than merely wrong:
+
+### The date filter answered nothing for the format it documents
+
+Stored times are RFC 5545 **basic** (`20260828T140000`); a person, and this
+command's own usage string, writes **extended** (`2026-08-28`). `-` is 0x2D and
+sorts below every digit, so `"20260828T140000" <= "2026-12-31"` is FALSE and a
+`--to` bound excluded the whole calendar.
+
+```
+$ viki calendar events --all                              -> 1 event
+$ viki calendar events --from 2026-08-01 --to 2026-12-31   -> 0 events
+```
+
+A filter that answers "nothing" for its documented format is worse than one
+that errors, because **an empty day looks like a quiet day**. Both sides are
+now compared in one alphabet, and a date-only `--to` covers its whole day --
+the same end-of-day rule `risk_of()` needed for `@due`, arrived at
+independently in a second place, which is a hint it should have been a shared
+helper the first time.
+
+### A VALARM's properties became the meeting's
+
+`VALARM` lives *inside* a `VEVENT` and carries its own `SUMMARY`, `DURATION`
+and `ATTENDEE`. Capture was never suspended for a nested sub-component, so an
+Apple/Google EMAIL alarm put its notification robot on the attendee list and
+its `DURATION:PT15M` became the event's -- **a one-hour appointment read as
+fifteen minutes.** Nested components are now skipped to their matching END.
+
+### Three more
+
+- `--json` interpolated `SUMMARY` and `UID` with raw `%s`. An `.ics` is
+  attacker-controlled the moment a feed URL is, so a quote in a SUMMARY
+  fabricated fields. Now through `viki_json_escape()` -- the second surface
+  this week to need the escaper that already existed and was private.
+- `SEQUENCE` was parsed with `atoi()`, which cannot report failure: a
+  non-integer became 0 (a *valid* sequence, so it silently loses every RFC 5546
+  resolution) and an out-of-range value was undefined behaviour, observed as
+  -1, which wins over everything. `strtol` with a full check, and it says so.
+- Attendees past `CAL_MAX_ATT` were dropped at exit 0, so a 70-person all-hands
+  stored as a 64-person one. It warns now.
+
+K1-K10b. 8 of 12 fail against the pre-fix binary; K3b, K6 and K10b are the
+controls that stop the fixes being satisfied by dropping data instead.
+
+---
 ## The forgery fix was defeated by padding: column 0 of a CHUNK is not column 0 of a LINE
 
 2026-08-27, hours after the fix below claimed to close it. Found by a hunt

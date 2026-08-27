@@ -8,6 +8,7 @@
 #include <time.h>
 #include <sqlite3.h>
 #include "viki_cal.h"
+#include "viki_db.h"
 
 /* ------------------------------------------------------------ unfolding --
 **
@@ -267,7 +268,7 @@ int viki_cal_shred(sqlite3 *db, const char *zText, size_t nText,
     char zNow[32];
     CalComp c;
     char zComponent[16];
-    int inComp = 0, rc = 0;
+    int inComp = 0, rc = 0, nSkip = 0;
 
     if( !zText ) return 1;
     zFlat = ics_unfold(zText, nText);
@@ -286,6 +287,20 @@ int viki_cal_shred(sqlite3 *db, const char *zText, size_t nText,
 
         if( strcmp(p.zName, "BEGIN") == 0 ){
             upper_in_place(p.zValue);
+            /* A NESTED SUB-COMPONENT SUSPENDS CAPTURE. VALARM lives INSIDE a
+            ** VEVENT and carries its own SUMMARY, DURATION and ATTENDEE. Those
+            ** used to land on the enclosing event, so an Apple/Google EMAIL
+            ** alarm put its notification robot on the meeting's attendee list
+            ** and its REPEAT duration became the meeting's length -- a
+            ** one-hour appointment read as PT15M. Measured 2026-08-27.
+            **
+            ** Skipping to the matching END is right rather than parsing the
+            ** alarm: an alarm is a notification instruction, and SS 5's tier
+            ** table has no place for one. */
+            if( inComp && strcmp(p.zValue, zComponent) != 0 ){
+                nSkip++;
+                continue;
+            }
             /* Only the two components SS 5 says want projections. VALARM,
             ** VTIMEZONE and VFREEBUSY are skipped rather than half-stored:
             ** VTIMEZONE especially, because T1 says zones travel by reference
@@ -299,6 +314,7 @@ int viki_cal_shred(sqlite3 *db, const char *zText, size_t nText,
         }
         if( strcmp(p.zName, "END") == 0 ){
             upper_in_place(p.zValue);
+            if( nSkip > 0 ){ nSkip--; continue; }
             if( inComp && strcmp(p.zValue, zComponent) == 0 ){
                 if( comp_write(db, &c, zComponent, zSource, zNow, pnEvents, pnAttendees) ) rc = 1;
                 comp_free(&c);
@@ -306,14 +322,28 @@ int viki_cal_shred(sqlite3 *db, const char *zText, size_t nText,
             }
             continue;
         }
-        if( !inComp ) continue;
+        if( !inComp || nSkip > 0 ) continue;
 
         if( strcmp(p.zName, "UID") == 0 && !c.zUid ){
             c.zUid = dupz(p.zValue); if( c.zUid ) ics_unescape(c.zUid);
         }else if( strcmp(p.zName, "RECURRENCE-ID") == 0 && !c.zRecur ){
             c.zRecur = dupz(p.zValue);
         }else if( strcmp(p.zName, "SEQUENCE") == 0 ){
-            c.iSeq = atoi(p.zValue);
+            /* strtol, not atoi: SEQUENCE is half of RFC 5546's resolution key,
+            ** and atoi() cannot report failure -- a non-integer became 0,
+            ** which is a VALID sequence and therefore silently loses to any
+            ** real update, and an out-of-range value was undefined behaviour
+            ** (observed -1, which wins over everything). A value that is not a
+            ** number is not a sequence; treat it as absent and say so. */
+            char *zEnd = NULL;
+            long v = strtol(p.zValue, &zEnd, 10);
+            if( zEnd && zEnd != p.zValue && *zEnd == '\0' && v >= 0 && v <= 2147483647L ){
+                c.iSeq = (int)v;
+            }else{
+                fprintf(stderr, "viki calendar: SEQUENCE '%s' is not a number -- treated as 0\n",
+                        p.zValue);
+                c.iSeq = 0;
+            }
         }else if( strcmp(p.zName, "DTSTAMP") == 0 && !c.zDtstamp ){
             c.zDtstamp = dupz(p.zValue);
         }else if( strcmp(p.zName, "SUMMARY") == 0 && !c.zSummary ){
@@ -346,6 +376,17 @@ int viki_cal_shred(sqlite3 *db, const char *zText, size_t nText,
             c.zDue = dupz(p.zValue); c.zDueTz = tz;
             c.zDueForm = ics_form(p.zValue, tz, vt);
             free(vt);
+        }else if( strcmp(p.zName, "ATTENDEE") == 0 && c.nAtt >= CAL_MAX_ATT ){
+            /* SAY SO. A 70-person all-hands stored as a 64-person one, at exit
+            ** 0, is the coverage lie this project keeps finding: the answer
+            ** looks complete and is not. */
+            if( c.nAtt == CAL_MAX_ATT ){
+                fprintf(stderr,
+                    "viki calendar: more than %d ATTENDEEs on one component -- the rest\n"
+                    "viki calendar:   are NOT stored. The event is kept; its attendee list\n"
+                    "viki calendar:   is incomplete.\n", CAL_MAX_ATT);
+                c.nAtt++;      /* warn once per component */
+            }
         }else if( strcmp(p.zName, "ATTENDEE") == 0 && c.nAtt < CAL_MAX_ATT ){
             c.azAtt[c.nAtt]  = dupz(p.zValue);
             c.azPart[c.nAtt] = ics_param(p.zParams, "PARTSTAT");
@@ -424,6 +465,33 @@ int viki_cmd_cal_shred(sqlite3 *db, int argc, char **argv){
     return 0;
 }
 
+/* Strips '-' and ':' so a caller's ISO bound compares against RFC 5545 basic
+** storage, and widens a bare date: a --from date starts at 000000, a --to date
+** ends at 235959. bEnd selects which. */
+static void cal_norm_bound(const char *z, int bEnd, char *zOut, size_t nOut){
+    size_t j = 0;
+    int nDigit = 0;
+    zOut[0] = 0;
+    if( !z || !z[0] ) return;
+    for( ; *z && j + 1 < nOut; z++ ){
+        if( *z == '-' || *z == ':' ) continue;
+        zOut[j++] = *z;
+        if( *z >= '0' && *z <= '9' ) nDigit++;
+    }
+    zOut[j] = 0;
+    if( nDigit == 8 && j + 7 < nOut ){          /* a bare date */
+        memcpy(zOut + j, bEnd ? "T235959" : "T000000", 7);
+        zOut[j + 7] = 0;
+    }
+}
+
+/* JSON string body. Calendar text is ATTACKER-CONTROLLED the moment a feed URL
+** is: a SUMMARY containing a quote used to fabricate whole fields in
+** `--json` output, and ics_unescape() legitimately turns RFC 5545's \n into a
+** real newline, which is also invalid raw in JSON. viki_json_escape() is the
+** shared one; this file prints through stdout the same way. */
+static void cal_json(const char *z){ viki_json_escape(z ? z : ""); }
+
 int viki_cmd_cal_events(sqlite3 *db, int argc, char **argv){
     /* RFC 5546 RESOLUTION AS A READ-TIME PROJECTION. A row wins its
     ** (uid, recurrence_id) when nothing else with the same identity has a
@@ -450,11 +518,27 @@ int viki_cmd_cal_events(sqlite3 *db, int argc, char **argv){
         "    WHERE b.uid = e.uid AND b.recurrence_id = e.recurrence_id"
         "      AND (b.sequence > e.sequence"
         "        OR (b.sequence = e.sequence AND b.dtstamp > e.dtstamp)))"
-        "   AND (?1 = '' OR coalesce(e.dtstart, e.due) >= ?1)"
-        "   AND (?2 = '' OR coalesce(e.dtstart, e.due) <= ?2)"
+        /* COMPARE IN ONE FORM, OR THE FILTER SILENTLY RETURNS NOTHING.
+        **
+        ** RFC 5545 stores BASIC format ("20260828T140000"); a person -- and
+        ** this command's own usage string -- writes EXTENDED ("2026-08-28").
+        ** Lexicographically '-' (0x2D) sorts below every digit, so
+        ** "20260828T140000" <= "2026-12-31" is FALSE and a --to bound
+        ** excluded the entire calendar. Measured 2026-08-27: --all returned 1
+        ** event, --from 2026-08-01 --to 2026-12-31 returned 0. A filter that
+        ** answers "nothing" for the format it documents is worse than one that
+        ** errors, because an empty day looks like a quiet day.
+        **
+        ** Both sides are stripped of '-' and ':' so the comparison happens in
+        ** one alphabet. The bounds are widened in viki_cmd_cal_events(): a
+        ** date-only --to means the END of that day, the same rule risk_of()
+        ** needed for @due. */
+        "   AND (?1 = '' OR replace(replace(coalesce(e.dtstart, e.due),'-',''),':','') >= ?1)"
+        "   AND (?2 = '' OR replace(replace(coalesce(e.dtstart, e.due),'-',''),':','') <= ?2)"
         " ORDER BY coalesce(e.dtstart, e.due, '~'), e.summary";
     sqlite3_stmt *st;
     const char *zFrom = "", *zTo = "";
+    char zFromN[32], zToN[32];
     int i, bJson = 0, n = 0, nSuperseded = 0;
 
     for( i = 3; i < argc; i++ ){
@@ -468,8 +552,15 @@ int viki_cmd_cal_events(sqlite3 *db, int argc, char **argv){
         fprintf(stderr, "viki calendar events: %s\n", sqlite3_errmsg(db));
         return 1;
     }
-    sqlite3_bind_text(st, 1, zFrom, -1, SQLITE_STATIC);
-    sqlite3_bind_text(st, 2, zTo, -1, SQLITE_STATIC);
+    /* Normalise the caller's bounds into the stored alphabet, and widen a
+    ** date-only bound to cover its whole day. Without the widening,
+    ** `--to 2026-08-28` excludes an event AT 2026-08-28T14:00 -- the same
+    ** date-only-means-end-of-day trap that made a promise due today read
+    ** OVERDUE (FINDINGS.md). */
+    cal_norm_bound(zFrom, 0, zFromN, sizeof(zFromN));
+    cal_norm_bound(zTo,   1, zToN,   sizeof(zToN));
+    sqlite3_bind_text(st, 1, zFromN, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, zToN, -1, SQLITE_TRANSIENT);
 
     if( bJson ) printf("[");
     while( sqlite3_step(st) == SQLITE_ROW ){
@@ -482,14 +573,21 @@ int viki_cmd_cal_events(sqlite3 *db, int argc, char **argv){
         const unsigned char *zTr    = sqlite3_column_text(st, 7);
         const unsigned char *zComp  = sqlite3_column_text(st, 8);
         if( bJson ){
-            printf("%s{\"component\":\"%s\",\"uid\":\"%s\",\"start\":\"%s\","
-                   "\"tzid\":\"%s\",\"form\":\"%s\",\"summary\":\"%s\","
-                   "\"status\":\"%s\",\"transp\":\"%s\"}",
-                   n ? "," : "", zComp ? (const char*)zComp : "",
-                   (const char*)sqlite3_column_text(st, 9),
-                   zStart ? (const char*)zStart : "", zTz ? (const char*)zTz : "",
-                   zForm ? (const char*)zForm : "", zSum ? (const char*)zSum : "",
-                   zStat ? (const char*)zStat : "", zTr ? (const char*)zTr : "");
+            const unsigned char *zSrc = sqlite3_column_text(st, 12);
+            printf("%s{\"component\":\"", n ? "," : "");
+            cal_json(zComp ? (const char*)zComp : "");
+            printf("\",\"uid\":\"");     cal_json((const char*)sqlite3_column_text(st, 9));
+            printf("\",\"start\":\"");   cal_json(zStart ? (const char*)zStart : "");
+            printf("\",\"tzid\":\"");    cal_json(zTz ? (const char*)zTz : "");
+            printf("\",\"form\":\"");    cal_json(zForm ? (const char*)zForm : "");
+            printf("\",\"summary\":\""); cal_json(zSum ? (const char*)zSum : "");
+            printf("\",\"status\":\"");  cal_json(zStat ? (const char*)zStat : "");
+            printf("\",\"transp\":\"");  cal_json(zTr ? (const char*)zTr : "");
+            /* `source` is the provenance the shredder records specifically so
+            ** coverage can answer "when did this feed last arrive"; dropping it
+            ** from the machine surface made that unanswerable by a consumer. */
+            printf("\",\"source\":\"");  cal_json(zSrc ? (const char*)zSrc : "");
+            printf("\",\"is_due\":%s}", bDue ? "true" : "false");
         }else{
             /* The TZID is printed and never resolved. T1/T2: the zone is the
             ** fact; an offset is a computed value with a shelf life, and this

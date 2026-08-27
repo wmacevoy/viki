@@ -169,5 +169,76 @@ chk "J2 no named time band leaked into the tool" \
     "$(grep -ciE '\"(morning|afternoon|evening|open enough)\"' "$ROOT/src/viki_cal.c")" "0"
 
 echo
+echo "== the READ surface, which 28 green assertions never touched =="
+# THE GAP THIS CLOSES. The original 28 assertions proved the PARSER and never
+# ran --from, --to or --json. Every one of the defects below was live under a
+# fully green suite, and two of them make the feature useless rather than
+# merely wrong -- which is what a brief consuming this would have hit first.
+{ printf 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:read-1\r\nDTSTAMP:20260820T100000Z\r\nSEQUENCE:0\r\n'
+  printf 'DTSTART;TZID=America/Denver:20260828T140000\r\nDTEND;TZID=America/Denver:20260828T150000\r\n'
+  printf 'SUMMARY:readmarker vet visit for "the mare"\r\n'
+  printf 'ATTENDEE;PARTSTAT=ACCEPTED:mailto:warren@example.com\r\n'
+  printf 'BEGIN:VALARM\r\nACTION:EMAIL\r\nSUMMARY:alarmmarker robot\r\nDURATION:PT15M\r\n'
+  printf 'ATTENDEE:mailto:noreply@robot.example\r\nEND:VALARM\r\n'
+  printf 'END:VEVENT\r\nEND:VCALENDAR\r\n'; } > read.ics
+"$V" calendar shred read.ics >/dev/null 2>&1
+
+echo "-- nested sub-components --"
+# VALARM lives INSIDE a VEVENT and carries its own SUMMARY/DURATION/ATTENDEE.
+# Those landed on the meeting: a one-hour appointment read as PT15M and a
+# notification robot joined the attendee list.
+chk "K1 a VALARM's DURATION does not become the event's" \
+    "$(q "SELECT count(*) FROM cal_event WHERE uid='read-1' AND duration IS NOT NULL")" "0"
+chk "K2 a VALARM's ATTENDEE does not join the event's attendee list" \
+    "$(q "SELECT count(*) FROM cal_attendee WHERE attendee LIKE '%robot%'")" "0"
+chk "K3 a VALARM's SUMMARY does not overwrite the event's" \
+    "$(q "SELECT count(*) FROM cal_event WHERE uid='read-1' AND summary LIKE 'readmarker%'")" "1"
+# CONTROL: the real attendee still landed, so K2 is not "attendees are dropped".
+chk "K3b CONTROL: the event's OWN attendee is still stored" \
+    "$(q "SELECT count(*) FROM cal_attendee WHERE attendee='mailto:warren@example.com'")" "1"
+
+echo "-- the date filter, in the format the usage string documents --"
+# Stored times are RFC 5545 BASIC ("20260828T140000"); a person writes EXTENDED
+# ("2026-08-28"). '-' sorts below every digit, so a --to bound excluded the
+# entire calendar: --all returned 1 and --from/--to returned 0.
+chk "K4 --from/--to in ISO finds the event" \
+    "$("$V" calendar events --from 2026-08-01 --to 2026-12-31 2>/dev/null | grep -c readmarker)" "1"
+# A date-only --to means the END of that day -- the same trap that made a
+# promise due today read OVERDUE.
+chk "K5 a date-only --to includes events later that same day" \
+    "$("$V" calendar events --from 2026-08-28 --to 2026-08-28 2>/dev/null | grep -c readmarker)" "1"
+# CONTROL: the filter must still EXCLUDE. Without this, K4/K5 are satisfied by
+# a filter that ignores its arguments -- which is what "0 results" was, in
+# reverse.
+chk "K6 CONTROL: a range that excludes the event returns nothing" \
+    "$("$V" calendar events --from 2027-01-01 --to 2027-12-31 2>/dev/null | grep -c readmarker)" "0"
+
+echo "-- --json is machine-readable, and calendar text is attacker-controlled --"
+# A SUMMARY containing a quote fabricated fields in the JSON. An .ics is
+# attacker-controlled the moment a feed URL is.
+chk "K7 --json parses with a quote in SUMMARY" \
+    "$("$V" calendar events --json 2>/dev/null | python3 -c 'import json,sys
+try:
+    json.load(sys.stdin); print(1)
+except Exception: print(0)')" "1"
+chk "K8 ...and the summary survives intact rather than being stripped" \
+    "$("$V" calendar events --json 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print(1 if any(chr(34)+"the mare"+chr(34) in (e.get("summary") or "") for e in d) else 0)')" "1"
+chk "K9 --json carries the source, so a consumer can answer coverage" \
+    "$("$V" calendar events --json 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin); print(1 if d and d[0].get("source") else 0)')" "1"
+
+echo "-- what it refuses to guess --"
+{ printf 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:seq-1\r\nDTSTAMP:20260820T100000Z\r\n'
+  printf 'SEQUENCE:not-a-number\r\nDTSTART:20260901T150000Z\r\nSUMMARY:seqmarker\r\n'
+  printf 'END:VEVENT\r\nEND:VCALENDAR\r\n'; } > seq.ics
+"$V" calendar shred seq.ics >seq.out 2>seq.err
+chk "K10 a non-numeric SEQUENCE is announced, not silently taken as 0" \
+    "$(grep -c 'not a number' seq.err)" "1"
+chk "K10b CONTROL: ...and the component is still stored" \
+    "$(q "SELECT count(*) FROM cal_event WHERE uid='seq-1'")" "1"
+
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]
