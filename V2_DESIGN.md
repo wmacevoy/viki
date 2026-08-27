@@ -137,6 +137,15 @@ specific constraint kills them, and without the reason recorded they come back.
   returns five chunks and `sql` returns the corpus in one call. **Refused:
   exposing it for face parity** -- that is the injection jackpot, and it resolves
   SCOPES SS 7.4 on better grounds than the loopback argument did.
+  **CORRECTION 2026-08-26, measured on a prototype: excluding `sql` is NOT
+  SUFFICIENT, and stating the rule as "no `sql`" invites exactly the hole that
+  appeared.** A first MCP build honoured the exclusion and then exposed `grep`
+  with an unbounded `k` -- `{"pattern":".","k":2000000000}` returned the entire
+  index in one call. The property SS 6b is protecting is **bounded response
+  size**, and `sql` is only the most obvious way to violate it. Any tool taking
+  a caller-supplied count needs a server-side ceiling, and the face is where it
+  belongs (SS 6c: an MCP client holds no key, so a server-side limit is a real
+  capability bound for it). Restate the rule as the property, not the tool.
 - **Scope is enforced in the face, not only in the data** (SS 6c). *Because* an MCP
   client holds no key and no SQL, so a server-side filter is a real capability
   limit for it -- unlike an in-cache label, which SYNC.md 0b makes advisory.

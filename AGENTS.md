@@ -956,6 +956,37 @@ this file -- against a binary missing three fixes that were sitting in
   NOT verified: macOS arm64 only; the S-series needs `node`; CI does not run
   `fragment-probe.sh` at all.
 
+- **TWO AGENT BUILDS PARKED AFTER A SECOND ROUND** (2026-08-26). Branches
+  `wip/provenance` and `wip/mcp`; both build, neither merged, both
+  `sound=false` from adversarial verification. **The crash fix that came with
+  the provenance branch WAS extracted and landed on its own** (see the
+  libfossilsee `atexit` entry) because it was a live bug on `main` unrelated to
+  provenance.
+
+  `wip/provenance` — the six defects from round one ARE fixed, and the mutation
+  that defeated it last time (`AND ml.fid <> 0`, dropping every deletion) now
+  fails the suite 81/4 rather than passing. The probe went 57 → 85 assertions
+  and scores 7/78 against a binary built from `main`'s `src/`, so it is not
+  vacuous overall. **What blocks it is a NEW defect the repair introduced**: the
+  `./`-stripping fix for absolute-path lookups collides on BASENAME, so
+  `viki since` prints one file's change under a different file's path and drops
+  the real row, and `viki when` cites another file's `content_hash`. Wrong data
+  is worse than the `(not indexed)` it replaced. Also: `J2b` is labelled CONTROL
+  and cannot fail (it compares two JSON objects that differ in a field unrelated
+  to what it claims to test), and `D3` is a tautology about the harness's own
+  environment.
+
+  `wip/mcp` — a stdio JSON-RPC face over `viki_ask_query()`, honouring V2 §6b by
+  excluding `sql`, with a stub-gauntlet in its own probe that catches 10 of 10
+  planted failures. **Blocked by an aggregation hole that defeats the point of
+  the exclusion**: `grep` takes an unbounded `k`, so
+  `{"pattern":".","k":2000000000}` returns the whole index in one call. Also:
+  `capture` writes caller text verbatim into the capture file, and a line
+  beginning `@note` starts a new block — so one call can forge notes and retire
+  existing promises; `--nowrite`/`--read-only` are silently ignored and start a
+  fully writable server; and two hash assertions are shape-checked only,
+  proven vacuous by rebuilding with constant hashes and still scoring 58/0.
+
 - **ONE AGENT BUILD STILL PARKED, NOT MERGED** (2026-08-26). A v1 audit
   workflow produced both; adversarial verification returned `sound=false` for
   each, so neither is in `main`. They are `wip/provenance` and `wip/serve-hash`,
