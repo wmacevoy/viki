@@ -933,6 +933,29 @@ this file -- against a binary missing three fixes that were sitting in
   `unlock_key = HKDF(PBKDF2(passphrase) || device_secret, "viki-identity-v1")`,
   with `device_secret` empty today and a `factors` column recording it.
 
+- **THE ICS SHREDDER** (2026-08-27). `build/cal-probe.sh` `28 passed, 0 failed`;
+  4/24 against a binary without it. `viki calendar shred <file.ics>` parses
+  iCalendar into the ASSERTION tier (`cal_event`, `cal_attendee`) and
+  `viki calendar events` reads it back with RFC 5546 resolution applied at READ
+  time.
+  **Why this and not the whole calendar design:** QUEUE §52 — Google Calendar
+  and O365 both speak iCalendar on the wire, so the shredder is on §2.3's
+  critical path whichever way `CALENDAR_DESIGN.md`'s OQ-1 resolves. D-2 stands
+  and is untouched. The adapters FETCH (L3, not viki); the shredder DERIVES,
+  which is the half §2.3 keeps.
+  **The tier boundary is viewer-dependence**, and it is why occurrence
+  expansion is absent: an occurrence depends on zone, window and tzdata
+  version, so by D-11's own reasoning it is not shareable. Superseded
+  assertions are RETAINED, which makes the tier grow-only on a content key —
+  re-shredding the same feed adds nothing (R4).
+  **No column scores availability.** TRANSP, STATUS and PARTSTAT are stored as
+  facts; deciding what "busy" means is `assistant/`'s (SCOPES §3). Times are
+  stored as written with their IANA TZID and never as an offset.
+  NOT verified / NOT built: no RRULE expansion (stored raw); no ingest —
+  nothing fetches a feed, so a file must be handed to it; not wired into
+  `viki index`, so `.ics` files in a checkout are chunked as text and not
+  shredded; `assistant/brief.sh` does not read it yet. macOS arm64 only.
+
 - **`viki serve` CITES ITS SOURCES** (2026-08-26). `build/fragment-probe.sh`
   `48 passed, 0 failed, 0 skipped`. The HTML page renders
   `<content_hash>#<chunk_ix>` per hit, so KICKOFF deliverable 2 is met on all

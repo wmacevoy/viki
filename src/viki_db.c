@@ -90,6 +90,70 @@ static const char *SCHEMA_SQL =
     "  text        TEXT NOT NULL,"
     "  source_path TEXT"
     ");"
+    /* ---------------------------------------------- the ASSERTION tier --
+    **
+    ** CALENDAR_DESIGN_V2.md SS 5 splits calendar state into three tiers, and
+    ** this is the middle one: every component ever written, shredded,
+    ** PRE-RESOLUTION. It is permanent and rebuildable, and it is invalidated
+    ** only by a schema bump.
+    **
+    ** WHY EVERY COMPONENT AND NOT THE CURRENT ONE. RFC 5546 resolves an
+    ** updated event by (UID, RECURRENCE-ID) -> max(SEQUENCE, DTSTAMP), which
+    ** is a READ-TIME projection over the assertions, exactly as viki_note's
+    ** supersession is. Storing only the winner would make this table a
+    ** latest-wins cache -- the class SYNC.md warns loses data silently across
+    ** peers whose clocks disagree -- instead of the grow-only one it can be:
+    ** rows are immutable, keyed by content, so union IS merge.
+    **
+    ** WHAT IS DELIBERATELY ABSENT. No occurrence expansion, no local
+    ** wall-clock columns, no offsets, no "is this busy". SS 5's tier table
+    ** makes the boundary the VIEWER-DEPENDENCE boundary: occurrences depend on
+    ** zone, window and tzdata version, so by D-11's own reasoning they are not
+    ** shareable and do not belong beside rows that are. And "busy" and
+    ** "afternoon" are judgments, which SCOPES SS 3 puts in assistant/ -- so
+    ** TRANSP, STATUS and PARTSTAT are stored as the FACTS they are and no
+    ** column here scores them. */
+    "CREATE TABLE IF NOT EXISTS cal_event("
+    "  uid          TEXT NOT NULL,"   /* RFC 5545 UID -- identity across updates  */
+    "  recurrence_id TEXT NOT NULL,"  /* '' for the master; a RECURRENCE-ID overrides one occurrence */
+    "  sequence     INTEGER NOT NULL," /* RFC 5546 tie-break, first key           */
+    "  dtstamp      TEXT NOT NULL,"   /* RFC 5546 tie-break, second key           */
+    "  component    TEXT NOT NULL,"   /* VEVENT | VTODO -- SS 5: different projections */
+    "  dtstart      TEXT,"            /* AS WRITTEN. Never an offset (T2).        */
+    "  dtstart_tzid TEXT,"            /* IANA name only, by reference (T1)        */
+    "  dtstart_form TEXT,"            /* utc | zoned | floating | date  (T3)      */
+    "  dtend        TEXT,"
+    "  dtend_tzid   TEXT,"
+    "  dtend_form   TEXT,"
+    "  duration     TEXT,"            /* ISO 8601 duration, when DTEND is absent  */
+    "  due          TEXT,"            /* VTODO. SS 5: DUE with no DTSTART is a POINT */
+    "  due_tzid     TEXT,"
+    "  due_form     TEXT,"
+    "  rrule        TEXT,"            /* raw. Expansion is the occurrence tier's job */
+    "  summary      TEXT,"
+    "  status       TEXT,"            /* CANCELLED is a tombstone, TENTATIVE a soft block */
+    "  transp       TEXT,"            /* the stock property meaning 'does this block time' */
+    "  organizer    TEXT,"
+    "  source       TEXT NOT NULL,"   /* where these bytes came from -- coverage, not identity */
+    "  ingested     TEXT NOT NULL,"   /* ISO UTC: when viki shredded it          */
+    "  PRIMARY KEY(uid, recurrence_id, sequence, dtstamp)"
+    ");"
+    "CREATE INDEX IF NOT EXISTS cal_event_uid ON cal_event(uid, recurrence_id);"
+    "CREATE INDEX IF NOT EXISTS cal_event_start ON cal_event(dtstart);"
+    /* Attendee/PARTSTAT is per (event, person): the viewer's OWN PARTSTAT is
+    ** what decides whether an invitation consumes their afternoon (SS 5), and
+    ** that is viewer-dependent, so it is stored as a fact per attendee and
+    ** resolved by whoever is asking. */
+    "CREATE TABLE IF NOT EXISTS cal_attendee("
+    "  uid          TEXT NOT NULL,"
+    "  recurrence_id TEXT NOT NULL,"
+    "  sequence     INTEGER NOT NULL,"
+    "  dtstamp      TEXT NOT NULL,"
+    "  attendee     TEXT NOT NULL,"   /* the CAL-ADDRESS as written */
+    "  partstat     TEXT,"
+    "  role         TEXT,"
+    "  PRIMARY KEY(uid, recurrence_id, sequence, dtstamp, attendee)"
+    ");"
     "CREATE INDEX IF NOT EXISTS viki_note_ts ON viki_note(ts DESC);"
     "CREATE INDEX IF NOT EXISTS viki_note_place ON viki_note(place);"
     "CREATE TABLE IF NOT EXISTS viki_source("

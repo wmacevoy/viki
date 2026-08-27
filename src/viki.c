@@ -14,6 +14,7 @@
 #include "viki_muse.h"
 #include "viki_grep.h"
 #include "viki_note.h"
+#include "viki_cal.h"
 #include "viki_cache.h"
 #include "viki_fossilsee.h"
 #include "viki_serve.h"
@@ -558,6 +559,26 @@ int main(int argc, char **argv){
     ** actually runs. test/retrieval-eval.py uses it instead of reimplementing
     ** build_or_query in Python -- a mirror that described the harness's model
     ** of viki rather than viki, and went stale the moment the C changed. */
+    if( strcmp(sub, "calendar") == 0 ){
+        sqlite3 *db;
+        int rc;
+        if( argc < 3 ){
+            fprintf(stderr, "usage: viki calendar shred <file.ics> [--source NAME]\n"
+                            "       viki calendar events [--from ISO] [--to ISO] [--json]\n");
+            return 1;
+        }
+        if( ensure_viki_dir() ) return 1;
+        if( viki_db_open(VIKI_DEFAULT_CACHE_DB, &db) ) return 1;
+        if( strcmp(argv[2], "shred") == 0 )       rc = viki_cmd_cal_shred(db, argc, argv);
+        else if( strcmp(argv[2], "events") == 0 ) rc = viki_cmd_cal_events(db, argc, argv);
+        else {
+            fprintf(stderr, "viki calendar: unknown action '%s' (want shred|events)\n", argv[2]);
+            rc = 1;
+        }
+        sqlite3_close(db);
+        return rc;
+    }
+
     if( strcmp(sub, "fts-query") == 0 ){
         char *z;
         /* `--pool` reports the candidate depth, for the same reason the query
