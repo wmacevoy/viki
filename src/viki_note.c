@@ -119,13 +119,65 @@ static void normalize_key(const char *z, char *out, size_t n){
     out[o] = '\0';
 }
 
+/* IS THIS A DATE THE LEDGER CAN COMPARE?
+**
+** Every risk decision in this file is a lexicographic string comparison
+** against an ISO instant, which is chronological ONLY for ISO input. Anything
+** else is not merely ignored -- it is silently MISCLASSIFIED, and measured
+** 2026-08-27 the misclassification runs toward anxiety:
+**
+**     @due 08/28/2026   (tomorrow, US format)  ->  OVERDUE
+**     @due next Tuesday                        ->  sorted as "next Tuesd"
+**
+** because "0" < "2". The summary line then reports "1 overdue" and is
+** confidently wrong, which is the one thing build/promise-probe.sh's header
+** says a ledger must never be.
+**
+** THIS IS THE TRAP INGEST WALKS INTO. Nothing validated @due, and an ICS or
+** calendar adapter emitting a non-ISO date would have produced exactly the
+** above -- a phantom overdue every morning, in the brief, with no way to see
+** why. Accepts YYYY-MM-DD (a date-only due means end of day; see risk_of) and
+** YYYY-MM-DDThh:mm:ss with optional fraction and zone suffix. */
+static int due_is_valid(const char *z){
+    int i;
+    if( !z || !z[0] ) return 1;              /* absent is undated, not wrong */
+    for( i = 0; i < 10; i++ ){
+        if( i == 4 || i == 7 ){ if( z[i] != '-' ) return 0; }
+        else if( z[i] < '0' || z[i] > '9' ) return 0;
+    }
+    if( z[10] == '\0' ) return 1;            /* bare date */
+    if( z[10] != 'T' && z[10] != ' ' ) return 0;
+    for( i = 11; i < 19; i++ ){
+        if( i == 13 || i == 16 ){ if( z[i] != ':' ) return 0; }
+        else if( z[i] < '0' || z[i] > '9' ) return 0;
+    }
+    return 1;                                 /* fraction / Z / offset: not our business */
+}
+
 static void set_field(viki_note *p, const char *key, const char *val){
     if( strcmp(key, "note") == 0 )  { strncpy(p->id, val, sizeof(p->id)-1); }
     else if( strcmp(key, "at") == 0 ){ strncpy(p->ts, val, sizeof(p->ts)-1); }
     else if( strcmp(key, "type") == 0 ) normalize_key(val, p->type, sizeof(p->type));
     else if( strcmp(key, "place") == 0 ) normalize_key(val, p->place, sizeof(p->place));
     else if( strcmp(key, "who") == 0 ) normalize_key(val, p->who, sizeof(p->who));
-    else if( strcmp(key, "due") == 0 ) strncpy(p->due, val, sizeof(p->due)-1);
+    else if( strcmp(key, "due") == 0 ){
+        /* AN UNPARSEABLE DUE BECOMES UNDATED, LOUDLY -- it is not kept and it
+        ** is not silently dropped. Keeping it makes the ledger confidently
+        ** wrong (above); dropping it silently makes a dated promise vanish
+        ** with the footer giving the wrong reason for its absence. Undated is
+        ** the honest reading of "I cannot tell when", the ledger already has
+        ** that state, and --all still shows it. */
+        if( due_is_valid(val) ){
+            strncpy(p->due, val, sizeof(p->due)-1);
+        }else{
+            fprintf(stderr,
+                "viki: note '%s' has @due '%s', which is not a date this ledger can\n"
+                "      compare -- treated as UNDATED rather than risked as a guess.\n"
+                "      Want: YYYY-MM-DD or YYYY-MM-DDThh:mm:ss.\n",
+                p->id[0] ? p->id : "(unnamed)", val);
+            p->due[0] = '\0';
+        }
+    }
     else if( strcmp(key, "state") == 0 ) normalize_key(val, p->state, sizeof(p->state));
     else if( strcmp(key, "closes") == 0 ) strncpy(p->closes, val, sizeof(p->closes)-1);
     else if( strcmp(key, "claimed") == 0 ) strncpy(p->claimed, val, sizeof(p->claimed)-1);

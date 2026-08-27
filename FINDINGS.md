@@ -12,6 +12,79 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## An unvalidated @due did not fail to sort -- it sorted WRONG, toward anxiety
+
+2026-08-27. Found by a v1 audit agent, reproduced before acting. `@due` was
+never validated anywhere, and every risk decision in `viki_note.c` is a
+lexicographic comparison against an ISO instant. Lexicographic order is
+chronological ONLY for ISO input, so a non-ISO date was not ignored -- it was
+misclassified:
+
+```
+@due 08/28/2026    (TOMORROW, US format)   ->  OVERDUE     because "0" < "2"
+@due next Tuesday                          ->  sorted as "next Tuesd", "later"
+1 overdue, 0 due today, 2 later            <-  confidently wrong
+```
+
+**A promise due tomorrow read as already broken.** That is the ledger wrong in
+the direction of anxiety, which `build/promise-probe.sh`'s own header names as
+the thing the product exists to remove -- the second instance of that exact
+failure in two days, after the date-only comparison bug.
+
+### Why it matters more now than last week
+
+**This is the trap calendar ingest walks into.** An ICS or calendar adapter
+emitting a non-ISO date -- `08/28/2026` is what a US-locale export produces --
+would have generated a phantom OVERDUE every morning, in the brief, with
+nothing on screen explaining why. The ICS shredder landed the same day; this
+was found before anything was wired to write `@due` from it.
+
+### The fix, and why undated rather than rejected
+
+An unparseable due becomes **undated, loudly**. Keeping it makes the ledger
+confidently wrong; dropping the note silently makes a dated promise vanish
+while the footer ("undated promises are not shown") gives the wrong reason for
+its absence. Undated is the honest reading of "I cannot tell when", the ledger
+already has that state, and a warning names the note and the value.
+
+P15-P19 in `build/promise-probe.sh`. P19 is the control that stops the other
+four being satisfied by "nothing is ever due". Four of the five fail against
+the pre-fix binary (30/4), measured.
+
+---
+## The coverage channel list can be invented by anyone typing a bracket
+
+2026-08-27. Same audit, reproduced, **not fixed** -- it changes a documented
+decision and that is Warren's call.
+
+`viki coverage` derives channel identity from a `"[name] "` prefix on note
+text, which is what the browser reader writes. `viki_note.h` argues the design
+explicitly: *"COVERAGE IS DERIVED, NOT REPORTED BY THE READER ... keeps the CLI
+honest without coupling it to a browser extension it should know nothing
+about."* The reasoning is sound; the derivation cannot tell a reader's prefix
+from a human's bracket.
+
+```
+$ viki capture "[TODO] fix the gate latch"
+$ viki coverage
+  captured here   ...  1 note(s)
+  facebook        ...  1 note(s)
+  TODO            ...  1 note(s)     <- a channel that does not exist
+```
+
+`assistant/brief.sh` consumes `viki coverage --json` and prints a per-channel
+staleness list, so a phantom channel appears in "WHAT I CAN SEE" reading as
+freshly covered. That is the coverage lie SS 2.5 exists to prevent, arriving
+through the mechanism built to prevent it.
+
+**The fix I would propose, preserving the stated intent:** record which DOOR a
+capture came through -- CLI versus `/api/capture` -- as a field. That is a fact
+about viki's own surfaces, not knowledge of a browser extension, so it keeps
+`viki_note.h`'s argument intact while removing the ambiguity. It is a schema
+plus producer change (`viki_note`, `viki_serve.c`, `edge/chrome/background.js`),
+which is why it is written down here rather than done.
+
+---
 ## I tuned two parameters against a metric that includes the held-out split
 
 2026-08-27, self-reported. Warren pointed at commit `4292a0a`, which reverted a

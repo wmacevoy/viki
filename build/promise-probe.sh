@@ -230,6 +230,53 @@ chk "P14 CONTROL: a bare date TOMORROW is neither overdue nor due today" \
 rm -f captures/dateonly.md
 "$V" index . >/dev/null 2>&1
 
-echo
+echo "== an unparseable @due must not be RISKED as a guess (2026-08-27) =="
+# WHY: every risk decision in viki_note.c is a lexicographic comparison against
+# an ISO instant, which is chronological only for ISO input. Before this, @due
+# was never validated, so a non-ISO date was not ignored -- it was
+# MISCLASSIFIED, and toward anxiety: "08/28/2026" (tomorrow, US format) read
+# OVERDUE because "0" < "2", and the summary said "1 overdue" and meant it.
+#
+# This is the trap CALENDAR INGEST walks into: an ICS adapter emitting a
+# non-ISO date would have produced a phantom overdue every morning, in the
+# brief, with nothing on screen explaining why.
+mkdir -p captures
+cat > captures/duevalid.md <<EOF
+@note 20260827-duev-000001
+@at ${DAY_TODAY}T06:00:00.000000Z
+@type task
+@who mine
+@due 08/28/2026
+usdatemarker a US-format due for TOMORROW
+
+@note 20260827-duev-000002
+@at ${DAY_TODAY}T06:00:00.000000Z
+@type task
+@who mine
+@due next Tuesday
+prosemarker a due date written as prose
+EOF
+"$V" index . >"$DIR/duev.err" 2>&1
+DOUT2=$("$V" promises --all 2>&1)
+
+chk "P15 a US-format due is NOT reported as overdue" \
+    "$(printf '%s' "$DOUT2" | grep 'usdatemarker' | grep -c 'OVERDUE')" "0"
+chk "P16 ...it is undated instead, which is the honest reading" \
+    "$(printf '%s' "$DOUT2" | grep 'usdatemarker' | grep -c '(no due)')" "1"
+chk "P17 prose in @due is undated too, not sorted as a string" \
+    "$(printf '%s' "$DOUT2" | grep 'prosemarker' | grep -c '(no due)')" "1"
+# LOUD, not silent: a dated promise becoming undated must be visible, or the
+# footer's "undated promises are not shown" gives the wrong reason for an
+# absence. The warning names the note and the value.
+chk "P18 the demotion is ANNOUNCED, naming the note and the value" \
+    "$(grep -c '20260827-duev-000001' "$DIR/duev.err")" "1"
+# CONTROL, and the one that stops P15-P17 being "nothing is ever due": a real
+# ISO due must still be dated and still risked.
+chk "P19 CONTROL: a valid ISO due is still dated and still risked" \
+    "$(printf '%s' "$DOUT2" | grep -c 'soonmarker')" "1"
+rm -f captures/duevalid.md
+"$V" index . >/dev/null 2>&1
+
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]
