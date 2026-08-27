@@ -304,6 +304,15 @@ per-artifact breakdown, a **BM25-only control**, and a per-query failure
 taxonomy. It prints numbers and gates nothing; exit 0 means it produced
 them.
 
+**TUNE ON DEV; THE HELD-OUT SPLIT IS SPENT WHEN YOU READ IT.** 31% of
+`test/retrieval-queries.tsv` is held out so a later round has an uncontaminated
+estimate. Choosing a parameter by reading `ALL` (which is DEV+TEST) or by
+reading `TEST` is model selection on the test set — the practice commit
+`4292a0a` reverted a whole round of ranking work for, and which happened again
+on 2026-08-26 for the overlap and pool sweeps (FINDINGS.md; both choices did
+survive re-derivation on DEV alone). Report TEST once, after the choice is
+fixed, and do not revise the choice afterward.
+
 **Do not transcribe its numbers into this file.** Corpus size, recall and the
 per-artifact coverage figures all move whenever these docs are edited — which
 is what the harness's `corpus fp` exists to pin — so a figure copied here goes

@@ -12,6 +12,52 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## I tuned two parameters against a metric that includes the held-out split
+
+2026-08-27, self-reported. Warren pointed at commit `4292a0a`, which reverted a
+round of ranking work. Its first and most serious reason:
+
+> *"It cited HELD-OUT recall@1 and MRR in shipped source as the justification
+> for keeping a change -- model selection on the test set, which invalidates the
+> split for every future round."*
+
+**I did the same thing on 2026-08-26, twice.** The overlap sweep (0/5/10/20) and
+the candidate-pool sweep (40/80/160) were both decided by reading
+`ALL indexed-answer queries`, which is n=43 = DEV 31 + TEST 12. I also quoted
+held-out figures in commit messages as supporting evidence for keeping each
+change. `test/retrieval-queries.tsv` holds 31% out precisely so a later round
+has an uncontaminated estimate, and selecting on it spends that.
+
+### Re-derived on DEV alone, which is what should have been reported
+
+| overlap | dev recall@1 | dev MRR | | pool | dev recall@5 | dev recall@k | dev MRR |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.226 | 0.337 | | 40 | 0.452 | 0.645 | 0.386 |
+| 5 | 0.290 | 0.360 | | **80** | **0.516** | **0.677** | **0.398** |
+| **10** | **0.323** | **0.386** | | 160 | 0.484 | 0.645 | 0.393 |
+| 20 | 0.290 | 0.382 | | | | | |
+
+**Both choices survive**: overlap 10 and pool 80 win on the tunable split on
+their own. The decisions stand; the *justification* was wrong, and that is a
+distinction worth keeping rather than quietly repairing.
+
+### What is actually spent
+
+The held-out numbers reported for these two changes are no longer clean
+estimates OF THOSE CHANGES -- they were read while choosing. They remain valid
+as a description of what the shipped configuration does. The split is not burned
+for future, independent questions; it is burned for "was overlap 10 the right
+pick" and "was pool 80 the right pick".
+
+### The rule, since this file is where it will be looked for
+
+**Tune on DEV. Report TEST once, after the choice is fixed, and never revise the
+choice afterward.** A number that influenced a decision is not evidence about
+that decision. `4292a0a` established this; it took a pointer from Warren for it
+to reach a later round, which is the argument for it living here rather than
+only in a commit message.
+
+---
 ## viki printed the right answer and then died in exit(), on encrypted repos only
 
 2026-08-26. Found by an agent repairing something else, reproduced here before

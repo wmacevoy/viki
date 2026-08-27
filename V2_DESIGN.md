@@ -871,3 +871,13 @@ Nothing here is scheduled. If it were:
 `test/retrieval-eval.sh` is the arbiter for anything claiming quality. "A much
 better embedding" is a hypothesis until it is measured against the same held-out
 set, with the old binary re-measured first.
+
+**And the arbiter has a rule this file must state, because SS 2g, SS 5 and SS 8.3
+all propose choosing between alternatives by measurement.** TUNE ON DEV. The
+held-out 31% is spent the moment it is read while deciding -- that is model
+selection on the test set, which is what commit `4292a0a` reverted a round of
+ranking work for, and it recurred on 2026-08-26 when overlap and pool depth were
+both picked off the DEV+TEST aggregate (FINDINGS.md; both survived re-derivation
+on DEV alone). Every sweep this document proposes -- overlap vs the tree,
+best-epoch-wins vs fusion, one pool depth vs another -- is a selection, so each
+must be decided on DEV and reported on TEST once, afterward.
