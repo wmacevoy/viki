@@ -26,7 +26,10 @@ mkdir -p "$DIR" || exit 2
 DIR=$(cd "$DIR" && pwd)
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-VIKI="$ROOT/build/dist/viki"
+# VIKI_BIN honoured so an OLD binary can be scored against this file -- which
+# is how a new assertion is shown to be non-vacuous. Without it every "does it
+# fail against the pre-fix build?" check silently re-tests the current one.
+VIKI="${VIKI_BIN:-$ROOT/build/dist/viki}"
 [ -x "$VIKI" ] || { echo "no $VIKI -- run build/build.sh first" >&2; exit 2; }
 
 FOSSIL="${VIKI_FOSSIL_BIN:-}"
@@ -208,6 +211,49 @@ if [ -n "$DEPS" ]; then
     else ok "S1 viki links no fossil library at build time"; fi
 else
     printf '  --   S1 skipped (no otool/ldd)\n'
+fi
+
+# ---- E: the process must EXIT CLEANLY, not merely print the right thing ----
+#
+# THE GAP THIS CLOSES. Every assertion above compares OUTPUT, and none of them
+# reads an exit status -- so for as long as it existed, `viki index` on an
+# ENCRYPTED repo with libfossilsee loaded printed a complete, correct answer
+# and then died with SIGSEGV (139) inside exit(). The whole suite stayed green.
+#
+# Cause: atexit is LIFO. main() registered viki_fossilsee_shutdown as its FIRST
+# statement, before this file ever dlopen()s the library, so the library's own
+# terminators -- LibreSSL's among them -- sat above it and ran first. viki's
+# handler then closed the repository through a finalised SQLCipher codec.
+# Registered after dlopen() instead (register_shutdown_once()). FINDINGS.md.
+#
+# Two conditions are BOTH required and neither is the common test setup: the
+# repo must be ENCRYPTED (a plaintext repo never reaches sqlite3Codec) and the
+# library must be LOADED. That is precisely the production configuration.
+#
+# AND THE EXIT STATUS IS NOT THE WORST OF IT: stdout is block buffered when
+# redirected, so the crash beat stdio's flush and a redirected answer was lost
+# entirely -- measured at 0 bytes. E2 asserts the bytes arrive.
+echo "== E: clean exit on an encrypted repo with the library loaded =="
+if [ -n "${LIB:-}" ] && [ -f "${LIB:-/nonexistent}" ]; then
+    ECO="$DIR/exitco"
+    rm -rf "$ECO"; mkdir -p "$ECO"
+    ( cd "$ECO" && "$FOSSIL" open "$REPO" >/dev/null 2>&1 )
+    printf 'exit status fixture\n' > "$ECO/exitcheck.md"
+    erc=0
+    ( cd "$ECO" && VIKI_FOSSILSEE_LIB="$LIB" VIKI_MODEL_DIR="$DIR/nomodel" \
+        "$VIKI" index . >"$DIR/exit.out" 2>"$DIR/exit.err" ) || erc=$?
+    [ "$erc" -eq 0 ] \
+      && ok "E1 viki index exits 0 (encrypted repo + libfossilsee loaded)" \
+      || bad "E1 viki index exits 0 (encrypted repo + libfossilsee loaded)" \
+             "exit $erc -- 139 is the atexit-ordering SIGSEGV; see FINDINGS.md"
+    # The report the crash used to swallow. A redirected run must still deliver
+    # its bytes; 0 bytes with a correct-looking terminal run is the shape that
+    # hid this.
+    [ -s "$DIR/exit.err" ] \
+      && ok "E2 ...and its report survives the redirect (stdio flushed)" \
+      || bad "E2 ...and its report survives the redirect" "0 bytes captured"
+else
+    printf '  --   E1/E2 skipped (no libfossilsee; nothing to order against)\n'
 fi
 
 printf '\n%d passed, %d failed\n' "$nPass" "$nFail"

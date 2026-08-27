@@ -215,6 +215,37 @@ static int find_repo(char *zOut, size_t nOut){
     }
 }
 
+/* THE CLOSE MUST BE REGISTERED AFTER dlopen(), NOT BEFORE IT -- and that
+** ordering is a crash, not a nicety.
+**
+** atexit handlers run LIFO. main() used to register viki_fossilsee_shutdown
+** as its first statement, i.e. BEFORE this file ever dlopen()s
+** libfossilsee. A dlopen'd image registers its own terminators (LibreSSL's
+** among them, which is what tears down the crypto state SQLCipher's codec
+** hangs off) at load time, so they sat ABOVE viki's handler on the stack
+** and ran FIRST. viki's handler then called fossilsee_close() -> db_close()
+** -> sqlite3_exec(), the pager re-read a page, sqlite3Codec dereferenced a
+** context that had already been finalised, and the process died with
+** SIGSEGV *after* printing a complete and correct answer.
+**
+** Registering here instead puts viki's handler on TOP of everything the
+** library brought with it, so the repository is closed while the library
+** is still whole. Measured 2026-08-26 on macOS/arm64: before this,
+** `viki index .` with VIKI_FOSSILSEE_LIB set exited 139 on every run --
+** and no probe caught it, because they all compare output and none reads
+** the exit status. See FINDINGS.md.
+**
+** It is still registered rather than called at the end of each command
+** because main() returns from a dozen places, and the forgotten one is
+** the one that leaves Fossil's process-global saved key in memory --
+** libfossilsee's close is what zeroes it. */
+static void register_shutdown_once(void){
+    static int bDone = 0;
+    if( bDone ) return;
+    bDone = 1;
+    atexit(viki_fossilsee_shutdown);
+}
+
 static int open_repo_if_needed(void){
     char zRepo[4096];
     int rc;
@@ -235,6 +266,7 @@ static int open_repo_if_needed(void){
         g_repo = 0;
         return 0;
     }
+    register_shutdown_once();
     return 1;
 }
 

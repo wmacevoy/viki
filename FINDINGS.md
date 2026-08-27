@@ -12,6 +12,56 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## viki printed the right answer and then died in exit(), on encrypted repos only
+
+2026-08-26. Found by an agent repairing something else, reproduced here before
+acting. **A live crash on `main`, in the configuration that matters most.**
+
+`viki index` (and `when`/`since`) exited **139 (SIGSEGV)** whenever BOTH held:
+
+- the repo is **encrypted** -- a plaintext repo never reaches `sqlite3Codec`;
+- **`VIKI_FOSSILSEE_LIB` is set**, i.e. the in-process path CLAUDE.md prefers.
+
+That is every real tribe, on the recommended configuration.
+
+### Cause
+
+`atexit` handlers run LIFO. `main()` registered `viki_fossilsee_shutdown` as
+its **first statement**, before `viki_fossilsee.c` ever `dlopen()`s the
+library. A `dlopen`'d image registers its own terminators at load time --
+LibreSSL's among them, which is what tears down the crypto state SQLCipher's
+codec hangs off -- so those sat ABOVE viki's handler and ran FIRST. viki's
+handler then called `fossilsee_close()` -> `db_close()` -> `sqlite3_exec()`,
+the pager re-read a page, and `sqlite3Codec` dereferenced a finalised context.
+
+Fixed by registering the handler where the library is opened
+(`register_shutdown_once()`), so viki's close sits on top of everything the
+library brought with it and runs while the library is still whole.
+
+### Why every probe stayed green through it
+
+**They compare OUTPUT. None read an exit status.** The answer was computed and
+printed correctly; the process died afterwards. A terminal run looked perfect.
+
+And the second-order effect is worse than the status: **stdout is block
+buffered when redirected**, so the crash beat stdio's flush and a redirected
+run lost its output entirely -- measured at **0 bytes**. Which is how the
+agent's first probe run scored 14/43 with empty capture files, a result that
+looks like a broken probe rather than a crashing binary.
+
+```
+MAIN binary, encrypted repo, VIKI_FOSSILSEE_LIB set:  rc=139, stdout 0 bytes
+same binary, lib unset:                               rc=0
+same binary, plaintext repo, lib set:                 rc=0
+```
+
+`build/fossilsee-probe.sh` E1/E2 now assert the exit status and that the report
+survives a redirect. E1 fails against the pre-fix binary (20/1), measured.
+`VIKI_BIN` is honoured by that probe now too -- without it, the "does this fail
+against the old build?" check silently re-tests the current one, which it did
+on my first attempt.
+
+---
 ## The assertion that the Chrome reader can only talk to loopback could not fail
 
 2026-08-26. Found by a v1 audit agent, reproduced independently before acting.

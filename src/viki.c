@@ -177,13 +177,14 @@ int main(int argc, char **argv){
     const char *sub;
     int rc = 0;
 
-    /* Closes libfossilsee's repository if one was ever opened. atexit()
-    ** rather than a call on each path because main() returns from a dozen
-    ** places and the one that gets forgotten is the one that leaks the
-    ** encryption key -- libfossilsee's close is what zeroes Fossil's
-    ** process-global saved key. A no-op when the library never loaded,
-    ** which is the common case. */
-    atexit(viki_fossilsee_shutdown);
+    /* The libfossilsee repository is closed by an atexit handler that
+    ** viki_fossilsee.c registers ITSELF, at the moment it opens the
+    ** repository. It used to be registered here, and here is TOO EARLY:
+    ** atexit is LIFO, so a handler registered before dlopen() runs AFTER
+    ** the library's own terminators, and closed the repository through a
+    ** half-finalised SQLCipher codec -- SIGSEGV at exit, on an ENCRYPTED
+    ** repo, after a correct answer had already been computed. See
+    ** register_shutdown_once() in viki_fossilsee.c and FINDINGS.md. */
 
     if( argc < 2 ){ usage(); return 1; }
     sub = argv[1];
