@@ -288,7 +288,20 @@ sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests un
                                             #   scored 7/7 against a binary with no leg).
                                             #   REFUSES to run without a model, for that reason
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
-sh build/cal-probe.sh <empty-dir>            # the ICS SHREDDER, 28 assertions, aimed at
+sh build/cal-probe.sh <empty-dir>            # the ICS SHREDDER, 40 assertions. The K-series
+                                            #   is the READ surface, and it was added after the
+                                            #   first 28 proved the PARSER and never ran
+                                            #   --from/--to or --json: FOUR live defects sat
+                                            #   behind a fully green suite. Two made the feature
+                                            #   USELESS -- the date filter returned nothing for
+                                            #   the ISO format its own usage documents (stored
+                                            #   times are RFC 5545 basic and '-' sorts below
+                                            #   every digit), and a VALARM's DURATION and
+                                            #   ATTENDEE became the enclosing meeting's, so a
+                                            #   one-hour appointment read as fifteen minutes.
+                                            #   An empty day looks like a quiet day, which is why
+                                            #   a filter that silently returns nothing is worse
+                                            #   than one that errors. The original 28 cover:
                                             #   where an ICS parser is silently WRONG rather
                                             #   than loudly broken: RFC 5545 line folding (the
                                             #   fold is CRLF+space and BOTH go -- keeping the
