@@ -88,6 +88,27 @@ build/dist/viki promises [--me NAME] [--horizon 7d] [--all]
                                          # `--closes` is excluded, which is the property a
                                          # ledger cannot do without. Ordered by due, not by
                                          # write time. States its own coverage every run.
+build/dist/viki calendar shred <file.ics> [--source NAME]
+build/dist/viki calendar events [--from ISO] [--to ISO] [--json]
+                                         # THE ICS SHREDDER. iCalendar text in, the ASSERTION
+                                         # TIER out (CALENDAR_DESIGN_V2.md 5): every component
+                                         # ever written, shredded, PRE-RESOLUTION. RFC 5546's
+                                         # (UID,RECURRENCE-ID) -> max(SEQUENCE,DTSTAMP) applies
+                                         # at READ time, so a superseded assertion STAYS in the
+                                         # table -- the same shape as viki_note, and what keeps
+                                         # the tier grow-only on a content key (union IS merge).
+                                         # DELIBERATELY ABSENT: occurrence expansion, which
+                                         # depends on zone, window and tzdata version and is
+                                         # therefore not shareable by D-11's own argument; and
+                                         # any notion of "busy" -- TRANSP/STATUS/PARTSTAT are
+                                         # stored as FACTS and nothing scores them, because that
+                                         # judgment is assistant/'s (SCOPES 3). Times are stored
+                                         # AS WRITTEN with their IANA TZID and NEVER as an
+                                         # offset. Refuses a file with no BEGIN:VCALENDAR rather
+                                         # than reporting an empty calendar -- an adapter that
+                                         # fetched an HTML error page must not read as a quiet
+                                         # day. NOT ingest: nothing fetches a feed, and it is
+                                         # not wired into `viki index`
 build/dist/viki sql "<SELECT ...>" [--json]
                                          # THE RAW SURFACE. Read-only SQL over the cache with
                                          # the vector function registered -- and this is the
@@ -267,6 +288,19 @@ sh build/literal-probe.sh <empty-dir>       # `viki ask`'s LITERAL leg. Tests un
                                             #   scored 7/7 against a binary with no leg).
                                             #   REFUSES to run without a model, for that reason
 sh build/fragment-probe.sh <empty-dir>      # fragment marking on ask / serve / grep
+sh build/cal-probe.sh <empty-dir>            # the ICS SHREDDER, 28 assertions, aimed at
+                                            #   where an ICS parser is silently WRONG rather
+                                            #   than loudly broken: RFC 5545 line folding (the
+                                            #   fold is CRLF+space and BOTH go -- keeping the
+                                            #   space corrupts every long SUMMARY into a
+                                            #   plausible string), the params/value split (the
+                                            #   colon ending params is NOT the first colon; a
+                                            #   quoted CN may hold one and every mailto: does),
+                                            #   the four time forms, and resolution as a READ
+                                            #   time projection with the superseded row kept.
+                                            #   J1 asserts against the SCHEMA that no column
+                                            #   scores availability; J1b is its control that the
+                                            #   facts it would be computed from are all there
 sh build/pinsig-probe.sh <empty-dir>         # the EPOCH PIN'S SIGNATURE, where `cache pull`
                                             #   ACTS on it -- 17 assertions. Distinct from
                                             #   keywrap's S-series: that proves ed25519 works,
