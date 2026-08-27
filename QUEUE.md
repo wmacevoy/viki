@@ -2207,3 +2207,67 @@ Sources: nanoclaw (nanocoai/nanoclaw, nanoclaw.dev), Baileys ToS/ban analyses,
 Softeria/ms-365-mcp-server, anthropics/claude-code#53408, D2L Manage
 Extensibility docs, Playwright MCP security notes, Chrome 146 session control.
 
+---
+
+## 52. CALENDAR: the interchange layer is specified on a branch, and its ingest half is needed either way -- specified 2026-08-27
+
+**NOT MEASURED.** This entry is a specification plus source verification against
+`FOSSIL_REF` 42e3bc1. Nothing here has been benchmarked; the claims about Fossil
+are citations, and the claims about merge behaviour are demonstrated in a
+prototype, not in viki.
+
+Branch `calendar/interchange-v2`: `CALENDAR_DESIGN_V2.md` (new) and `V2_DESIGN.md`
+SS 11 (pointer). **D-2 stands; OQ-1 is not forced.**
+
+### Do this part regardless of OQ-1
+
+VIKIVERSE_V1 SS 2.3's v1 job is ingest -- "Google Calendar + O365 ingest, derived
+not mirrored" -- and both sources speak iCalendar on the wire. So an
+**ICS -> projection shredder** is on the critical path whichever way the authoring
+question resolves, and it is the same component that would later serve authored
+events. Build it for ingest; decide OQ-1 later, or never.
+
+This does not contradict SS 51's "viki should not write channel adapters". The
+adapters *fetch*; the shredder *derives*. Deriving a cleaned projection is the
+half SS 2.3 explicitly keeps.
+
+### Three findings that hold even if the branch is rejected outright
+
+1. **Fossil's wiki has no merge, no conflict detection and no stale-edit check.**
+   `wiki_cmd_commit()` (`wiki.c:2101`) emits exactly one P card; every caller
+   resolves the parent as the server-side tip (`json_wiki.c:378`, `wiki.c:1029`,
+   `wiki.c:2474`); `grep -ni "fork\|merge\|conflict\|stale" wiki.c` is empty.
+   Concurrent saves linearize and the later document wholly replaces the earlier.
+   **Any** viki design that stores documents in wiki pages must read over history
+   rather than over leaves, or it loses writes with no error.
+2. **Time zones resolve, never store.** `TZID` by reference (RFC 7809), no stored
+   `VTIMEZONE`, never a stored offset. RFC 7808 has **no mechanism to request a
+   historical tzdata version**, so occurrence *instants* are not reproducible
+   as-of a past T even though the *assertions* are. `tzdata_version` belongs in
+   `viki-manifest` for the same reason `model_id` does: an external dependency
+   that invalidates a derived cache with no content change.
+3. **Named time bands stay out of viki.** "Afternoon" and "open enough" are
+   judgments about Warren's day -- the class SS 2.4 already moved to `assistant/`
+   when `viki coverage` shipped with no thresholds. viki returns busy intervals
+   and the gaps between them, in a stated zone over a stated range, with coverage
+   attached; the assistant decides what counts as open. Also makes SS 2.5 work:
+   "you're free Thursday" is exactly the completeness claim that must cite sources.
+
+### Also recorded there
+
+The versioning split (`calendar_format` vs `calendar_schema` vs fossil-see
+version, all in `viki-manifest`), and the two-consumer-class point: clone-holding
+agents write SQL so the schema *is* their API and needs versioned views, while
+stdio/MCP consumers get the verb surface per V2 SS 6b. The dangerous failure is
+not a rename -- that errors loudly -- but semantic drift under stable names.
+
+### Open, and honest about it
+
+- Component-level vs `ticketchng`'s field-level merge: the loss is concurrent
+  edits to different fields of one event inside one sync window. Rare at family
+  scale, not never, **unmeasured**.
+- CRLF round-trip through the CGI/textarea path is unverified. The `W` card is
+  byte-length-prefixed (`manifest.c:1026`) so the artifact layer is fine.
+- R-Tree is used nowhere in Fossil; FTS5 demonstrably is (`chat.c:314`,
+  `search.c:1759`). Verify before relying on it for interval indexing.
+

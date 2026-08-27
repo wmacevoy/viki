@@ -102,6 +102,16 @@ collaborators get queryable reports on day one. If ticket semantics chafe,
 the field model above ports unchanged to Option B later — the projection
 schema and app UI don't care where the deltas come from.
 
+**A third option is specified on branch `calendar/interchange-v2` -- see
+`CALENDAR_DESIGN_V2.md`.** Not adopted; D-2 stands. It matters here for one
+reason: SS 3 above rules `.ics` out because a *one-file-per-event* design
+produces file-level merge conflicts. That objection is correct about the design
+it describes and does not reach Option C, which merges at component granularity
+by `(UID, RECURRENCE-ID) -> max(SEQUENCE, DTSTAMP)` per RFC 5546. The real
+remaining trade is that `ticketchng` gives field-level merge and Option C gives
+component-level. Read `CALENDAR_DESIGN_V2.md` SS 4 and SS 7 before re-deciding
+OQ-1, and QUEUE SS 52 for why part of it is needed whichever way it goes.
+
 ## 6. What the app does on each sync
 
 1. `fossil sync` (via FFI) — artifacts flow both ways.
