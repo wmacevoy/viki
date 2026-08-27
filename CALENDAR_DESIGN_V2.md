@@ -425,7 +425,18 @@ A working reference implementation of the union reducer, the four time forms,
 recurrence with `EXDATE` and `RECURRENCE-ID` overrides, and the leaf-only-vs-all-
 versions comparison:
 
+**In this repo:** `experiments/calendar-interchange-prototype.html` -- one
+self-contained file, no dependencies, no network. Open it in a browser.
+
+Also published, same content:
 https://claude.ai/code/artifact/a3bf03ae-82b8-424c-8152-db8ad1a6cee3
 
-Mock data stands in for `/json/wiki/get?uuid=...`; the toggle demonstrates the
-SS 3 loss directly. Not viki code, and not a dependency -- a check on the spec.
+Mock data stands in for `/json/wiki/get?uuid=...`. **The "Resolve over: All
+versions / Leaf only" toggle demonstrates the SS 3 loss directly** -- switch it
+and the LibreSSL review snaps from the 15th back to the 8th, because `9d1b5ec2`
+clobbered `2f8a6d94`. That is the claim SS 3 rests on, reproducible in one click
+rather than taken on faith. The "Display in" selector does the same for T1-T4:
+of the four time forms, three move and the floating one does not.
+
+Excluded from the viki index (`.vikiignore`) -- it is a demonstration, and its
+CSS would be corpus noise. Not viki code, and not a dependency.

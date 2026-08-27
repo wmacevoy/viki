@@ -22,5 +22,10 @@ build/libobj
 *.a
 *.wasm
 
+# a demonstration artifact, not a decision -- 44KB of CSS/JS whose chunks would
+# be corpus noise. What it demonstrates is argued in CALENDAR_DESIGN_V2.md,
+# which IS indexed.
+experiments/calendar-interchange-prototype.html
+
 # the derived cache itself
 .viki
