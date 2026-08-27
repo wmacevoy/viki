@@ -534,7 +534,7 @@ static int handle_notes(sbuf *body, sqlite3 *db, const char *query, int bPending
 
 static int handle_capture(sbuf *body, const char *query){
     char text[2048]={0}, place[128]={0}, type[64]={0};
-    char who[128]={0}, due[64]={0}, state[32]={0};
+    char who[128]={0}, due[64]={0}, state[32]={0}, channel[128]={0};
     int rc;
     get_query_param(query, "text", text, sizeof(text));
     if( !text[0] ){
@@ -545,11 +545,19 @@ static int handle_capture(sbuf *body, const char *query){
     get_query_param(query, "type",  type,  sizeof(type));
     get_query_param(query, "who",   who,   sizeof(who));
     get_query_param(query, "due",   due,   sizeof(due));
+    /* THE PRODUCER NAMES ITSELF. The browser reader used to encode its channel
+    ** as a "[name] " prefix on the text and coverage parsed it back out, which
+    ** could not tell a reader's prefix from a bracket a person typed -- see
+    ** viki_db.c's note on viki_note.channel. It is an opaque label here: viki
+    ** does not know what "discord" is, exactly as it does not know what
+    ** "ranch" is in `place`. */
+    get_query_param(query, "channel", channel, sizeof(channel));
     get_query_param(query, "state", state, sizeof(state));
     /* "." is the server's cwd, which is the checkout it was started in --
     ** the same directory `viki index` and `viki capture` use from a shell. */
     rc = viki_cmd_capture(".", text, place[0]?place:NULL, type[0]?type:NULL,
-                          who[0]?who:NULL, due[0]?due:NULL, state[0]?state:NULL);
+                          who[0]?who:NULL, due[0]?due:NULL, state[0]?state:NULL,
+                          channel[0]?channel:NULL);
     sbuf_puts(body, rc == 0 ? "{\"ok\":true" : "{\"ok\":false");
     /* The caller must reindex before the capture is queryable; say so rather
     ** than reindexing here, which would make a capture cost a full corpus

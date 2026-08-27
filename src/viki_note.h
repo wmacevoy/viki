@@ -51,9 +51,14 @@
 /* `viki capture "<text>" [--place P] [--type T] [--who W] [--due D] [--state S]`.
 ** Everything but the text is optional -- capture must never block on structure
 ** the capturer does not have. Appends and returns 0, or nonzero on I/O error. */
+/* zChannel: WHICH PRODUCER this came from, declared by the producer. NULL for
+** a person typing at the CLI, which is the honest answer for one. See
+** viki_db.c's note on the column for why this is declared rather than sniffed
+** out of the text. */
 int viki_cmd_capture(const char *zDir, const char *zText,
                      const char *zPlace, const char *zType,
-                     const char *zWho, const char *zDue, const char *zState);
+                     const char *zWho, const char *zDue, const char *zState,
+                     const char *zChannel);
 
 /* Rebuilds viki_note from every capture block under zDir. Called by
 ** `viki index` after the chunk work. Returns rows projected, or -1. */

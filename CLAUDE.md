@@ -622,6 +622,18 @@ with no auth *by design*; internet exposure goes behind the Caddy instance
   for `fork()`/BSD sockets), so `viki.exe` links `msys-2.0.dll` — bundled by
   `build.sh`. ONNX Runtime is native and needs UTF-16 model paths regardless
   (`-DVIKI_WIN_ORT_PATH`) and `cygpath -m` paths, since it has no MSYS awareness.
+- **A channel is DECLARED by its producer, never guessed from note text.**
+  `viki capture --channel`, `/api/capture?channel=`, stored as
+  `viki_note.channel` (added by `migrate_note_channel()` on open). Coverage
+  used to parse a `"[name] "` prefix out of the text, which could not be told
+  from a bracket a person typed — `viki capture "[TODO] fix the gate latch"`
+  invented a channel the brief then listed as freshly covered. The bracket
+  survives as a **marked** fallback so notes captured before 2026-08-27 do not
+  silently vanish from coverage: `viki coverage` prints `(inferred from text)`
+  and `--json` carries `"declared"` as a FIELD, never a decorated name.
+  **viki reports the distinction and judges nothing** — `assistant/brief.sh`
+  shows an inferred channel but never puts one on the SIGN IN list, because
+  sending someone to log in to "TODO" is how a brief stops being believed.
 - **Captured text is UNTRUSTED and must never become note syntax.**
   `note_parse_file()` gives `@` in column 0 structural meaning and `@note` ends
   the previous block, while the Chrome reader POSTs whatever a Facebook,

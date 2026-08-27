@@ -88,7 +88,24 @@ static const char *SCHEMA_SQL =
     "  challenge   TEXT,"   /* "<who> <ISO>" -- an unanswered are-you-still-on-this */
     "  stolen_from TEXT,"   /* prior holder; a steal is a supersession, not an overwrite */
     "  text        TEXT NOT NULL,"
-    "  source_path TEXT"
+    "  source_path TEXT,"
+    /* THE DECLARED CHANNEL -- which producer this came from, said by the
+    ** producer rather than sniffed out of the note's text.
+    **
+    ** Coverage used to derive channel identity from a "[name] " prefix that
+    ** the browser reader writes, and viki_note.h argued that deliberately:
+    ** derived, not reported, so the CLI need know nothing about a browser
+    ** extension. The derivation cannot tell a reader's prefix from a bracket a
+    ** human typed, so `viki capture "[TODO] fix the gate latch"` invented a
+    ** channel named TODO that the morning brief then listed as freshly
+    ** covered -- a coverage lie arriving through the mechanism built to
+    ** prevent one (FINDINGS.md).
+    **
+    ** Declaring it is NOT the coupling that comment feared: viki already
+    ** accepts type/place/who/due/state from the same producer as opaque
+    ** strings, and a channel is exactly as opaque. viki does not know what
+    ** "discord" IS; it groups by the label. */
+    "  channel     TEXT"
     ");"
     /* ---------------------------------------------- the ASSERTION tier --
     **
@@ -193,6 +210,25 @@ void viki_db_register_ndvss(void){
 ** Failure is deliberately non-fatal in the same spirit as the ALTER TABLE
 ** loop above: a cache whose FTS could not be migrated still answers on the
 ** vector leg, and refusing to open would be worse. */
+/* ADD viki_note.channel TO AN EXISTING CACHE. A cache written before
+** 2026-08-27 has no such column, and every coverage query would fail rather
+** than degrade -- so this runs on open, exactly like migrate_chunk_fts().
+**
+** No rewrite of existing rows: an old note has no declared channel and never
+** will, which is the honest state. `viki coverage` falls back to the bracket
+** convention for those and MARKS the result inferred, so the ambiguity is
+** visible instead of silently equal to a declared one. */
+static void migrate_note_channel(sqlite3 *db){
+    sqlite3_stmt *st;
+    int bHas = 0;
+    if( sqlite3_prepare_v2(db,
+            "SELECT 1 FROM pragma_table_info('viki_note') WHERE name='channel'",
+            -1, &st, NULL) != SQLITE_OK ) return;
+    if( sqlite3_step(st) == SQLITE_ROW ) bHas = 1;
+    sqlite3_finalize(st);
+    if( !bHas ) sqlite3_exec(db, "ALTER TABLE viki_note ADD COLUMN channel TEXT", NULL, NULL, NULL);
+}
+
 static void migrate_chunk_fts(sqlite3 *db){
     sqlite3_stmt *st = NULL;
     int bExternal = 0, bFound = 0;
@@ -278,6 +314,7 @@ int viki_db_open(const char *zPath, sqlite3 **out){
             sqlite3_exec(db, azMigrate[iMig], NULL, NULL, NULL);
         }
         migrate_chunk_fts(db);
+        migrate_note_channel(db);
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS viki_source_ts ON viki_source(ts DESC)",
                      NULL, NULL, NULL);
     }

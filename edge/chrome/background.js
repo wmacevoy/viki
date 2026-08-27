@@ -34,8 +34,21 @@ async function state() {
 /* POST to viki's capture route. The X-Viki-Local header is viki's cross-origin
  * guard (a guard, not authentication -- see CLAUDE.md), and an extension is
  * exactly the caller it was meant to admit. */
-async function capture(text) {
-  const url = VIKI_URL + '/api/capture?text=' + encodeURIComponent(text);
+async function capture(text, channel) {
+  /* THE CHANNEL IS DECLARED, NOT ENCODED IN THE TEXT.
+   *
+   * This used to prefix '[source] ' onto the text and let `viki coverage`
+   * parse it back out. That could not be told from a bracket a person typed,
+   * so `viki capture "[TODO] fix the gate latch"` invented a channel named
+   * TODO that the morning brief listed as freshly covered -- a coverage lie
+   * in the mechanism built to prevent one.
+   *
+   * The prefix is KEPT as well, because it is provenance a human reads in the
+   * note body and an agent structuring the note later needs: a promise from
+   * Discord reads differently from one Warren typed. What changed is that
+   * coverage no longer has to guess it. */
+  const url = VIKI_URL + '/api/capture?text=' + encodeURIComponent(text) +
+              (channel ? '&channel=' + encodeURIComponent(channel) : '');
   const r = await fetch(url, { method: 'POST', headers: { 'X-Viki-Local': '1' } });
   if (!r.ok) throw new Error('viki answered HTTP ' + r.status);
   return r.json().catch(() => ({ ok: true }));
@@ -49,7 +62,7 @@ async function drain() {
   while (rest.length) {
     const item = rest[0];
     try {
-      await capture(item.text);
+      await capture(item.text, item.channel);
       rest.shift();
       sent++;
     } catch (_) {
@@ -92,7 +105,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         /* Provenance in the text itself: viki captures plain text, and a
          * promise from Discord read differently from one Warren typed. The
          * agent structuring it later needs to know which. */
-        queue.push({ fp: it.fp, text: '[' + msg.source + '] ' + it.text });
+        queue.push({ fp: it.fp, text: '[' + msg.source + '] ' + it.text,
+                     channel: msg.source });
         if (queue.length > QUEUE_MAX) queue.shift();
       }
       s.seen = Array.from(seen).slice(-SEEN_MAX);

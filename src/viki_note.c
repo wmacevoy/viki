@@ -24,6 +24,7 @@ typedef struct {
     char lease[32];
     char challenge[96];
     char stolen[64];
+    char channel[64];   /* declared producer -- see viki_db.c's column note */
     char text[1024];
 } viki_note;
 
@@ -184,6 +185,7 @@ static void set_field(viki_note *p, const char *key, const char *val){
     else if( strcmp(key, "lease") == 0 ) strncpy(p->lease, val, sizeof(p->lease)-1);
     else if( strcmp(key, "challenge") == 0 ) strncpy(p->challenge, val, sizeof(p->challenge)-1);
     else if( strcmp(key, "stolen-from") == 0 ) strncpy(p->stolen, val, sizeof(p->stolen)-1);
+    else if( strcmp(key, "channel") == 0 ) normalize_key(val, p->channel, sizeof(p->channel));
 }
 
 /* ---- WRITING CAPTURED TEXT WITHOUT LETTING IT BECOME NOTE SYNTAX ----
@@ -241,7 +243,8 @@ static void write_field(FILE *f, const char *zKey, const char *zVal){
 
 int viki_cmd_capture(const char *zDir, const char *zText,
                      const char *zPlace, const char *zType,
-                     const char *zWho, const char *zDue, const char *zState){
+                     const char *zWho, const char *zDue, const char *zState,
+                     const char *zChannel){
     char dir[1024], path[1200], ts[32], id[40];
     struct stat st;
     FILE *f;
@@ -280,6 +283,7 @@ int viki_cmd_capture(const char *zDir, const char *zText,
     /* Default state is "open" ONLY for a task. An observation is not a chore
     ** and must never appear in "what needs to be done" -- that exact
     ** false-positive ("new foal in rimi's band") is why this file exists. */
+    if( zChannel && zChannel[0] ) write_field(f, "channel", zChannel);
     if( zState && zState[0] ) write_field(f, "state", zState);
     else if( zType && strcmp(zType, "task") == 0 ) fprintf(f, "@state open\n");
     write_body(f, zText);
@@ -328,6 +332,7 @@ static void note_flush(sqlite3_stmt *ins, viki_note *p, const char *zPath, int *
     sqlite3_bind_text(ins, 12, p->lease, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(ins, 13, p->challenge, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(ins, 14, p->stolen, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 15, p->channel, -1, SQLITE_TRANSIENT);
     if( sqlite3_step(ins) == SQLITE_DONE ) (*pN)++;
     note_clear(p);
 }
@@ -380,8 +385,8 @@ int viki_note_reindex(sqlite3 *db, const char *zDir){
     if( sqlite3_prepare_v2(db,
             "INSERT OR REPLACE INTO viki_note"
             "(note_id,ts,type,place,who,due,state,text,source_path,closes,"
-            " claimed,lease,challenge,stolen_from)"
-            " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)", -1, &ins, NULL) != SQLITE_OK ){
+            " claimed,lease,challenge,stolen_from,channel)"
+            " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", -1, &ins, NULL) != SQLITE_OK ){
         closedir(d);
         return -1;
     }
@@ -579,10 +584,23 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
     int n = 0;
 
     if( sqlite3_prepare_v2(db,
-        "SELECT CASE WHEN text LIKE '[%]%'"
+        /* DECLARED FIRST, INFERRED SECOND, AND THE TWO ARE NOT SHOWN AS EQUAL.
+        **
+        ** A channel the producer declared is a fact. A "[name] " prefix in
+        ** note text is a GUESS -- it cannot be told from a bracket a person
+        ** typed, and `viki capture "[TODO] fix the gate latch"` used to invent
+        ** a channel named TODO that the brief listed as freshly covered. The
+        ** guess is kept, because notes captured before 2026-08-27 have no
+        ** declared channel and dropping them would silently shrink coverage;
+        ** it is MARKED instead, so a reader can tell what viki knows from what
+        ** viki inferred. Marking rather than hiding is the same rule as the
+        ** fragment markers and as `viki coverage`'s refusal to threshold. */
+        "SELECT CASE WHEN channel IS NOT NULL AND channel <> '' THEN channel"
+        "            WHEN text LIKE '[%]%'"
         "            THEN substr(text, 2, instr(text, ']') - 2)"
         "            ELSE 'captured here' END AS src,"
-        "       max(ts), count(*)"
+        "       max(ts), count(*),"
+        "       max(CASE WHEN channel IS NOT NULL AND channel <> '' THEN 1 ELSE 0 END) AS declared"
         "  FROM viki_note GROUP BY src ORDER BY max(ts) DESC", -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki coverage: %s\n", sqlite3_errmsg(db));
         return 1;
@@ -592,11 +610,19 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
         const char *src = (const char*)sqlite3_column_text(st, 0);
         const char *ts  = (const char*)sqlite3_column_text(st, 1);
         int cnt = sqlite3_column_int(st, 2);
+        int bDeclared = sqlite3_column_int(st, 3);
+        int bHere = src && strcmp(src, "captured here") == 0;
         if( bJson ){
-            printf("%s{\"source\":\"%s\",\"last_seen\":\"%s\",\"notes\":%d}",
-                   n ? "," : "", src ? src : "?", ts ? ts : "", cnt);
+            /* `declared` is a FIELD rather than a decorated string: a client
+            ** already parsing `source` must not start receiving marker words
+            ** it cannot tell from a channel name -- the same rule /api/ask
+            ** follows for the fragment markers. */
+            printf("%s{\"source\":\"%s\",\"last_seen\":\"%s\",\"notes\":%d,\"declared\":%s}",
+                   n ? "," : "", src ? src : "?", ts ? ts : "", cnt,
+                   (bDeclared || bHere) ? "true" : "false");
         }else{
-            printf("%-18s %-28s %d note(s)\n", src ? src : "?", ts ? ts : "never", cnt);
+            printf("%-18s %-28s %d note(s)%s\n", src ? src : "?", ts ? ts : "never", cnt,
+                   (bDeclared || bHere) ? "" : "   (inferred from text)");
         }
         n++;
     }

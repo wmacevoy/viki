@@ -88,11 +88,25 @@ today = now.strftime("%Y-%m-%d")
 stale = []
 for r in rows:
     src, seen = r["source"], (r["last_seen"] or "")[:10]
+    # A CHANNEL viki INFERRED IS NOT A CHANNEL TO SIGN IN TO.
+    #
+    # `declared` false means the name was guessed from a "[name] " prefix in
+    # note text, which cannot be told from a bracket a person typed --
+    # `viki capture "[TODO] fix the gate latch"` invents one. viki reports the
+    # distinction and declines to judge it (coverage has no thresholds); the
+    # judgment is here, and it is: an inferred channel is shown, because
+    # hiding it would be its own coverage lie, but it is never put on the
+    # SIGN IN list. Sending someone to log in to "TODO" is how a brief stops
+    # being believed.
+    declared = r.get("declared", True)
     is_stale = bool(seen) and seen < cut
     when = ("today " + (r["last_seen"][11:16] if len(r["last_seen"]) > 16 else "")) \
            if seen == today else (seen or "never")
-    print("  %-16s %-14s %3d note(s)%s" % (src, when, r["notes"], "   STALE" if is_stale else ""))
-    if is_stale and src != "captured here":
+    print("  %-16s %-14s %3d note(s)%s%s" % (
+        src, when, r["notes"],
+        "   STALE" if is_stale else "",
+        "" if declared else "   (inferred, not a real channel)"))
+    if is_stale and src != "captured here" and declared:
         stale.append(src)
 if stale:
     # The sign-in round as a BOUNDED task -- a list that shrinks on a good day,

@@ -138,12 +138,54 @@ staleness list, so a phantom channel appears in "WHAT I CAN SEE" reading as
 freshly covered. That is the coverage lie SS 2.5 exists to prevent, arriving
 through the mechanism built to prevent it.
 
-**The fix I would propose, preserving the stated intent:** record which DOOR a
-capture came through -- CLI versus `/api/capture` -- as a field. That is a fact
-about viki's own surfaces, not knowledge of a browser extension, so it keeps
-`viki_note.h`'s argument intact while removing the ambiguity. It is a schema
-plus producer change (`viki_note`, `viki_serve.c`, `edge/chrome/background.js`),
-which is why it is written down here rather than done.
+### Fixed 2026-08-27, and the first fix I proposed was wrong
+
+I first proposed recording **which DOOR** the capture came through -- CLI vs
+`/api/capture`. That does not work, and noticing why is the useful part: the
+door distinguishes HTTP from CLI, not *which channel*. The Chrome reader posts
+Facebook, Discord, D2L and Outlook through the same door, so it yields a
+channel named "http", which answers none of the questions coverage exists for.
+
+The producer has to **declare** itself. `viki_note.h` argued against exactly
+that -- *"derived, not reported ... keeps the CLI honest without coupling it to
+a browser extension it should know nothing about"* -- and that argument is
+weaker than it reads: viki already accepts `type`, `place`, `who`, `due` and
+`state` from the same producer as opaque strings. A `channel=discord` is not
+more coupling than `place=ranch`; viki does not know what Discord IS in either
+case, it groups by the label.
+
+So: `viki_note.channel`, `viki capture --channel`, `/api/capture?channel=`, and
+the reader passes `msg.source` instead of relying on its text prefix. **The
+prefix is kept** -- it is provenance a human and a structuring agent both read
+-- but coverage no longer has to guess from it.
+
+**The bracket survives as a MARKED fallback rather than being dropped.** Every
+note captured before this has no declared channel, and dropping the fallback
+would have silently shrunk what viki claims to see -- the opposite failure and
+just as dishonest. `viki coverage` prints `(inferred from text)` and `--json`
+carries `"declared": false` as a FIELD, not a decorated name, so a client
+parsing `source` cannot start receiving marker words it cannot tell from a
+channel name -- the same rule `/api/ask` follows for the fragment markers.
+
+**The judgment went to `assistant/`, where it belongs.** viki reports declared
+vs inferred and rules on neither. The brief SHOWS an inferred channel (hiding
+it would be its own coverage lie) and never puts one on the SIGN IN list,
+because sending someone to log in to "TODO" is how a brief stops being
+believed.
+
+### What that broke, and it is worth recording
+
+Excluding inferred channels from SIGN IN made **B5 fail** -- an existing
+assertion that a stale channel is named in a bounded sign-in list. Its fixture
+was a bracketed `[teams]` capture, i.e. legacy-shaped, so my rule killed the
+sign-in feature for every note the old reader wrote. The fixture now declares
+its channel, which is what the real reader does as of this change; in practice
+the list repopulates the first time the updated reader runs. Had I only run the
+new assertions I would have shipped that.
+
+H1-H7. H1-H4 fail against the pre-change binary (38/8); H7 is the control that
+the inferred channel still carries its note count, so the fix cannot be
+satisfied by suppression.
 
 ---
 ## I tuned two parameters against a metric that includes the held-out split

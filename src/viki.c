@@ -264,20 +264,26 @@ int main(int argc, char **argv){
     }
 
     if( strcmp(sub, "capture") == 0 ){
-        const char *zPlace=NULL,*zType=NULL,*zWho=NULL,*zDue=NULL,*zState=NULL;
+        const char *zPlace=NULL,*zType=NULL,*zWho=NULL,*zDue=NULL,*zState=NULL,*zChannel=NULL;
         int i;
-        if( argc < 3 ){ fprintf(stderr, "usage: viki capture \"<text>\" [--place P] [--type T] [--who W] [--due D] [--state S]\n"); return 1; }
+        if( argc < 3 ){ fprintf(stderr, "usage: viki capture \"<text>\" [--place P] [--type T] [--who W] [--due D] [--state S] [--channel C]\n"); return 1; }
         for( i = 3; i < argc; i++ ){
             if( strcmp(argv[i], "--place") == 0 && i+1 < argc ) zPlace = argv[++i];
             else if( strcmp(argv[i], "--type") == 0 && i+1 < argc ) zType = argv[++i];
             else if( strcmp(argv[i], "--who") == 0 && i+1 < argc ) zWho = argv[++i];
             else if( strcmp(argv[i], "--due") == 0 && i+1 < argc ) zDue = argv[++i];
             else if( strcmp(argv[i], "--state") == 0 && i+1 < argc ) zState = argv[++i];
+            /* A CONNECTOR NAMES ITSELF. A person typing at the CLI leaves this
+            ** unset, which is the honest answer for one, and coverage reports
+            ** them as "captured here". An ingest script -- the ICS shredder's
+            ** eventual adapter among them -- passes --channel so the brief can
+            ** say when that channel was last seen. */
+            else if( strcmp(argv[i], "--channel") == 0 && i+1 < argc ) zChannel = argv[++i];
             else { fprintf(stderr, "viki capture: unknown option '%s'\n", argv[i]); return 1; }
         }
         /* Deliberately does NOT open the cache db: capture must work on a
         ** phone in a field with no model, no network and nothing indexed. */
-        return viki_cmd_capture(".", argv[2], zPlace, zType, zWho, zDue, zState);
+        return viki_cmd_capture(".", argv[2], zPlace, zType, zWho, zDue, zState, zChannel);
     }
 
     if( strcmp(sub, "structure") == 0 ){

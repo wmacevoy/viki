@@ -40,8 +40,9 @@ FAR=$(date -u -v+90d +%Y-%m-%dT12:00:00Z 2>/dev/null || date -u -d '90 days' +%Y
 # Guessing it as "the first pending note" is wrong the moment more than one is
 # pending, which is every call after the first -- and it fails silently, so the
 # probe reports a ledger bug that is really a test bug.
-cap(){
-  id=$("$V" capture "$1" 2>/dev/null | awk '{print $1; exit}')
+cap(){   # cap "<text>" [extra viki capture args...]
+  txt="$1"; shift
+  id=$("$V" capture "$txt" "$@" 2>/dev/null | awk '{print $1; exit}')
   "$V" index . >/dev/null 2>&1      # structure resolves ids via the projection
   printf '%s' "$id"
 }
@@ -95,7 +96,13 @@ echo "== coverage is a PRIMITIVE: a query, with no judgment in it =="
 # The line viki must not cross. `coverage` reports last-seen times and nothing
 # else -- no thresholds, no "stale", no advice. The moment it needs a number
 # like "12 hours" it has become policy, and policy belongs in assistant/.
-T=$(cap "[teams] Karl asked for the rank data")
+# THE READER DECLARES ITS CHANNEL (2026-08-27). This fixture stands in for a
+# browser-reader capture, and the reader now passes --channel rather than only
+# prefixing the text. The prefix is kept because it is provenance a human and a
+# structuring agent both read; what changed is that coverage no longer has to
+# GUESS the channel from it. B5 depends on this: the brief will not send anyone
+# to sign in to a channel viki merely inferred.
+T=$(cap "[teams] Karl asked for the rank data" --channel teams)
 "$V" index . >/dev/null 2>&1
 COV=$("$V" coverage 2>&1)
 chk "C1 a channel-sourced note appears as its own source" \
@@ -328,6 +335,50 @@ chk "F4 CONTROL: the hostile capture was still STORED, not discarded" \
 # satisfied by breaking supersession outright -- which P4 also guards.
 chk "F5 CONTROL: a legitimate --closes still retires a promise" \
     "$(printf '%s' "$("$V" promises 2>/dev/null)" | grep -c 'call the vet')" "0"
+
+
+echo "== a channel is DECLARED by its producer, not guessed from text =="
+# WHY: `viki coverage` derived channel identity from a "[name] " prefix in note
+# text, which cannot be told from a bracket a person typed. Measured on main:
+# `viki capture "[TODO] fix the gate latch"` invented a channel named TODO and
+# brief.sh listed it under WHAT I CAN SEE as freshly covered -- the coverage
+# lie 2.5 exists to prevent, arriving through the mechanism built to prevent
+# it. Producers now declare themselves; the bracket survives as a marked
+# fallback so notes captured before the change do not silently vanish from
+# coverage.
+"$V" capture "declaredmarker from a real producer" --channel discord >/dev/null 2>&1
+"$V" capture "[PHANTOM] a bracket a person typed" >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+COV=$("$V" coverage 2>/dev/null)
+CJS=$("$V" coverage --json 2>/dev/null)
+
+chk "H1 a declared channel appears under its own name" \
+    "$(printf '%s' "$COV" | grep -c '^discord ')" "1"
+chk "H2 ...and is reported as DECLARED in json" \
+    "$(printf '%s' "$CJS" | grep -c '"source":"discord","last_seen":"[^"]*","notes":[0-9]*,"declared":true')" "1"
+# The bracket is still honoured -- dropping it would silently shrink coverage
+# for every note captured before this existed -- but it is MARKED.
+chk "H3 an inferred channel is still shown, and marked as inferred" \
+    "$(printf '%s' "$COV" | grep 'PHANTOM' | grep -c 'inferred')" "1"
+chk "H4 ...and json says declared:false rather than decorating the name" \
+    "$(printf '%s' "$CJS" | grep -c '"source":"PHANTOM","last_seen":"[^"]*","notes":[0-9]*,"declared":false')" "1"
+# THE ONE THAT MATTERS FOR THE PRODUCT: the brief must never send a person to
+# sign in to a channel that does not exist. viki reports the distinction and
+# judges nothing; the judgment is in assistant/, which is where it belongs.
+if [ -f "$ROOT/assistant/brief.sh" ]; then
+    CBRIEF=$(VIKI_BIN="$V" sh "$ROOT/assistant/brief.sh" --me mine 2>/dev/null)
+    chk "H5 the brief SHOWS an inferred channel (hiding it is its own lie)" \
+        "$(printf '%s' "$CBRIEF" | grep -c 'PHANTOM')" "1"
+    chk "H6 ...but never puts one on the SIGN IN list" \
+        "$(printf '%s' "$CBRIEF" | grep 'SIGN IN' | grep -c 'PHANTOM')" "0"
+else
+    sk "H5 (no assistant/brief.sh)"; sk "H6 (no assistant/brief.sh)"
+fi
+# CONTROL: this is marking, not suppression. A pre-existing bracketed note must
+# still count toward coverage, or the fix would have silently shrunk what viki
+# claims to see -- the opposite failure and just as dishonest.
+chk "H7 CONTROL: the inferred channel still carries its note count" \
+    "$(printf '%s' "$COV" | grep 'PHANTOM' | grep -c '1 note(s)')" "1"
 
 
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
