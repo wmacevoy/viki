@@ -408,6 +408,85 @@ By value per unit of work, not dependency:
 
 ---
 
+## 5a. WHERE THIS ACTUALLY STANDS -- 2026-08-28
+
+Written because Warren asked for a roadmap and said "I just keep asking and I
+get ... progress?". That is a fair complaint and this section is the answer.
+
+**The honest headline: two days of work fixed 17 defects and met ZERO new
+requirements.** Quality went up a lot; v1 did not move. Those are different
+axes and reporting the first as if it were the second is what made the position
+unreadable.
+
+### Requirement status, counted rather than described
+
+| | requirement | state | what is missing |
+|---|---|---|---|
+| 2.1 | promise ledger | **PARTIAL** | ledger reads `captures/*.md` only -- a commitment in a check-in or a calendar never reaches it; no counterparty field |
+| 2.2 | assistant is a party | **PARTIAL** | ledger distinguishes holders; the brief does not separate yours from mine |
+| 2.2b | continuity | **PARTIAL** | supersession works; no agent identity, no "what did I already try" |
+| 2.2c | authority has degrees | **UNMET** | only `observe` exists; `draft`/`act` need Q2/Q3 |
+| 2.3 | calendar + notification ingest | **MOSTLY UNMET** | shredder built; **nothing fetches anything** |
+| 2.4 | the clock, not the query | **PARTIAL** | brief works; nothing schedules it |
+| 2.5 | coverage | **PARTIAL** | calendar sources invisible to `viki coverage` |
+| 2.6 | capture that cannot be lost | **PARTIAL** | PWA holds captures in IndexedDB with **no outbound path** |
+| 2.7 | cross-project recall | **MET** | 111 projects, one question |
+| 2.8 | provenance | **UNMET** | `viki when`/`since` exist on a branch, not merged |
+| 2.9 | honest failure | **PARTIAL** | 2 of its 4 required messages do not exist |
+| 2.10 | encrypted at rest | **MET** | m1 E1-E4 |
+| 2.11 | one API, several consumers | **PARTIAL** | `/api/ask` + `/api/capture`; MCP designed, on a branch, not merged |
+
+**2 met, 8 partial, 3 unmet.**
+
+### What it costs to finish, in the only units that matter
+
+**CHEAP -- days, no decisions needed.** These are the ones to do next.
+- **2.4 scheduling.** A launchd plist / cron entry. The brief exists and works;
+  nothing runs it. This is the single highest ratio of felt value to effort in
+  the whole list.
+- **2.9's two missing messages.** "the cache never arrived" vs "I searched and
+  found nothing" is a distinction viki already has and discards. "sync is a
+  week stale" needs one timestamp written at `cache pull`.
+- **2.2's brief separation.** Presentation only; the ledger already
+  distinguishes parties.
+- **2.5 calendar coverage.** `viki coverage` queries `viki_note` only; the
+  shredder already records a per-row source for exactly this.
+
+**MEDIUM -- one to two weeks, work already half-done on branches.**
+- **2.8 provenance** (`wip/provenance`): 1032 lines written, 94 assertions, a
+  basename-collision defect and a trailing-slash defect to fix.
+- **2.11 MCP** (`wip/mcp`): a real stdio face; needs a `k` ceiling on every
+  tool, a capture guard, and honest `--nowrite`.
+- **2.6 PWA outbound**: the capture join is open; a phone's captures go nowhere.
+
+**EXPENSIVE -- weeks, and the cost is per-channel, not one-time.**
+- **2.3 ingest.** This is the presenting complaint and the biggest single item.
+  The shredder handles the *format*; nothing handles *acquisition*. Google
+  Calendar has a no-auth ICS URL and is the cheap first channel. O365, Gmail,
+  Teams each need either OAuth or a browser reader, and 5c already establishes
+  that half the channels cannot be read by a machine at all.
+- **2.2c draft/act.** Needs Q2/Q3 answered first, then a signing and audit
+  path. Do not start it before the questions close.
+
+### Blocked on Warren, and nothing below moves until these do
+
+- **Q1** what `vikiverse.net` is -- hub, directory, or download.
+- **Q2** who else is in a tribe in v1 -- your devices only, or people.
+- **Q3** does the API authenticate as Fossil users, or get its own tokens.
+
+Q2 and Q3 gate 2.2c entirely and the auth half of 2.11. Q1 gates nothing
+technical yet but decides the trust model everything else assumes.
+
+### What to cut, and why it is a cut rather than a deferral
+
+- **2.2c `draft` and `act`.** `observe` is the rung that needs no policy
+  decided first; the other two need a values decision and a signing story.
+- **The calendar interchange authoring half** (CALENDAR_DESIGN OQ-1). D-2
+  stands; the shredder is the part needed either way.
+- **Federation between tribes.** Already out of v1 and should stay out.
+
+---
+
 ## 5b. Roadmap
 
 Four phases. The split is **what is blocked on a decision** versus what is not —
