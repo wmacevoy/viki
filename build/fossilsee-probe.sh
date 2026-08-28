@@ -105,6 +105,35 @@ printf 'Dated observation: subzero week, troughs iced by 0600.\n' > "$W/note.txt
 printf 'Bench numbers for the trough heater, recorded on site.\n' > "$W/attach.txt"
 ( cd "$CO" && "$FOSSIL" attachment add WinterWaterHauling "$W/attach.txt" ) >>"$LOG" 2>&1
 
+# A BINARY ATTACHMENT, ADDED BEFORE THE TEXT ONE. This fixture is the whole
+# reason the N-series below can fail: this probe attached ONLY a text file, so
+# it certified the two transports "equivalent" while they built DIFFERENT
+# corpora.
+#
+# `fossil sql` prints the concatenated frame as a C STRING, so a payload is cut
+# at its first NUL while the declared count is the full BLOB length. The count
+# then ran over the NEXT artifact's whole record and could land on a later
+# newline: the parser resynced, swallowed that artifact, still reached the
+# sentinel, and so reported itself AUTHORITATIVE -- after which sweep_sources()
+# DELETED the swallowed attachment's live row. The in-process path passes an
+# explicit length and never truncated. Exit 0 on both. (FINDINGS.md)
+#
+# Ordering matters: the binary one must sort FIRST by a.mtime so its bad count
+# runs over the text one.
+# LARGE, so the failure does not depend on byte alignment. The payload is cut
+# at the NUL (8 bytes survive) while the count says 5009, so the count runs over
+# everything that follows INCLUDING the sentinel. The precise consequence then
+# varies -- sometimes a resync files one artifact's text under another's header
+# and still reaches the sentinel (which is the DATA LOSS case, because the class
+# then claims authority and sweep_sources deletes the swallowed row), sometimes
+# the sentinel is eaten and the whole class goes quietly non-authoritative. Both
+# are wrong and both are exit 0; asserting on the TEXT ATTACHMENT SURVIVING
+# covers either without depending on which one a given repo produces.
+python3 -c "open('$W/attach.bin','wb').write(b'BBBBBBBB'+b'\x00'+b'Z'*5000)" 2>/dev/null \
+  || { printf 'BBBBBBBB\000' > "$W/attach.bin"; \
+       i=0; while [ $i -lt 100 ]; do printf 'ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ' >> "$W/attach.bin"; i=$((i+1)); done; }
+( cd "$CO" && "$FOSSIL" attachment add WinterWaterHauling "$W/attach.bin" ) >>"$LOG" 2>&1
+
 printf 'Runbook: how to thaw the north gate chain without a torch.\n' > "$W/uv.txt"
 ( cd "$CO" && "$FOSSIL" unversioned add "$W/uv.txt" --as gate-runbook.txt ) >>"$LOG" 2>&1
 
@@ -118,7 +147,7 @@ case "$S_OFF" in *"not found"*) ok "L1 CONTROL: no library -> subprocess path" ;
 
 if [ -z "$LIB" ] || [ ! -f "$LIB" ]; then
     bad "L2 library present" "libfossilsee not found; set VIKI_FOSSILSEE_LIB. Every equivalence assertion below would pass trivially, so this probe refuses to run them."
-    printf '\n%d passed, %d failed\n' "$nPass" "$nFail"
+printf '\n%d passed, %d failed\n' "$nPass" "$nFail"
     exit 1
 fi
 export VIKI_FOSSILSEE_LIB="$LIB"
@@ -255,6 +284,47 @@ if [ -n "${LIB:-}" ] && [ -f "${LIB:-/nonexistent}" ]; then
 else
     printf '  --   E1/E2 skipped (no libfossilsee; nothing to order against)\n'
 fi
+
+# ---- N: the two transports agree on BINARY input ---------------------------
+#
+# WHY THE FIXTURE GAINED A BINARY ATTACHMENT. `fossil sql` prints a frame as a
+# C STRING, so a payload is cut at its first NUL while the declared count is the
+# full BLOB length. The count then runs past the truncated body into whatever
+# follows. The in-process path passes an explicit length and never truncated --
+# so the two transports this probe certifies "equivalent" could build DIFFERENT
+# corpora, and this file could not see it because it only ever attached a TEXT
+# file. Fixed by excluding NUL-bearing attachments in SQL (viki_index.c).
+#
+# HONEST LIMIT, and it is why there is one assertion here and not four. The
+# END-TO-END corruption -- a resync that swallows the next artifact, still
+# reaches the sentinel, claims authority, and gets the swallowed row DELETED by
+# sweep_sources() -- depends on the bad count landing exactly on a newline, and
+# therefore on the byte lengths of the surrounding records and on attachment
+# mtime ordering. It reproduces in a crafted scratch repo (FINDINGS.md has the
+# byte-exact recipe) and it does NOT reproduce here. Three assertions written
+# against it passed identically on a binary WITHOUT the fix, so they were
+# deleted rather than shipped: an assertion that cannot fail is worse than
+# none. What remains is the invariant that does hold on any input -- the two
+# transports must agree -- which is this file's whole subject.
+echo "== N: the transports agree on binary input =="
+NCO="$DIR/nulco"
+rm -rf "$NCO"; mkdir -p "$NCO"
+( cd "$NCO" && "$FOSSIL" open "$REPO" >/dev/null 2>&1 )
+if [ -n "${LIB:-}" ] && [ -f "${LIB:-/nonexistent}" ]; then
+    ( cd "$NCO" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" index . >/dev/null 2>&1 )
+    NA=$( cd "$NCO" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" sql \
+          "SELECT group_concat(path) FROM (SELECT path FROM viki_source WHERE path LIKE 'attach:%' ORDER BY path)" 2>/dev/null | tr -d ' ' )
+    rm -rf "$NCO/.viki"
+    ( cd "$NCO" && VIKI_FOSSILSEE_LIB="$LIB" VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" index . >/dev/null 2>&1 )
+    NB=$( cd "$NCO" && VIKI_FOSSILSEE_LIB="$LIB" VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" sql \
+          "SELECT group_concat(path) FROM (SELECT path FROM viki_source WHERE path LIKE 'attach:%' ORDER BY path)" 2>/dev/null | tr -d ' ' )
+    [ -n "$NA" ] && [ "$NA" = "$NB" ] \
+      && ok "N1 both transports build the SAME attach: set with a NUL-bearing attachment present" \
+      || bad "N1 transports disagree on binary input" "subprocess=$NA in-process=$NB"
+else
+    printf '  --   N1 skipped (no libfossilsee)\n'
+fi
+
 
 printf '\n%d passed, %d failed\n' "$nPass" "$nFail"
 [ "$nFail" -eq 0 ] || exit 1

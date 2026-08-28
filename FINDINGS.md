@@ -12,6 +12,68 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## A stack overflow in index_tickets(), from misreading what snprintf returns
+
+2026-08-27. `snprintf` returns the length it WOULD have written, and
+`index_tickets()` accumulated that:
+
+```c
+char buf[8192];
+off += snprintf(buf + off, sizeof(buf) - (size_t)off, ...);
+```
+
+A long ticket title drives `off` past `sizeof(buf)`, so the next call writes
+through an out-of-bounds `buf + off` with a size argument that has underflowed
+to about `SIZE_MAX`. Measured: a ~9 KB title wrote 877 bytes past an 8192-byte
+stack array and silently dropped the ticket comment from the index; a 200 KB
+title killed `viki index` with **SIGSEGV**, no other output.
+
+Fixed with a buffer sized from the actual field lengths, the way
+`index_ticket_changes()` already does. Clamping `off` would have stopped the
+overflow and kept the silent 8 KB truncation, which that function's own comment
+calls "invisible and total" -- so clamping was the wrong repair even though it
+is the smaller diff.
+
+Verified: 200 KB title now exits 0 and the comment is indexed.
+
+---
+## A NUL byte in one attachment could delete the next one
+
+2026-08-27. `fossil sql` prints a frame as a **C string**, so a payload is
+truncated at its first NUL -- while the declared count is the full BLOB length.
+The count then runs past the truncated body into whatever follows.
+
+The bad case is not "one attachment is lost". When the over-long count lands on
+a later newline the parser **RESYNCS**, swallows the following artifact's
+record, and still reaches `#viki-eof` -- so the class reports itself
+**AUTHORITATIVE**, and `sweep_sources()` deletes the swallowed attachment's
+live row while `gc_orphan_chunks()` reaps its chunks. Exit 0 throughout.
+
+It also broke an equivalence claim: the in-process `libfossilsee` path passes an
+explicit length and never truncates, so **the two transports
+`build/fossilsee-probe.sh` certifies equivalent built different corpora.** That
+probe only ever attached a TEXT file.
+
+Fixed by excluding NUL-bearing attachments in SQL
+(`instr(cast(content(a.src) AS BLOB), x'00') = 0`) rather than by encoding
+them: such an attachment is binary and `looks_binary()` would reject it anyway,
+so the class stays authoritative and nothing indexable is lost.
+
+### What I could NOT assert, and did not pretend to
+
+The end-to-end corruption depends on the bad count landing exactly on a
+newline, so it depends on the byte lengths of surrounding records and on
+attachment mtime ordering. It reproduces in a crafted scratch repo and **does
+not reproduce in `fossilsee-probe.sh`'s fixture.** I wrote three assertions
+against it and they passed identically against a binary WITHOUT the fix, so
+they were deleted rather than shipped. What remains is the one invariant that
+holds on any input -- the two transports must agree -- plus a binary attachment
+in the fixture so that assertion has something to be about.
+
+Recording the deletion because it is the more useful half: three green
+assertions that cannot fail would have made this look permanently fixed.
+
+---
 ## 28 green assertions proved the ICS parser and never ran the read surface
 
 2026-08-27, the same day the shredder landed. A hunt agent found five defects

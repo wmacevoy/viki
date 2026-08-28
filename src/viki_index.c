@@ -1349,23 +1349,46 @@ static int index_tickets(sqlite3 *db, viki_embedder *emb, const char *modelId, i
                 }
                 isHeader = 0;
             }else if( uuidCol >= 0 && uuidCol < nFields ){
-                char buf[8192];
+                /* SIZED FROM THE FIELDS, NOT A FIXED 8 KB STACK ARRAY.
+                **
+                ** This was `char buf[8192]` with `off += snprintf(buf + off,
+                ** sizeof(buf) - off, ...)`, and snprintf returns the length it
+                ** WOULD have written -- so a long ticket title drove off past
+                ** sizeof(buf), the next call wrote through an out-of-bounds
+                ** `buf + off`, and its size argument underflowed to ~SIZE_MAX.
+                ** Measured 2026-08-27: a ~9 KB title wrote 877 bytes past the
+                ** array and silently dropped the ticket comment from the
+                ** index; a 200 KB title killed `viki index` with SIGSEGV.
+                **
+                ** Clamping the offset would stop the overflow and keep the
+                ** silent 8 KB truncation, which index_ticket_changes()' own
+                ** comment calls "invisible and total". So: malloc from the
+                ** actual field lengths, the way that function already does. */
+                char *buf;
+                size_t nBuf = 64;
                 int off = 0;
                 int i;
                 char virtualPath[512];
                 for( i = 0; i < nFields; i++ ) unquote_fossil(fields[i]);
+                for( i = 0; i < nFields; i++ ) nBuf += strlen(fields[i]) + 16;
+                buf = malloc(nBuf);
+                if( !buf ){
+                    fprintf(stderr, "viki index: out of memory composing ticket %s -- skipped\n",
+                            fields[uuidCol]);
+                }else{
+                    off += snprintf(buf + off, nBuf - (size_t)off, "Ticket %s\n", fields[uuidCol]);
+                    if( statusCol >= 0 && statusCol < nFields && fields[statusCol][0] )
+                        off += snprintf(buf + off, nBuf - (size_t)off, "Status: %s\n", fields[statusCol]);
+                    if( titleCol >= 0 && titleCol < nFields && fields[titleCol][0] )
+                        off += snprintf(buf + off, nBuf - (size_t)off, "Title: %s\n", fields[titleCol]);
+                    if( commentCol >= 0 && commentCol < nFields && fields[commentCol][0] )
+                        snprintf(buf + off, nBuf - (size_t)off, "%s\n", fields[commentCol]);
 
-                off += snprintf(buf + off, sizeof(buf) - (size_t)off, "Ticket %s\n", fields[uuidCol]);
-                if( statusCol >= 0 && statusCol < nFields && fields[statusCol][0] )
-                    off += snprintf(buf + off, sizeof(buf) - (size_t)off, "Status: %s\n", fields[statusCol]);
-                if( titleCol >= 0 && titleCol < nFields && fields[titleCol][0] )
-                    off += snprintf(buf + off, sizeof(buf) - (size_t)off, "Title: %s\n", fields[titleCol]);
-                if( commentCol >= 0 && commentCol < nFields && fields[commentCol][0] )
-                    snprintf(buf + off, sizeof(buf) - (size_t)off, "%s\n", fields[commentCol]);
-
-                snprintf(virtualPath, sizeof(virtualPath), "ticket:%s", fields[uuidCol]);
-                (*nItems)++;
-                index_text_blob(db, virtualPath, buf, strlen(buf), 0, emb, modelId, nChunked);
+                    snprintf(virtualPath, sizeof(virtualPath), "ticket:%s", fields[uuidCol]);
+                    (*nItems)++;
+                    index_text_blob(db, virtualPath, buf, strlen(buf), 0, emb, modelId, nChunked);
+                    free(buf);
+                }
             }
 
             if( atEnd ) break;
@@ -1745,6 +1768,26 @@ static int index_attachments(sqlite3 *db, viki_embedder *emb, const char *modelI
         "    || char(10) || content(a.src)"
         "  FROM attachment a JOIN blob b ON b.uuid = a.src"
         " WHERE a.isLatest AND a.src IS NOT NULL AND a.src <> ''"
+        /* NO NUL BYTES THROUGH THE FRAME, and this is data loss if it is
+        ** dropped. `fossil sql` prints the concatenated value as a C STRING,
+        ** so a payload is truncated at its first NUL -- while the declared
+        ** count is the full BLOB length. The count then runs past the
+        ** truncated body, over the NEXT artifact's entire record, and can land
+        ** exactly on a later newline: the parser RESYNCS, swallows that
+        ** artifact, still reaches the sentinel, and therefore reports itself
+        ** AUTHORITATIVE -- so sweep_sources() deletes the swallowed
+        ** attachment's live row and gc_orphan_chunks() reaps its chunks.
+        ** Measured 2026-08-27, exit 0 throughout.
+        **
+        ** It also made the two transports disagree: the in-process
+        ** libfossilsee path passes an explicit length and does NOT truncate,
+        ** so the paths `build/fossilsee-probe.sh` calls equivalent built
+        ** different corpora. That probe only ever attached a TEXT file.
+        **
+        ** Excluded in SQL rather than encoded, because a NUL-bearing
+        ** attachment is binary and looks_binary() would reject it anyway --
+        ** the class stays authoritative and nothing indexable is lost. */
+        "   AND instr(cast(content(a.src) AS BLOB), x'00') = 0"
         " ORDER BY a.mtime;"
         "SELECT '" VIKI_FRAME_EOF "';";
     char *zOut;
