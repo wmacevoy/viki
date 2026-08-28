@@ -560,6 +560,14 @@ is no path-traversal surface). The search page renders results via `textContent`
 — indexed content is untrusted markup, never `innerHTML`. It is loopback-only
 with no auth *by design*; internet exposure goes behind the Caddy instance
 `server/setup-viki-serve.sh` configures, not hand-rolled TLS/auth in C.
+**And that is settled policy, not a temporary state** (VIKIVERSE_V1 §5a1,
+2026-08-28): **viki builds NO auth, in v1 or later.** A fronting container —
+nanoclaw, or Caddy — makes the access decisions, because SYNC.md §0b
+establishes a viki-layer control is a guardrail and not a boundary, and a
+container is a layer that can actually hold one. It also bounds response size
+by route and rate, which is the property V2_DESIGN §6b is really protecting —
+more cleanly than a capability token inside viki, which would be a second
+identity system to keep in step with Fossil's.
 
 ## Conventions and traps
 
