@@ -500,7 +500,9 @@ have seen a channel it has not.
 - **Q2** who else is in a tribe in v1 -- your devices and agents only, or other
   people. Still open, and it gates 2.2c entirely: multi-person makes revocation
   urgent rather than deferred.
-- ~~**Q3** Fossil users or tokens~~ **SETTLED 2026-08-28 -- see 5a1.**
+- ~~**Q3** Fossil users or tokens~~ **SETTLED 2026-08-28: neither, in viki.**
+  Auth belongs to a fronting container (nanoclaw / Caddy); viki stays loopback
+  and unauthenticated. See 5a1.
 
 ### What to cut, and why it is a cut rather than a deferral
 
@@ -521,7 +523,47 @@ v1 is building for a consumer that does not exist**, and the answer to "which
 model" only becomes load-bearing when hosted tribes arrive -- two releases
 away, which is long enough that any decision made now would be re-made then.
 
-When it does arrive, the answer is **Fossil users for IDENTITY, and short-lived
+**AMENDED SAME DAY, and the amendment is better than what it replaces.**
+
+> *"nanoclaw is the auth band: add a server container to control access is much
+> safer, so is tribes.lifebynumbers.com and vikiverse.net (eventually)."*
+> -- Warren, 2026-08-28
+
+**Auth is a CONTAINER concern, not viki's.** viki stays loopback and
+unauthenticated by design; a fronting container -- nanoclaw, or the Caddy
+instance `server/setup-viki-serve.sh` already configures -- makes the access
+decisions. `tribes.lifebynumbers.com` is the concrete first hosted instance and
+`vikiverse.net` follows; both are past v1.
+
+**This is the same shape as SCOPES.md's whole argument, and I missed it.** I
+recommended building capability tokens INSIDE viki. But SYNC.md 0b already
+establishes that viki-layer policy is a guardrail and not a boundary -- a tribe
+member holds the key and has SQL. Building auth in viki would be constructing a
+boundary at a layer that structurally cannot hold one. A container CAN: it
+terminates TLS, it decides who connects, and it can refuse a route outright.
+
+It also answers V2 6b's aggregation problem more cleanly than a token does. The
+property to bound is RESPONSE SIZE, and a fronting proxy expresses that
+natively -- deny the route, cap the rate, bound the body -- without viki
+growing an identity system it would then have to keep in step with Fossil's.
+
+So the settled answer is narrower than the one below and strictly better:
+
+- **viki builds NO auth.** Not in v1, and not later either.
+- **Identity, when it is needed, is still Fossil's** -- the tribe IS a Fossil
+  repo and that is where membership and revocation already live. The container
+  authenticates against it rather than inventing a parallel user store.
+- **Capability lives in the container**, as route and rate policy, which is
+  where a limit on a caller that holds no key is actually enforceable.
+
+The reasoning below is kept because the *identity* half survives intact and
+because the argument for why a Fossil permission cannot express "may ask, may
+not dump" is what makes the container's route policy necessary rather than
+merely convenient.
+
+---
+
+The superseded recommendation was **Fossil users for IDENTITY, and short-lived
 capability tokens DERIVED from that identity for a remote face** -- not a
 parallel user store.
 
