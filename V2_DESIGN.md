@@ -41,6 +41,27 @@ Every claim below is tagged:
 
 ---
 
+## 0-. WHAT V2 IS NOT -- settled 2026-08-28
+
+> *"vikiverse.net is V2 - hosted tribes, launchpad for new tribes,
+> documentation."* ... *"vikiverse is probably v3, actually."* -- Warren
+
+**Hosted tribes, the launchpad and the public documentation are V3, not V2.**
+This file therefore carries NO hosting obligation: nothing in SS 1-9 requires a
+server Warren runs, an account system, or a public endpoint. SS 6a's decision
+that MCP is a LOCAL STDIO face is consistent with that and is now the whole
+story for v2 rather than a first step toward a remote one.
+
+Two consequences worth stating so they are not re-derived:
+
+- **The remote authenticated hub is out of scope twice over** -- SS 6a already
+  refused to build it first, and it now belongs to a release after this one.
+- **Auth is not a v2 problem either.** VIKIVERSE_V1 SS 5a1 settles the model
+  (Fossil for identity, capability tokens for scope, when a remote face
+  exists); nothing in v2 needs it.
+
+---
+
 ## 0. The two problems v2 exists to solve
 
 1. **Resources are not uniform across peers.** A laptop can run a much better

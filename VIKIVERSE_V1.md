@@ -426,7 +426,7 @@ unreadable.
 | 2.2 | assistant is a party | **PARTIAL** | ledger distinguishes holders; the brief does not separate yours from mine |
 | 2.2b | continuity | **PARTIAL** | supersession works; no agent identity, no "what did I already try" |
 | 2.2c | authority has degrees | **UNMET** | only `observe` exists; `draft`/`act` need Q2/Q3 |
-| 2.3 | calendar + notification ingest | **MOSTLY UNMET** | shredder built; **nothing fetches anything** |
+| 2.3 | calendar + notification ingest | **RESCOPED 2026-08-28 -- see below** | acquisition is L3 and NOT viki's; the viki-side half is largely met |
 | 2.4 | the clock, not the query | **PARTIAL** | brief works; nothing schedules it |
 | 2.5 | coverage | **PARTIAL** | calendar sources invisible to `viki coverage` |
 | 2.6 | capture that cannot be lost | **PARTIAL** | PWA holds captures in IndexedDB with **no outbound path** |
@@ -459,23 +459,48 @@ unreadable.
   tool, a capture guard, and honest `--nowrite`.
 - **2.6 PWA outbound**: the capture join is open; a phone's captures go nowhere.
 
-**EXPENSIVE -- weeks, and the cost is per-channel, not one-time.**
-- **2.3 ingest.** This is the presenting complaint and the biggest single item.
-  The shredder handles the *format*; nothing handles *acquisition*. Google
-  Calendar has a no-auth ICS URL and is the cheap first channel. O365, Gmail,
-  Teams each need either OAuth or a browser reader, and 5c already establishes
-  that half the channels cannot be read by a machine at all.
-- **2.2c draft/act.** Needs Q2/Q3 answered first, then a signing and audit
-  path. Do not start it before the questions close.
+**EXPENSIVE -- and this band is now nearly empty.**
+- **2.2c draft/act.** Needs Q2 answered, then a signing and audit path. Do not
+  start it before that closes.
 
-### Blocked on Warren, and nothing below moves until these do
+### 2.3 RESCOPED -- ingest is not viki's problem
 
-- **Q1** what `vikiverse.net` is -- hub, directory, or download.
-- **Q2** who else is in a tribe in v1 -- your devices only, or people.
-- **Q3** does the API authenticate as Fossil users, or get its own tokens.
+> *"injest is not viki's problem, it is the job of the humans/agents using
+> viki."* -- Warren, 2026-08-28
 
-Q2 and Q3 gate 2.2c entirely and the auth half of 2.11. Q1 gates nothing
-technical yet but decides the trust model everything else assumes.
+**This removes the largest single cost from v1 and it is a scope correction,
+not a deferral.** It is also what SCOPES.md said all along and what QUEUE 52
+half-said: the adapters FETCH, which is L3, and viki DERIVES. The section above
+had it as "weeks, per-channel" because it counted acquisition as viki's job.
+
+What 2.3 asks of **viki** is therefore: accept what a connector sends, store it
+without losing it, and report honestly what it has and has not seen. That is
+`viki capture`, `/api/capture`, the ICS shredder, and `viki coverage` -- all
+built. The remaining viki-side gap is small and is listed in the CHEAP band:
+calendar sources are invisible to `viki coverage`.
+
+What it asks of **Warren and his agents** is a connector per channel, and the
+per-channel cost is real but it is L3 work that does not block v1 and does not
+live in this repo. `connectors/` is where one would go, beside `assistant/`.
+
+**Consequence for the acceptance test.** 2.3's original wording measures
+success by "how often he disagrees" with what was ingested -- a judgment about
+categorisation, which is the agent's, not viki's. The viki-side acceptance is
+narrower and checkable: nothing accepted is lost, and coverage never claims to
+have seen a channel it has not.
+
+### Blocked on Warren
+
+- ~~**Q1** what `vikiverse.net` is~~ **ANSWERED 2026-08-28: hosted tribes, a
+  launchpad for new tribes, and documentation -- and it is probably V3, not
+  V2.** So it is two releases away, not one. It removes the hosted-hub trust
+  model from v1 entirely, and it also means V2's own scope (V2_DESIGN.md:
+  escalation by resources, range-addressed chunks, the MCP face) carries no
+  hosting obligation either.
+- **Q2** who else is in a tribe in v1 -- your devices and agents only, or other
+  people. Still open, and it gates 2.2c entirely: multi-person makes revocation
+  urgent rather than deferred.
+- ~~**Q3** Fossil users or tokens~~ **SETTLED 2026-08-28 -- see 5a1.**
 
 ### What to cut, and why it is a cut rather than a deferral
 
@@ -484,6 +509,48 @@ technical yet but decides the trust model everything else assumes.
 - **The calendar interchange authoring half** (CALENDAR_DESIGN OQ-1). D-2
   stands; the shredder is the part needed either way.
 - **Federation between tribes.** Already out of v1 and should stay out.
+
+### 5a1. Q3 settled: Fossil identity, capability tokens only when a remote face exists
+
+**The first thing to notice is that v1 has no authenticated remote surface at
+all.** MCP is a LOCAL STDIO face (V2 6a) -- no network, nothing to
+authenticate. `viki serve` is loopback-only by design, and internet exposure
+goes behind the Caddy instance `server/setup-viki-serve.sh` configures rather
+than hand-rolled TLS in C. `vikiverse.net` is now V3. So **building API auth in
+v1 is building for a consumer that does not exist**, and the answer to "which
+model" only becomes load-bearing when hosted tribes arrive -- two releases
+away, which is long enough that any decision made now would be re-made then.
+
+When it does arrive, the answer is **Fossil users for IDENTITY, and short-lived
+capability tokens DERIVED from that identity for a remote face** -- not a
+parallel user store.
+
+*Identity is Fossil's* because the tribe already IS a Fossil repo. Membership,
+capabilities (the `y` capability that `viki cache push` needs is a live
+example), and revocation all exist there and are already the thing SYNC.md
+treats as authoritative. A second user table would be a second claim about who
+someone is, and this repo's most repeated failure is one claim living in two
+places and rotting in one.
+
+*Capability is a token* because a Fossil identity cannot express the property
+V2 6b just established as the one that matters. 6b keeps `viki sql` off the MCP
+face because of **aggregation** -- `ask --k 5` returns five chunks and `sql`
+returns the corpus -- and the correction to it records that excluding `sql` is
+insufficient, since an unbounded `grep --k` does the same thing. A Fossil user
+with read access has SQL anyway, via `libfossilsee` or plain `fossil`; there is
+no Fossil permission that means "may ask, may not dump". A token minted for a
+face CAN mean that, and SYNC.md 0b's own reasoning is why it is worth having:
+against a client that holds no key, a server-side scope is a REAL capability
+limit rather than a guardrail.
+
+**So the split is: Fossil answers *who*, the token answers *how much*.** They
+are not alternatives; the token is scoped authority over an identity that
+already exists.
+
+**What would change this:** if Q2 comes back "only my devices and agents", even
+the token half is premature -- every holder is already trusted with the tribe
+key, and a capability bound is a courtesy rather than a control. That is one
+more reason Q2 is the question that still matters and Q3 was not.
 
 ---
 
