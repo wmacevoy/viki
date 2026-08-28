@@ -25,7 +25,30 @@
 **
 ** Stack cost: sizeof(viki_ask_result) is 1128 bytes, so the pool is ~90 KB.
 ** `ask --verse` already heap-allocates its pool for exactly this reason. */
-#define VIKI_CANDIDATE_POOL 80
+#define VIKI_CANDIDATE_POOL 150
+
+/* PER-LEG BUDGET, and it is what makes the three legs actually three.
+**
+** The pool was one first-come array: run_fts() filled it, find_or_add()
+** returned NULL once full, and the literal and vector legs could then only
+** RE-RANK what BM25 had already chosen -- they could not introduce a document
+** BM25 missed. On any corpus where the OR-of-terms MATCH selects at least
+** VIKI_CANDIDATE_POOL distinct chunks, which the note above calls the normal
+** case (a median of 244 of 245), hybrid retrieval was BM25 with extra steps.
+**
+** Measured 2026-08-27, one semantically-relevant document sharing no
+** vocabulary with the query, against N lexical fillers that do:
+**
+**     79 fillers   the target is returned
+**     85 fillers   the target is ABSENT -- unreachable at any --k
+**
+** That is one defect on three surfaces at once, since viki_ask_query() is the
+** single implementation behind the CLI, /api/ask and the wasm edge.
+**
+** Each leg now fills at most VIKI_LEG_BUDGET distinct chunks, so a leg can
+** always contribute even when another has plenty to say. The pool holds the
+** union with room to spare; RRF then fuses across legs as it always did. */
+#define VIKI_LEG_BUDGET 40
 
 /* The FTS5 MATCH expression `viki ask`'s keyword leg actually runs.
 **

@@ -12,6 +12,51 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## The vector and literal legs could not add a document, only re-rank BM25's
+
+2026-08-27. `find_or_add()` returns NULL once the candidate pool is full
+(`viki_ask.c:82`), and `run_fts()` ran first and filled it. So on any corpus
+where the OR-of-terms MATCH selects at least a poolful of distinct chunks --
+which `viki_ask.h` itself calls the normal case, "a median of 244 of 245" --
+the literal and vector legs could only REORDER what BM25 had already chosen.
+They could not introduce a document BM25 missed. One defect on three surfaces,
+since `viki_ask_query()` is the single implementation behind the CLI,
+`/api/ask` and the wasm edge.
+
+Measured on a corpus of one semantically-relevant document plus N lexical
+fillers that match the query's words:
+
+```
+85 fillers, pre-fix    best cosine 0.2198   target absent at any --k
+85 fillers, post-fix   best cosine 0.3841   vector leg reaches its own candidates
+```
+
+**The reported confidence was wrong too.** `viki_ask.h` argues `--min-cos` is
+applied to the raw cosine because that is "comparable across corpora, unlike
+bm25()'s corpus-dependent magnitude". It was being computed over whatever BM25
+had put in the pool, so it was not comparable to anything.
+
+Fixed with a per-leg budget (`VIKI_LEG_BUDGET` 40, pool 150) instead of one
+first-come array.
+
+### What I could not establish, stated plainly
+
+**The aggregate benefit is unproven on the eval corpus.** Same corpus
+(`fp 1b1e3c962c1e8cad`), DEV split before and after: recall@1 0.323,
+recall@5 0.516, recall@k 0.677, MRR 0.398 -- **byte-identical**. That is the
+honest expected result: 245 chunks cannot starve an 80-slot pool the way 300
+documents can. TEST moved (recall@5 0.667 -> 0.750) but TEST is not for
+deciding, per the rule this file already carries.
+
+**And I could not build a stable assertion for it.** The obvious one -- best
+cosine must not depend on how many lexical fillers exist -- holds on BOTH
+binaries in a second corpus, so it does not discriminate. The defect is real by
+code reading (`find_or_add` returns NULL when full, run_fts goes first) and by
+the starve2 repro above; it is corpus-dependent enough that no fixture I built
+fails reliably. **No assertion shipped**, rather than a green one that proves
+nothing.
+
+---
 ## A stack overflow in index_tickets(), from misreading what snprintf returns
 
 2026-08-27. `snprintf` returns the length it WOULD have written, and

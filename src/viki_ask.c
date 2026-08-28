@@ -642,7 +642,10 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
     ** now a true prefix: k truncates a fixed-depth ranking. The pool array is
     ** VIKI_CANDIDATE_POOL-sized regardless, so this costs a little more SQL at
     ** small k and no memory at all. */
-    int poolSize = VIKI_CANDIDATE_POOL;
+    /* PER-LEG, not shared. See VIKI_LEG_BUDGET in viki_ask.h: a single
+    ** first-come pool let the keyword leg fill every slot and reduced the
+    ** other two to re-ranking its choices. */
+    int poolSize = VIKI_LEG_BUDGET;
     int nOut;
 
     ftsQuery = build_or_query(zQuery);
@@ -650,12 +653,15 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
         run_fts(db, ftsQuery, poolSize, pool, &n);
         free(ftsQuery);
     }
+    /* Each leg below is given a budget RELATIVE to what is already in the pool,
+    ** so "40 more" means 40 more rather than "40 total, of which BM25 already
+    ** took 40". run_* stop at their limit counted in DISTINCT chunks. */
 
     {
         char *azTerm[VIKI_LIT_MAX_TERMS];
         int nTerm = select_literal_terms(zQuery, azTerm);
         int i;
-        run_literal(db, azTerm, nTerm, poolSize, pool, &n);
+        run_literal(db, azTerm, nTerm, n + poolSize, pool, &n);
         for( i = 0; i < nTerm; i++ ) free(azTerm[i]);
     }
 
@@ -668,7 +674,7 @@ int viki_ask_query_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder
         char zEpoch[192];
         viki_cache_epoch_id(emb, zEpoch, sizeof(zEpoch));
         if( viki_embed(emb, zQuery, qvec) == 0 ){
-            run_vector(db, qvec, viki_embedder_dim(emb), zEpoch, poolSize, pool, &n);
+            run_vector(db, qvec, viki_embedder_dim(emb), zEpoch, n + poolSize, pool, &n);
         }
         free(qvec);
     }
