@@ -12,6 +12,86 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## Fossil's /json/finfo silently omits every file deletion, and the CLI finfo does not
+
+2026-08-29. `json_finfo.c` computes `(mlink.fid==0) AS isDel` and passes it to
+`json_artifact_status_to_string()`, which can return `"added"`, `"modified"` or
+`"removed"`. The same query then inner-joins `blob b` on `b.rid=mlink.fid` --
+and a deletion has `fid==0` while no blob has `rid==0`, so the join removes
+exactly the rows `isDel` exists to flag. The column is dead code and `"removed"`
+is unreachable from that route.
+
+**The wrong assumption it replaces:** that the CLI and JSON faces of `finfo`
+report the same history, so measuring one measures both. They do not. `finfo.c`
+has an explicit `mlink.fid>0 OR NOT EXISTS(...)` clause and gets deletions
+right; only the JSON path is wrong. This is why the earlier measurement that
+"`fossil json finfo` does not report deletions" read as a design limit of the
+JSON API rather than as a bug with a two-line fix.
+
+Repro -- one file added, modified, then removed:
+
+```sh
+fossil init r.fossil && mkdir co && cd co && fossil open ../r.fossil
+echo one > f.txt && fossil add f.txt && fossil commit -m add
+echo two >> f.txt                    && fossil commit -m mod
+fossil rm f.txt                      && fossil commit -m del
+fossil json finfo --name f.txt       # two rows: added, modified
+fossil finfo f.txt                   # three -- the CLI sees the deletion
+```
+
+The fix is `LEFT JOIN blob b ON b.rid=mlink.fid` in place of the inner join;
+`build/patches/fossil-json-finfo-deletions.patch` in fossil-see carries it, and
+the rebuilt binary returns the third row with `state="removed"`. On a deletion
+row `b.uuid` and `b.size` are NULL, `json_new_string()` maps NULL to NULL, and
+`cson_object_set()` unsets the key -- so the row carries `state` and no `uuid`,
+which is correct because a removal names no content.
+
+**Live consequence for viki:** any provenance work that reads file history
+through the JSON API sees additions and modifications and is blind to
+removals -- i.e. it cannot tell "this file never existed" from "this file was
+deleted", which is the distinction provenance is for.
+
+---
+## A wiki page cannot carry the text/calendar mimetype, and that gate is load-bearing
+
+2026-08-29. `wiki_filter_mimetypes()` (`wiki.c:176`) allowlists only `azStyles`
+plus `text/x-markdown` and `text/plain`; **anything else is silently rewritten
+to `text/x-fossil-wiki`** with no error and no warning. It is the single
+chokepoint for all 13 call sites -- CLI, `/wikiedit`, the JSON API, technotes,
+and the search indexer.
+
+Measured both directions on the same scratch repo, reading the `N` card
+straight out of the artifact:
+
+```
+patched fossil    fossil wiki create Cal cal.ics --mimetype text/calendar
+                  -> N text/calendar
+stock fossil      same command
+                  -> no N card at all (silently text/x-fossil-wiki)
+control           --mimetype text/plain      -> N text/plain
+                  --mimetype text/x-markdown -> N text/x-markdown
+```
+
+The controls matter: they prove the gate is what drops `text/calendar`, not a
+broken invocation. **Read the `N` card by artifact hash, not by rid** --
+`fossil artifact` takes a hash, and passing a `tagxref.rid` to it reports "no N
+card" for *every* page, which is how this first measured as "the mimetype is
+never preserved for anything".
+
+**The patch was written, verified, and then deliberately backed out**, which is
+the finding worth keeping. Warren's call: *"fossil is not calendar aware, an
+honest viki feature."* Teaching the substrate one content type it has no use
+for is exactly the SCOPES violation the placement test catches -- Fossil is L0
+and holds bytes without an opinion about them.
+
+**So viki must not mark calendar-ness in the artifact's `N` card.** That field
+is not writable without patching Fossil, and it is the wrong place regardless:
+calendar-ness is viki's projection to compute (D-2), not Fossil's to store.
+`fossil-see`'s abandoned `feature/calendar` branch reached the same patch and
+the same "do not add it to `azStyles`" conclusion independently, and left it
+uncommitted for the same reason.
+
+---
 ## The vector and literal legs could not add a document, only re-rank BM25's
 
 2026-08-27. `find_or_add()` returns NULL once the candidate pool is full

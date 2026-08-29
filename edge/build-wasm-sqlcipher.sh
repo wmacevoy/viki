@@ -27,8 +27,20 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 IMG=emscripten/emsdk:3.1.74
-SQLC="${VIKI_SQLCIPHER_DIR:-$ROOT/../fossil-sqlcipher-libressl/vendor/sqlcipher-libressl}"
-LRSRC="${VIKI_LIBRESSL_SRC:-$ROOT/../fossil-sqlcipher-libressl/vendor/libressl-cache/libressl-4.2.1}"
+
+# The fossil-see sibling checkout.  BOTH names are tried: the directory was
+# renamed fossil-sqlcipher-libressl -> fossil-see on 2026-08-29, and an older
+# clone still has the long name.  Only the local path changed -- the GitHub
+# repo is still wmacevoy/fossil-sqlcipher-libressl -- so neither is wrong.
+FS="${VIKI_FOSSILSEE_DIR:-}"
+if [ -z "$FS" ]; then
+  for c in "$ROOT/../fossil-see" "$ROOT/../fossil-sqlcipher-libressl"; do
+    [ -d "$c" ] && { FS="$c"; break; }
+  done
+  : "${FS:=$ROOT/../fossil-see}"
+fi
+SQLC="${VIKI_SQLCIPHER_DIR:-$FS/vendor/sqlcipher-libressl}"
+LRSRC="${VIKI_LIBRESSL_SRC:-$FS/vendor/libressl-cache/libressl-4.2.1}"
 VW="$ROOT/edge/vendor-wasm"
 docker info >/dev/null 2>&1 || { echo "docker daemon is not running"; exit 2; }
 [ -f "$SQLC/sqlite3.c" ] || { echo "no SQLCipher amalgamation at $SQLC"; exit 2; }
@@ -57,7 +69,7 @@ fi
 
 # ---- 2. stage SQLCipher's amalgamation + openssl headers ------------------
 cp "$SQLC/sqlite3.c" "$SQLC/sqlite3.h" "$SQLC/sqlite3ext.h" "$VW/"
-[ -d "$VW/openssl" ] || cp -R "$ROOT/../fossil-sqlcipher-libressl/vendor/libressl-build-out/include/openssl" "$VW/"
+[ -d "$VW/openssl" ] || cp -R "$FS/vendor/libressl-build-out/include/openssl" "$VW/"
 
 # ---- 3. viki edge ---------------------------------------------------------
 echo "==> Compiling viki edge against SQLCipher"

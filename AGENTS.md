@@ -214,8 +214,9 @@ build/
                   F1-F3 are the degradation controls (unloadable library must fall back,
                   not crash); S1 pins that viki still links no fossil library at build
                   time. 19 assertions. `sh build/fossilsee-probe.sh <empty-dir>`. Needs a
-                  built libfossilsee ($VIKI_FOSSILSEE_LIB, else ../fossil-sqlcipher-libressl
-                  /build/dist/) and REFUSES to run the equivalence half without one rather
+                  built libfossilsee ($VIKI_FOSSILSEE_LIB, else ../fossil-see/build/dist/,
+                  with ../fossil-sqlcipher-libressl still searched as the pre-rename
+                  name) and REFUSES to run the equivalence half without one rather
                   than reporting a vacuous pass. IN CI, in the `m1` job (which already builds
                   fossil-see) on linux-x86_64 and macos-arm64 -- so unlike the other probes
                   this one does not depend on someone remembering to run it
@@ -286,7 +287,7 @@ experiments/      FFI_RISK.md's proof-of-concept (in-process fossil), inherited 
                   wrap requirement is obsolete upstream anyway. KICKOFF.md's "re-run
                   experiments/harness.c" gate is closed BY REFERENCE instead -- see the last
                   bullet of "Not yet built" for the argument and the measurements.
-                  The live harness is ../fossil-sqlcipher-libressl/embed/harness.c (ALL PASS).
+                  The live harness is ../fossil-see/embed/harness.c (ALL PASS).
 server/           hub deployment scripts: setup-hub.sh (fossil server + Caddy TLS, D-8) and
                   setup-viki-serve.sh (adds viki serve behind the same Caddy, Basic Auth) -- see
                   SERVER_SETUP.md; inherited from fossil-app (pre-encryption; see ENCRYPTION.md TODOs)
@@ -1632,7 +1633,7 @@ the hardest thing for a later agent to recover is why something was NOT done.
      update below.
   What remains genuinely not-built is the FFI *work*, which KICKOFF.md
   puts out of scope for M1 anyway. **Before resuming it, read
-  `../fossil-sqlcipher-libressl/embed/README.md`, NOT
+  `../fossil-see/embed/README.md`, NOT
   `./FFI_RISK.md`** -- the details below say why. (`FFI_RISK.md` lives at
   the **repo root**, not in `experiments/`; `experiments/` holds only
   `db-embed.patch` and `harness.c`. This file said `experiments/FFI_RISK.md`
@@ -1665,7 +1666,7 @@ the hardest thing for a later agent to recover is why something was NOT done.
   A sibling bug of the same class (`create_admin_log_table()`'s `once`
   guard) was found but deliberately left unfixed -- narrower blast radius,
   not yet exercised by any test. **Before resuming FFI/embedding work on
-  viki, read `../fossil-sqlcipher-libressl/embed/README.md` in full**
+  viki, read `../fossil-see/embed/README.md` in full**
   rather than `./FFI_RISK.md` -- it has the current bug list,
   the required shim rules (which grew since this snapshot: two more
   `fossil_reset_*()` calls are now required per command, not just

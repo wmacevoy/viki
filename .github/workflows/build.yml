@@ -499,7 +499,8 @@ jobs:
       # both jobs.
       #
       # VIKI_FOSSILSEE_LIB is set EXPLICITLY. The probe's own fallback
-      # search looks for a sibling ../fossil-sqlcipher-libressl checkout,
+      # search looks for a sibling ../fossil-see checkout (renamed from
+      # ../fossil-sqlcipher-libressl on 2026-08-29; both names are searched),
       # which does not exist in CI -- and if the library is not found the
       # probe refuses to run its equivalence half rather than passing
       # vacuously, so a wrong path here shows up as a failure, not a

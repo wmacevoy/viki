@@ -1,6 +1,6 @@
 # iOS FFI feasibility — experiment results
 
-> **STALE as of 2026-08-13 (later that same day) — read `../fossil-sqlcipher-libressl/embed/README.md`
+> **STALE as of 2026-08-13 (later that same day) — read `../fossil-see/embed/README.md`
 > instead.** This file is a frozen snapshot from when this experiment lived in `fossil-app`, before it
 > was promoted to a shared `embed/` directory in `fossil-sqlcipher-libressl`. The cross-repo bug this
 > file's "Required shim rules" section lists as an open risk (`db_repository_filename`'s `zRepo`) is

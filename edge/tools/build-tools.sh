@@ -10,7 +10,19 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT="${1:-$ROOT/build/dist}"
-V="${VIKI_SQLCIPHER_VENDOR:-$ROOT/../fossil-sqlcipher-libressl/vendor}"
+
+# The fossil-see sibling checkout.  BOTH names are tried: the directory was
+# renamed fossil-sqlcipher-libressl -> fossil-see on 2026-08-29, and an older
+# clone still has the long name.  Only the local path changed -- the GitHub
+# repo is still wmacevoy/fossil-sqlcipher-libressl -- so neither is wrong.
+FS="${VIKI_FOSSILSEE_DIR:-}"
+if [ -z "$FS" ]; then
+  for c in "$ROOT/../fossil-see" "$ROOT/../fossil-sqlcipher-libressl"; do
+    [ -d "$c" ] && { FS="$c"; break; }
+  done
+  : "${FS:=$ROOT/../fossil-see}"
+fi
+V="${VIKI_SQLCIPHER_VENDOR:-$FS/vendor}"
 SQLC="$V/sqlcipher-libressl"
 LR="$V/libressl-build-out"
 [ -f "$SQLC/sqlite3.c" ] || { echo "no SQLCipher amalgamation at $SQLC"; exit 2; }

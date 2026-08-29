@@ -42,7 +42,14 @@ export VIKI_FOSSIL_BIN="$FOSSIL"
 # Locate the library unless the caller pinned one.
 LIB="${VIKI_FOSSILSEE_LIB:-}"
 if [ -z "$LIB" ]; then
-    for c in "$ROOT/../fossil-sqlcipher-libressl/build/dist/libfossilsee.dylib" \
+    # Both directory names are searched: the sibling checkout was renamed
+    # fossil-sqlcipher-libressl -> fossil-see on 2026-08-29, and an older
+    # clone (or another machine) still has the long name.  The GitHub repo
+    # is still wmacevoy/fossil-sqlcipher-libressl -- only the local path
+    # changed -- so neither name is wrong, and searching both costs nothing.
+    for c in "$ROOT/../fossil-see/build/dist/libfossilsee.dylib" \
+             "$ROOT/../fossil-see/build/dist/libfossilsee.so" \
+             "$ROOT/../fossil-sqlcipher-libressl/build/dist/libfossilsee.dylib" \
              "$ROOT/../fossil-sqlcipher-libressl/build/dist/libfossilsee.so"; do
         [ -f "$c" ] && { LIB="$c"; break; }
     done

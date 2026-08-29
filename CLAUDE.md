@@ -546,7 +546,7 @@ extractors silently produced nothing (FINDINGS.md).
 
 Everything *else* Fossil-related is still a subprocess, and the wider
 in-process track remains unfinished — before touching it, read
-`../fossil-sqlcipher-libressl/embed/README.md`, **not**
+`../fossil-see/embed/README.md`, **not**
 `FFI_RISK.md`/`experiments/`, which are a frozen and now-outdated snapshot.
 
 **sqlite-ndvss is statically linked**, compiled with `-DSQLITE_CORE` and
