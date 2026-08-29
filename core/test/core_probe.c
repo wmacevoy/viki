@@ -411,6 +411,70 @@ int main(void){
         sqlite3_close(dbG);
     }
 
+    printf("\n== N: ONE model, its own database, MANY tribes ==\n");
+    {
+        /* THE MODEL IS NOT PART OF A STORE. D-11 pins one model universal
+        ** across peers, so a copy per tribe is N copies of a byte-identical
+        ** artifact. Keeping it in its own database and retaining the embedder
+        ** OUTSIDE the stores is the shape that follows -- and it needs no
+        ** change to core, because VikiEmbed and VikiStore are separate retain
+        ** stacks with independent lifetimes. */
+        sqlite3 *dbM=0, *dbX=0, *dbY=0;
+        VikiStore sX, sY;
+        int a=0, b=0;
+        sqlite3_open(":memory:",&dbM);
+        sqlite3_open(":memory:",&dbX); sX.db=dbX; viki_attach(dbX);
+        sqlite3_open(":memory:",&dbY); sY.db=dbY; viki_attach(dbY);
+        emb.xEmbed=stubEmbed; emb.pApp=0; emb.nDim=DIM; emb.zModel="shared-v1";
+        {
+            RETAIN_BEGIN(VikiEmbed, &emb, ge);      /* ONE model, outermost */
+            { RETAIN_BEGIN(VikiStore, &sX, g1);
+              viki_note("the gate latch sticks below freezing");
+              viki_reindex(0,&n); viki_count(VIKI_N_VECTOR,0,&a);
+              RETAIN_END(g1); }
+            { RETAIN_BEGIN(VikiStore, &sY, g2);
+              viki_note("the invoice payment is late");
+              viki_reindex(0,&n); viki_count(VIKI_N_VECTOR,0,&b);
+              RETAIN_END(g2); }
+            check(a>0 && b>0,
+                  "N1 one retained embedder serves SEVERAL stores -- no duplication",
+                  "a tribe went unembedded");
+            RETAIN_END(ge);
+        }
+        /* CONTROL: outside that scope the same stores degrade, which is what
+        ** proves M1 was the retained embedder and not something ambient. */
+        { RETAIN_BEGIN(VikiStore, &sX, g3);
+          viki_note("a second note, with no model retained");
+          viki_reindex(0,&n);
+          check(nOf(VIKI_N_MODEL,0)==1,
+                "N1b CONTROL: with the embedder out of scope, new ranges carry no model",
+                "it embedded anyway");
+          RETAIN_END(g3); }
+
+        /* A BLOB SURVIVES A ROUND TRIP BYTE-FOR-BYTE, which is what makes
+        ** "store the .onnx and hand ORT the pointer" possible at all. */
+        {
+            sqlite3_stmt *q = 0;
+            unsigned char aIn[1024], *pOut; int nOut = 0, i2, bSame = 1;
+            for(i2=0;i2<1024;i2++) aIn[i2] = (unsigned char)(i2*31);
+            sqlite3_exec(dbM,"CREATE TABLE model(name TEXT PRIMARY KEY, bytes BLOB)",0,0,0);
+            sqlite3_prepare_v2(dbM,"INSERT INTO model VALUES('m.onnx',?1)",-1,&q,0);
+            sqlite3_bind_blob(q,1,aIn,sizeof aIn,SQLITE_STATIC);
+            sqlite3_step(q); sqlite3_finalize(q);
+            sqlite3_prepare_v2(dbM,"SELECT bytes FROM model WHERE name='m.onnx'",-1,&q,0);
+            if( sqlite3_step(q)==SQLITE_ROW ){
+                pOut = (unsigned char*)sqlite3_column_blob(q,0);
+                nOut = sqlite3_column_bytes(q,0);
+                if( nOut!=(int)sizeof aIn || memcmp(pOut,aIn,sizeof aIn)!=0 ) bSame = 0;
+            } else bSame = 0;
+            sqlite3_finalize(q);
+            check(bSame && nOut==1024,
+                  "N2 a blob round-trips byte-for-byte, uncompressed and contiguous",
+                  "the bytes changed -- CreateSessionFromArray could not use them");
+        }
+        sqlite3_close(dbM); sqlite3_close(dbX); sqlite3_close(dbY);
+    }
+
     printf("\n== O: observability -- writes only, on commit ==\n");
     {
         sqlite3 *dbO = 0; VikiStore sO; Seen seen; int tok = 0;

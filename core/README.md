@@ -441,3 +441,63 @@ A stale `$VIKI_CONTEXT` — a killed parent, a copied environment — **degrades
 opening the store directly** (F1), the same way a missing embedder degrades
 retrieval instead of refusing it. Failing there would make an exported variable
 a permanent trap.
+
+---
+
+## The model belongs in its own database, not in each store
+
+> *"put onnx in a viki-core viki database. can this be used directly as an
+> uncompressed blob? this saves duplication between viki databases, since now
+> opening more than one is not a problem."* — Warren, 2026-08-29
+
+**Yes to all three, and the third is the strongest.** Measured on a 90 MB blob:
+
+```
+db holding a 90 MB blob        90.2 MB on disk   (uncompressed, stored as-is)
+sqlite3_column_blob (no mmap)     20.0 ms
+sqlite3_column_blob (mmap on)     10.3 ms
+mmap of a plain file               1.2 ms
+```
+
+SQLite stores blobs **verbatim** — 0.2% overhead — and `sqlite3_column_blob()`
+hands back a contiguous pointer, which is exactly what
+`OrtCreateSessionFromArray(env, bytes, len, …)` wants. So "used directly" is
+true in the sense that matters: no decompression, no temp file, no copy of your
+own.
+
+It is **not** zero-copy. A blob larger than a page lives on overflow pages, so
+SQLite assembles it — one full-size copy, 10–20 ms, versus ~1 ms of lazy paging
+for a mmap'd file. Against ORT's own 100–500 ms parse that is 2–10%, and the
+buffer can usually be released once the session exists.
+
+### The duplication argument is the real win, and it is bigger than disk
+
+D-11 pins **one model, universal across peers** — so a copy inside every
+tribe's store is N copies of a byte-identical artifact. Keeping it in its own
+database and opening that alongside is the shape that follows, and **it needs
+no change to core**: `VikiEmbed` and `VikiStore` are separate retain stacks with
+independent lifetimes, so the model is simply retained *outside* the stores.
+
+```c
+RETAIN_BEGIN(VikiEmbed, &emb, ge);          /* ONE model, one ORT session */
+    RETAIN_BEGIN(VikiStore, &tribeA, g1);  …  RETAIN_END(g1);
+    RETAIN_BEGIN(VikiStore, &tribeB, g2);  …  RETAIN_END(g2);
+RETAIN_END(ge);
+```
+
+That saves the copy **on disk, in RAM, and in ORT session count** — one session
+serves every tribe the process touches. N1 asserts it; N1b is the control that
+the same stores degrade once the embedder leaves scope, so N1 is about the
+retained embedder and not something ambient.
+
+And "opening more than one is not a problem" is exactly right, and worth naming
+as a contrast: that was the *entire* difficulty in the fossil-embedding track —
+`Global g`, 66 cached prepared statements, one repository per process. Here a
+store is a `sqlite3*` the host opened, so there is nothing to be a problem.
+
+### What this does not solve
+
+The tribe's store stops being self-contained: a store copied to another machine
+needs the model database too. That is already the shape D-12 chose — the model
+distributes separately, checksummed against a pinned manifest — so this changes
+the container, not the contract.
