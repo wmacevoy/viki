@@ -501,3 +501,80 @@ The tribe's store stops being self-contained: a store copied to another machine
 needs the model database too. That is already the shape D-12 chose — the model
 distributes separately, checksummed against a pinned manifest — so this changes
 the container, not the contract.
+
+---
+
+## Three answers: the word, the size, and scratch
+
+### The word: **diary**, and it earns it
+
+`SOFTWARE-ENGINEERING-2` §4 says conceptual integrity shows up first in
+vocabulary, so this is worth settling rather than drifting. **A viki database is
+a diary**, and the argument is that every property of the noun is already a
+property of the thing:
+
+| a diary | a viki store |
+|---|---|
+| append-only — you do not un-write yesterday | grow-only; superseded assertions stay |
+| dated | every assertion carries `ts`, and `rank` is usually lexical time |
+| one writer | one peer writes it; **merging diaries** is what a tribe is |
+| kept, not filed | queried, not read start to finish |
+
+It also fixes `viki_merge` in the mind: you are merging diaries, and union is
+merge because two people writing the same sentence wrote one fact.
+
+**Do not use "journal".** In a library whose contract is SQLite, "journal"
+already means the rollback journal, and `PRAGMA journal_mode=WAL` is in the
+CLI's own open path. A word that means two things in one file is the drift
+§4 warns about.
+
+`SCOPES` §4 already defines **a tribe** as one L0 instance; that stays. A tribe
+is the set of diaries that merge. A diary is one peer's file.
+
+### The size: 23 MB, not 90 — my benchmark was misleading
+
+The 90 MB figure came from a blob of *random bytes* I generated to test
+throughput. The real pinned model is **23,026,053 bytes** — `all-MiniLM-L6-v2`,
+`model_qint8_arm64.onnx`. That is 23% of a <100 MB payload budget, not 90%.
+
+Compression on the real file:
+
+```
+raw                   23,026,053 bytes
+gzip -6               17,464,371          75.8%
+zstd -19              16,919,669          73.5%
+gunzip to memory           79.3 ms
+```
+
+So "compressed, then uncompressed as needed" buys **~6 MB for ~79 ms per
+load**. Worth having, and worth being honest about the ranking: **quantisation
+already did the heavy lifting.** A float32 MiniLM-L6 is ~90 MB; int8 took it to
+23 MB — a 4× cut, against gzip's 1.3×. If the payload budget ever binds, the
+next lever is the model, not the container.
+
+The shape, when it is worth doing, is the one core already uses everywhere:
+**ship compressed, materialise uncompressed on first use, treat the
+uncompressed copy as a projection** — derived, disposable, regenerable, exactly
+`viki_chunk`'s standing. And it is a **host** concern, not core's: the host
+already opens the model database and supplies the embedder callback, so it
+already owns decompression. Core does not grow a zlib dependency for this.
+
+### Scratch: it needs no feature
+
+A scratch diary is **a store you either merge or delete**. That is machinery
+that already exists, so half-formed thinking has somewhere to go without a
+`draft` flag, a second table, or a rule about what `ask` should hide.
+
+```sh
+VIKI_STORE=scratch.db viki note "half-formed: maybe the hinge, not the latch"
+viki merge scratch.db     # promote it -- union, so it is idempotent
+rm scratch.db             # or it never happened
+```
+
+J1–J5 assert it, including the two controls that matter: deleting the scratch
+file after a merge does **not** un-promote (the merge copied assertions, it did
+not link to them), and a scratch store that was never merged leaves **no
+trace**.
+
+That second one is the property worth having. Scratch you cannot discard
+cleanly is not scratch — it is just more memory you now have to curate.

@@ -63,6 +63,28 @@ case "$SOCK" in
   *)        bad "S3 CONTROL: unrecognised context form" "$SOCK" ;;
 esac
 
+echo "== J: scratch work =="
+# A SCRATCH DIARY IS NOT A FEATURE. It is a store you either merge or delete,
+# which is machinery that already exists -- so half-formed thinking has
+# somewhere to go without a "draft" flag, a second table, or a rule about what
+# ask should hide.
+VIKI_STORE="$D/scratch.db" "$V" note "half-formed: maybe the hinge, not the latch" >/dev/null
+VIKI_STORE="$D/scratch.db" "$V" note "TODO check the north gate too" >/dev/null
+chk "$(VIKI_STORE=$D/scratch.db "$V" count assert)" "2" "J1 a scratch store takes notes independently"
+BEFORE=$("$V" count assert)
+"$V" merge "$D/scratch.db" >/dev/null
+chk "$("$V" count assert)" "$((BEFORE+2))" "J2 merging PROMOTES the scratch work"
+"$V" reindex >/dev/null
+"$V" ask "hinge" >/dev/null 2>&1 && ok "J3 ...and it is searchable afterwards" \
+                                  || bad "J3 promoted notes are not searchable"
+rm -f "$D/scratch.db"*
+chk "$("$V" count assert)" "$((BEFORE+2))" "J4 CONTROL: deleting the scratch file does not un-promote"
+# and a scratch store that was NEVER merged simply vanishes with the file
+VIKI_STORE="$D/thrown.db" "$V" note "an idea that went nowhere" >/dev/null
+AFTER=$("$V" count assert)
+rm -f "$D/thrown.db"*
+chk "$("$V" count assert)" "$AFTER" "J5 CONTROL: an unmerged scratch store leaves no trace"
+
 echo "== F: degradation =="
 # A stale context -- a killed parent, a copied environment -- must degrade to
 # opening the store directly. Failing would make an exported variable a
