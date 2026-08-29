@@ -12,6 +12,95 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## Against a real life, the VECTOR LEG made retrieval WORSE
+
+2026-08-29. Every retrieval measurement this project has ever run asks viki
+about viki: `test/retrieval-eval.sh` builds its corpus from this repo's own
+docs, wiki and check-ins, and its 59 questions are about chunking, epochs and
+sqlite-vec. That corpus has no **when** in it anywhere, and no question whose
+answer spans two documents written by two different people.
+
+So the first corpus of Warren's actual Gmail, Drive and Calendar -- 10
+documents, 17 chunks, built 2026-08-29 -- was the first time the tool was
+pointed at the thing it exists for. `test/life-eval.sh` is that measurement,
+22 questions in three classes.
+
+**BM25-only beat hybrid overall**, which is the reverse of every result on the
+repo corpus:
+
+| | n | recall@1 | recall@5 | MRR | missing |
+|---|---|---|---|---|---|
+| **BM25-only** ALL | 22 | **0.818** | 0.909 | **0.845** | 1 |
+| **hybrid** ALL | 22 | 0.682 | 0.864 | 0.767 | 0 |
+| BM25-only `fact` | 12 | 0.833 | 1.000 | 0.878 | 0 |
+| hybrid `fact` | 12 | 0.833 | 0.917 | 0.887 | 0 |
+| BM25-only `time` | 6 | **1.000** | 1.000 | **1.000** | 0 |
+| hybrid `time` | 6 | 0.667 | 1.000 | 0.806 | 0 |
+| BM25-only `cross` | 4 | 0.500 | 0.500 | 0.516 | **1** |
+| hybrid `cross` | 4 | 0.250 | 0.500 | 0.351 | 0 |
+
+Seven queries moved. The vector leg **demoted four exact-match answers** and
+**rescued two documents BM25 could not reach at all**:
+
+    am I available the weekend of september 12    bm25=1     hybrid=4
+    what is happening this week                   bm25=1     hybrid=3
+    when is my next bait run                      bm25=1     hybrid=2
+    what is Renee Edel's phone number             bm25=5     hybrid=7
+    who do I call in an emergency at the bait site bm25=3    hybrid=2
+    what do I have on september 12                bm25=16    hybrid=11
+    is anything scheduled while I am travelling   bm25=MISS  hybrid=16
+
+**DO NOT GENERALISE THIS.** n=22 over 17 chunks: with `VIKI_CANDIDATE_POOL` at
+80 the entire corpus is in the pool for every query, so this measures *fusion
+order alone* and nothing about recall at scale. Two documents changing places
+moves a class figure by 0.25. The honest claim is narrow and still worth
+having: **on a small personal corpus of dated, human-written artifacts, RRF
+fusion with a topical embedder costs rank-1 precision on the questions a person
+actually asks most** -- and the repo corpus could not have shown it.
+
+### The real defect underneath: viki has no notion of NOW
+
+`grep -n "time(\|localtime\|strftime\|today" src/viki_ask.c` returns seven
+lines and **all seven are the words "unknown" and "now" inside comments**.
+Every date in the corpus is a string competing on lexical similarity. So
+"when is my next bait run" cannot prefer Sep 1 over the August run reports; it
+has no way to know today is Aug 29. It scored rank 1 under BM25 by accident --
+the schedule simply shares more words with the query than the report does.
+
+`viki ask` also **never reads `cal_event`**. `grep -n "cal_event" src/viki_ask.c`
+is empty, while `src/viki_cal.c`, `viki_db.c`, `viki_note.c` and `viki.c` all
+reference it. The ICS shredder built the structured tier CALENDAR_DESIGN_V2
+describes and then nothing that answers questions was wired to it -- so a
+calendar indexed as *text* is the only calendar retrieval can see. That is why
+`what do I have on september 12` ranks the calendar file 11th of 17 while a
+programming-languages syllabus ranks higher.
+
+### The harness found the bug in its own first run
+
+`queries.tsv` was written into the corpus directory, `viki index .` swept it up,
+and it then **won 11 of 22 queries** -- a file listing the questions is the most
+lexically similar document to every one of them. It read as `recall@5 0.864`
+and meant nothing. `life-eval.sh` now REFUSES to run when the query file is
+inside the corpus, with both controls verified. Note the direction: the
+contamination *depressed* ALL recall@1 to 0.318 by stealing rank 1 from the
+real answers, so it did not look like the flattering bug it was.
+
+### Repro
+
+```sh
+# corpus = one file per artifact; the query file must live OUTSIDE it
+export VIKI_MODEL_DIR=build/dist/model
+sh test/life-eval.sh ~/life-corpus ~/queries.tsv     # hybrid
+env -u VIKI_MODEL_DIR sh test/life-eval.sh ~/life-corpus ~/queries.tsv   # control
+```
+
+**The weakest part of this measurement, stated plainly:** the questions and the
+answer key were both written by the same agent that read the corpus, so they
+test what that agent thought was findable. Warren's own questions, written
+without seeing the documents, would be a strictly better test and have not been
+run.
+
+---
 ## "push/pull forks" is three claims, and only ONE of them is intrinsic
 
 2026-08-29. `viki cache push/pull` shells out to `fossil uv add`, `uv sync` and
