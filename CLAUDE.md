@@ -550,9 +550,15 @@ That is cache *fragmentation*, not corruption, and not an epoch bump — but the
 header formats are frozen, and changing one must be called out as
 cache-fragmenting.
 
-**`viki index` NEVER FORKS.** It cannot on iOS, which is the platform the
-in-process path exists for, so a subprocess fallback that only runs elsewhere
-is not a fallback. As of 2026-08-29 every one of the nine content classes is
+**FORK PER TRIBE OR PER CONNECTION, NEVER PER OPERATION** (settled
+2026-08-29). An earlier rule here was "viki never forks"; that was rescinded by
+Warren the same day, because `viki serve` has to fork early or exec for each
+hosted connection and pretending otherwise buys nothing. Forking once to host a
+repo is architecture. Forking once per unversioned blob was the bug.
+
+**`viki index` still forks zero times**, and that is the rule above applied
+rather than a separate goal: indexing is one operation, so a per-artifact
+subprocess in it is always wrong. As of 2026-08-29 every one of the nine content classes is
 read through `fossil_sql_framed()` — **zero** `fork()`/`execvp()` on the whole
 index path, measured with a counting wrapper as `$VIKI_FOSSIL_BIN`. The last
 two per-artifact shell-outs went in that round: `fossil wiki list` +
@@ -569,8 +575,12 @@ authorized" through `libfossilsee` while the identical query succeeds through
 less than the other. `sqlite_master` is allowed on both, which is why
 `ticket_has_col()` parses DDL instead of asking SQLite directly.
 
-**What still forks, and it is not the index path:** `viki cache push/pull`
-(`fossil uv add/sync/export`) and the `viki-identity` signature verifier.
+**What still forks, and under the rule above only one of them is wrong:**
+`viki cache push/pull` (`fossil uv add/sync/export`) and the `viki-identity`
+signature verifier. `uv sync` is a per-tribe operation and forking for it is
+fine; `uv export` is a per-blob read and is the one that should not fork --
+`build/substrate-probe.sh` S9 reports it LIFTED and names the fix as
+`fossilsee_uv_get()`, a patch to libfossilsee rather than viki-side SQL.
 Neither is reachable from `libfossilsee`'s v0 ABI, which is read-only SQL by
 design — `embed/fossilsee.h` puts `wiki/sync/clone` out of scope because they
 need an argv shim and output capture, and that work is open upstream in
