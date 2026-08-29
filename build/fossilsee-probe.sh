@@ -333,5 +333,47 @@ else
 fi
 
 
+# == P: viki NEVER FORKS ==================================================
+#
+# viki cannot fork on iOS, which is the entire reason the in-process path
+# exists. Every dev machine and CI runner CAN fork, so a subprocess creeping
+# back into the index path is invisible here and fails only on the platform
+# nobody tests first. VIKI_NO_FORK=1 turns every remaining fork site into a
+# loud refusal, which makes that platform property assertable on a laptop.
+#
+# P2 IS WHAT KEEPS P1 HONEST. A no-fork run that quietly indexed only the
+# checkout files would satisfy "exits 0" while proving nothing, so P1
+# compares the SOURCE SET against an unrestricted run rather than the exit
+# status, and P2 asserts the refusal is real by removing the library.
+echo "== P: viki never forks (the iOS constraint, asserted here) =="
+PCO="$DIR/noforkco"
+rm -rf "$PCO"; mkdir -p "$PCO"
+( cd "$PCO" && "$FOSSIL" open "$REPO" >/dev/null 2>&1 )
+if [ -n "${LIB:-}" ] && [ -f "${LIB:-/nonexistent}" ]; then
+    ( cd "$PCO" && VIKI_FOSSILSEE_LIB="$LIB" VIKI_MODEL_DIR="$DIR/nomodel" \
+        "$VIKI" index . >/dev/null 2>&1 )
+    PA=$( cd "$PCO" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" sql \
+          "SELECT group_concat(path) FROM (SELECT path FROM viki_source ORDER BY path)" 2>/dev/null | tr -d ' ' )
+    rm -rf "$PCO/.viki"
+    ( cd "$PCO" && VIKI_NO_FORK=1 VIKI_FOSSILSEE_LIB="$LIB" VIKI_MODEL_DIR="$DIR/nomodel" \
+        "$VIKI" index . >/dev/null 2>&1 )
+    PB=$( cd "$PCO" && VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" sql \
+          "SELECT group_concat(path) FROM (SELECT path FROM viki_source ORDER BY path)" 2>/dev/null | tr -d ' ' )
+    [ -n "$PA" ] && [ "$PA" = "$PB" ] \
+      && ok "P1 VIKI_NO_FORK=1 indexes the SAME source set (no fork needed)" \
+      || bad "P1 a no-fork run indexes less than an unrestricted one" "forking=$PA no-fork=$PB"
+
+    rm -rf "$PCO/.viki"
+    POUT=$( cd "$PCO" && VIKI_NO_FORK=1 VIKI_FOSSILSEE_LIB=/nonexistent \
+            VIKI_MODEL_DIR="$DIR/nomodel" "$VIKI" index . 2>&1 )
+    printf '%s' "$POUT" | grep -q 'REFUSING TO FORK' \
+      && ok "P2 CONTROL: with no library, VIKI_NO_FORK=1 refuses LOUDLY" \
+      || bad "P2 no-fork without a library did not report refusing to fork" "$POUT"
+else
+    printf '  --   P1 skipped (no libfossilsee)\n'
+    printf '  --   P2 skipped (no libfossilsee)\n'
+fi
+
+
 printf '\n%d passed, %d failed\n' "$nPass" "$nFail"
 [ "$nFail" -eq 0 ] || exit 1

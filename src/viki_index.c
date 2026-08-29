@@ -643,6 +643,7 @@ static char *run_capture(char *const argv[], int *pExit, size_t *pnOut){
 
     if( pExit ) *pExit = -1;
     if( pnOut ) *pnOut = 0;
+    if( viki_fork_forbidden(argv[0]) ) return NULL;
     if( pipe(pipefd) != 0 ) return NULL;
     pid = fork();
     if( pid < 0 ){ close(pipefd[0]); close(pipefd[1]); return NULL; }

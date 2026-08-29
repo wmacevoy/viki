@@ -157,6 +157,26 @@ const char *viki_model_dir(void){
     return "build/dist/model";
 }
 
+/* See viki_cache.h. Reports on stderr and returns 1 when forking is
+** forbidden, so each call site can fail the way its own contract wants
+** rather than all of them sharing one exit path. */
+int viki_fork_forbidden(const char *zWhat){
+#ifdef VIKI_NO_FORK
+    int bNo = 1;
+#else
+    const char *z = getenv("VIKI_NO_FORK");
+    int bNo = (z && *z && strcmp(z, "0") != 0);
+#endif
+    if( !bNo ) return 0;
+    fprintf(stderr,
+        "viki: REFUSING TO FORK (VIKI_NO_FORK) -- wanted to run: %s\n"
+        "viki: This build must reach Fossil in-process via libfossilsee.\n"
+        "viki: Set VIKI_FOSSILSEE_LIB, or unset VIKI_NO_FORK to allow the\n"
+        "viki: subprocess fallback on a platform that has fork().\n",
+        zWhat ? zWhat : "(unnamed subprocess)");
+    return 1;
+}
+
 /* Runs argv (NULL-terminated) as a child process, waits for it, and
 ** returns its exit code (or -1 on fork/exec failure). stdout/stderr are
 ** inherited so `fossil uv ...` output is visible directly -- these are
@@ -166,9 +186,11 @@ const char *viki_model_dir(void){
 ** the hub has never held is fossil_fatal + "no such uv-file", which
 ** would otherwise look like a real error to whoever reads the log). */
 static int run_ex(char *const argv[], int bQuiet){
-    pid_t pid = fork();
+    pid_t pid;
     int status;
 
+    if( viki_fork_forbidden(argv[0]) ) return -1;
+    pid = fork();
     if( pid < 0 ){
         perror("viki: fork");
         return -1;
@@ -645,6 +667,7 @@ static char *run_capture_text(char *const argv[], int *pExit){
     size_t cap = 65536, len = 0;
 
     if( pExit ) *pExit = -1;
+    if( viki_fork_forbidden(argv[0]) ) return NULL;
     if( pipe(pipefd) != 0 ) return NULL;
     pid = fork();
     if( pid < 0 ){ close(pipefd[0]); close(pipefd[1]); return NULL; }

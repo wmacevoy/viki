@@ -69,6 +69,24 @@ const char *viki_fossil_binary(void);
 ** resolvable user, even for read-only queries. See FINDINGS.md. */
 const char *viki_fossil_user(void);
 
+/* THE FORK GUARD. Returns non-zero if this build/run is forbidden to fork.
+**
+** viki must not fork: it cannot on iOS, which is the whole reason the
+** in-process libfossilsee path exists. But every developer machine and CI
+** runner CAN fork, so a subprocess that creeps back into a hot path is
+** invisible there and only fails on the one platform nobody tests first.
+**
+** Setting VIKI_NO_FORK=1 turns every remaining fork site into a loud,
+** immediate failure naming the command it wanted to run, which makes the
+** iOS constraint something a probe can assert on a laptop instead of a
+** property we hope still holds. Compile with -DVIKI_NO_FORK to make it
+** unconditional, which is what an actual iOS build would do.
+**
+** It is NOT the default: `viki cache push/pull` still shells out to
+** `fossil uv`, and that is not fixable inside viki -- libfossilsee's v0 ABI
+** is read-only SQL by design and puts sync out of scope. */
+int viki_fork_forbidden(const char *zWhat);
+
 /* $VIKI_MODEL_DIR if set and non-empty, else "build/dist/model"
 ** (relative to cwd, i.e. inside the checkout).
 **
