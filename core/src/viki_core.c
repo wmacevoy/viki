@@ -441,6 +441,109 @@ VikiStatus viki_reindex(int *pnChunked){
     return VIKI_OK;
 }
 
+/* ---- withdrawal ------------------------------------------------------
+**
+** WHICH FTS5 DELETE IDIOM IS USED MATTERS MORE THAN THE ORDER, and the
+** predecessor's rule ("delete FTS first, then the chunk") is about the OTHER
+** idiom. Measured here rather than inherited:
+**
+**   DELETE FROM f WHERE rowid=?          re-reads the content table to learn
+**                                        which tokens to drop. If the content
+**                                        row is already gone it succeeds,
+**                                        changes nothing, and the withdrawn
+**                                        text STAYS SEARCHABLE. Order is
+**                                        load-bearing.
+**
+**   INSERT INTO f(f,rowid,text)          takes the text EXPLICITLY, so it
+**        VALUES('delete',?,?)            needs no content row at all. Order
+**                                        does not matter.
+**
+** This code uses the second, so it is immune to the trap -- but only as long
+** as it keeps using it. The probe therefore asserts the PROPERTY (a direct
+** FTS MATCH finds nothing after a forget) rather than the mechanism, because
+** that assertion survives someone changing the idiom.
+**
+** Phase 1 still reads viki_chunk before phase 2 deletes it, because it needs
+** the text to pass to 'delete'. That is a data dependency, not a rule.
+**
+** Note also that viki_ask() JOINs viki_chunk, so an orphaned FTS row can
+** never become a hit -- which means an ask-based assertion CANNOT detect this
+** class of bug. Measured: it stays green through the failure. */
+static int drop_chunks(sqlite3 *db, const char *zSql1, const char *zSql2,
+                       const char *zBind){
+    sqlite3_stmt *st = 0;
+    int n = 0;
+    /* Phase 1: tell FTS, while viki_chunk can still be read. The special
+    ** 'delete' command needs the rowid AND the text that was indexed. */
+    if( sqlite3_prepare_v2(db, zSql1, -1, &st, 0)==SQLITE_OK ){
+        sqlite3_bind_text(st, 1, zBind, -1, SQLITE_STATIC);
+        while( sqlite3_step(st)==SQLITE_ROW ){
+            sqlite3_stmt *d = 0;
+            if( sqlite3_prepare_v2(db,
+                "INSERT INTO viki_fts(viki_fts, rowid, text) VALUES('delete',?1,?2)",
+                -1, &d, 0)==SQLITE_OK ){
+                sqlite3_bind_int64(d, 1, sqlite3_column_int64(st, 0));
+                sqlite3_bind_text (d, 2, (const char*)sqlite3_column_text(st,1), -1, SQLITE_TRANSIENT);
+                sqlite3_step(d);
+                sqlite3_finalize(d);
+            }
+            n++;
+        }
+        sqlite3_finalize(st);
+    }
+    /* Phase 2: now the rows may go. */
+    if( sqlite3_prepare_v2(db, zSql2, -1, &st, 0)==SQLITE_OK ){
+        sqlite3_bind_text(st, 1, zBind, -1, SQLITE_STATIC);
+        sqlite3_step(st);
+        sqlite3_finalize(st);
+    }
+    return n;
+}
+
+VikiStatus viki_forget(const char *zId){
+    sqlite3 *db = db_or_null();
+    sqlite3_stmt *st = 0;
+    int bHad = 0;
+    if( !db ) return VIKI_ENOCTX;
+    if( !zId || !*zId ) return fail(VIKI_EINVAL, "viki_forget: null id%s","");
+    if( sqlite3_prepare_v2(db, "SELECT 1 FROM viki_assert WHERE id=?1",
+                           -1, &st, 0)==SQLITE_OK ){
+        sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+        bHad = (sqlite3_step(st)==SQLITE_ROW);
+        sqlite3_finalize(st);
+    }
+    if( !bHad ) return VIKI_ENOTFOUND;
+    if( tx_begin(db, "viki_forget")!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_forget: %s", sqlite3_errmsg(db));
+    drop_chunks(db,
+        "SELECT seq, text FROM viki_chunk WHERE id=?1",
+        "DELETE FROM viki_chunk WHERE id=?1", zId);
+    if( sqlite3_prepare_v2(db, "DELETE FROM viki_assert WHERE id=?1",
+                           -1, &st, 0)==SQLITE_OK ){
+        sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+        sqlite3_step(st);
+        sqlite3_finalize(st);
+    }
+    tx_end(db, "viki_forget", 1);
+    return VIKI_OK;
+}
+
+VikiStatus viki_prune_epoch(const char *zEpoch, int *pnDropped){
+    sqlite3 *db = db_or_null();
+    int n;
+    if( pnDropped ) *pnDropped = 0;
+    if( !db ) return VIKI_ENOCTX;
+    if( !zEpoch ) return fail(VIKI_EINVAL, "viki_prune_epoch: null epoch%s","");
+    if( tx_begin(db, "viki_prune")!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_prune_epoch: %s", sqlite3_errmsg(db));
+    n = drop_chunks(db,
+        "SELECT seq, text FROM viki_chunk WHERE epoch=?1",
+        "DELETE FROM viki_chunk WHERE epoch=?1", zEpoch);
+    tx_end(db, "viki_prune", 1);
+    if( pnDropped ) *pnDropped = n;
+    return VIKI_OK;
+}
+
 /* ---- retrieval -------------------------------------------------------
 ** Three legs into one pool, fused by reciprocal rank (RRF, k=60). All three
 ** constants are PORTED and were measured, not chosen: the pool at 150

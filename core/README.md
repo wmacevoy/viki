@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **46 passed, 0 failed** (7 constraint + 39 behaviour).
+`sh core/test/core-probe.sh` → **56 passed, 0 failed** (7 constraint + 49 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -258,8 +258,31 @@ predecessor's reasoning: it depends on the viewer's zone, the query window and
 the tzdata version, so it is not a shareable fact and does not belong in a
 grow-only store.
 
+### Withdrawal, and a rule that turned out to be narrower than inherited
+
+`viki_forget()` is the deliberate exception to grow-only — "I pasted a
+credential into a note" is a real thing, and a memory with no way to unsay
+something is one people stop telling things to. It is **local**: a peer that
+has the assertion still has it. Anything else would be a tombstone protocol.
+`viki_prune_epoch()` drops a dead model's projection and leaves truth alone.
+
+The predecessor's rule is that FTS must be deleted **before** the chunk row.
+Measured while porting it, that depends on the idiom:
+
+| idiom | needs the content row? | order matters? |
+|---|---|---|
+| `DELETE FROM f WHERE rowid=?` | yes — it re-reads it | **yes** |
+| `INSERT INTO f(f,rowid,text) VALUES('delete',…)` | no — text is explicit | no |
+
+core uses the second. **The more useful finding is about the assertions**: two
+obvious ways to test withdrawal are green straight through the bug. An
+`ask`-based check cannot see it, because retrieval JOINs the chunk table and an
+orphaned index entry never becomes a hit; and FTS5's own `integrity-check`
+*passes* over an index whose content row vanished. W4b asserts the property
+directly against `viki_fts`, which catches it and is idiom-independent —
+verified by disabling the FTS delete entirely.
+
 ### Not yet
 
-A real embedder binding, a delete path (FTS first, then chunk — the order is
-load-bearing), and the CLI/HTTP/MCP faces, which are bindings to this ABI
-rather than new implementations.
+A real embedder binding, and the CLI/HTTP/MCP faces, which are bindings to this
+ABI rather than new implementations.

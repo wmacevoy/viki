@@ -60,6 +60,47 @@ S9), found the day it was written -- which is the argument for the probe rather
 than for any particular result in it.
 
 ---
+## The FTS5 delete-order rule depends on WHICH delete idiom, and two obvious assertions are blind to it
+
+2026-08-29, found while porting withdrawal into viki-core. CLAUDE.md carries a
+rule that `gc_orphan_chunks()` must delete **fts first, then `viki_chunk`**,
+because an external-content FTS5 table keeps no text of its own and re-reads
+the content table to learn which tokens to drop. That rule is correct **for one
+idiom and not the other**, measured directly:
+
+```
+DELETE FROM f WHERE rowid=?             re-reads the content table. If the row
+                                        is already gone it succeeds, changes
+                                        nothing, and the text stays searchable.
+                                        ORDER IS LOAD-BEARING.
+
+INSERT INTO f(f,rowid,text)             takes the text EXPLICITLY. Needs no
+     VALUES('delete',?,?)               content row. ORDER DOES NOT MATTER.
+```
+
+Repro, on a bare `fts5(text, content='c', content_rowid='seq')`: insert a row,
+`DELETE FROM c` first, then issue the explicit-value delete — the match count
+goes 1 → 0. The withdrawal works despite the "wrong" order.
+
+**The wrong assumption it replaces:** that the ordering rule is a property of
+external-content FTS5 generally. It is a property of the *re-reading* idiom.
+
+**And the part worth keeping is about the assertions, not the rule.** Two
+natural ways to test this are both green through the failure:
+
+- **an `ask`-based assertion cannot detect it at all.** viki-core's retrieval
+  JOINs the chunk table, so an orphaned FTS entry can never become a hit. The
+  test looks like it covers withdrawal and covers nothing.
+- **FTS5's own `integrity-check` PASSES** over an index whose content row was
+  deleted out from under it.
+
+What does catch it is asserting the property directly against the index —
+`SELECT count(*) FROM viki_fts WHERE viki_fts MATCH '<withdrawn term>'` — which
+is also idiom-independent, so it keeps holding if someone swaps the delete back
+to the re-reading form. Verified by disabling the FTS delete entirely: that
+assertion fails, the other two stay green.
+
+---
 ## `fossil unversioned cat` was never the only way to read a uv blob: SQL has decompress()
 
 2026-08-29. `index_unversioned()` forked `fossil unversioned cat` once per

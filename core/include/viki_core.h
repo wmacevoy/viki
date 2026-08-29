@@ -117,6 +117,21 @@ VikiStatus viki_current(const char *zKey, char *zIdOut, char **pzBody);
 ** they are a projection and are rebuilt (D-10). */
 VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded);
 
+/* ---- withdrawal ------------------------------------------------------
+** THE STORE IS GROW-ONLY AND THESE ARE THE DELIBERATE EXCEPTIONS. Neither is
+** a merge operation and neither propagates: a peer that has the assertion
+** still has it, so forgetting is LOCAL. Anything else would be a tombstone
+** protocol, which is a different and much larger design.
+**
+** viki_forget() exists because "I pasted a credential into a note" is a real
+** thing that happens, and a memory with no way to unsay something is one
+** people stop telling things to. */
+VikiStatus viki_forget(const char *zId);
+
+/* Drops a dead embedding epoch's projection. The assertions are untouched --
+** this is reclaiming space from a model that is no longer pinned. */
+VikiStatus viki_prune_epoch(const char *zEpoch, int *pnDropped);
+
 /* Rebuild the chunk/FTS/vector projection for anything not yet projected at
 ** the retained epoch. Safe to call repeatedly; it is incremental. */
 VikiStatus viki_reindex(int *pnChunked);

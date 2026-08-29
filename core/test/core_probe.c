@@ -311,6 +311,70 @@ int main(void){
         sqlite3_close(dbG);
     }
 
+    printf("\n== W: withdrawal, and the delete ORDER ==\n");
+    {
+        sqlite3 *dbW = 0; VikiStore sW; char idW[VIKI_ID_HEX+1];
+        sqlite3_open(":memory:", &dbW); sW.db = dbW; viki_attach(dbW);
+        {
+            RETAIN_BEGIN(VikiStore, &sW, g);
+            viki_noteid("the passphrase is hunter2 and should never have been typed", idW);
+            viki_note("an unrelated note about fence posts");
+            viki_reindex(&n);
+            check(viki_ask("passphrase hunter2", 5, &h)==VIKI_OK && h && h->n>0,
+                  "W1 the text is findable before forgetting", "not found");
+            viki_hits_free(h); h=0;
+
+            check(viki_forget(idW)==VIKI_OK, "W2 viki_forget removes the assertion", viki_errmsg());
+            check(count(dbW,"SELECT count(*) FROM viki_assert")==1
+               && count(dbW,"SELECT count(*) FROM viki_chunk")==1,
+                  "W3 the assertion and its chunks are gone", "rows remain");
+
+            check(viki_ask("hunter2", 5, &h)==VIKI_OK && h && h->n==0,
+                  "W4 the withdrawn text is no longer returned by viki_ask", "it still answers");
+            viki_hits_free(h); h=0;
+
+            /* THE ASSERTION THAT MATTERS, and W4 is NOT it.
+            **
+            ** viki_ask() JOINs viki_chunk, so a stale FTS entry can never
+            ** become a hit -- W4 stays green through exactly the bug it looks
+            ** like it is testing. Measured, not assumed. FTS5's
+            ** integrity-check does not catch it either: it PASSES over an
+            ** index whose content row was deleted out from under it.
+            **
+            ** So assert the property directly, against viki_fts itself. This
+            ** is idiom-independent: it holds whether the implementation uses
+            ** the explicit-value 'delete' command (which needs no content row)
+            ** or `DELETE FROM viki_fts WHERE rowid=?` (which does, and for
+            ** which the delete ORDER becomes load-bearing). */
+            check(count(dbW,"SELECT count(*) FROM viki_fts WHERE viki_fts MATCH 'hunter2'")==0,
+                  "W4b the withdrawn text is gone from the FTS INDEX itself",
+                  "viki_fts still matches it -- the withdrawal was cosmetic");
+
+            check(viki_ask("fence posts", 5, &h)==VIKI_OK && h && h->n>0,
+                  "W5 CONTROL: forgetting one assertion did not empty the index",
+                  "everything vanished");
+            viki_hits_free(h); h=0;
+            check(viki_forget(idW)==VIKI_ENOTFOUND,
+                  "W6 CONTROL: forgetting again reports NOT FOUND, not success", "returned OK");
+
+            {   /* pruning a dead epoch leaves the assertions alone */
+                int nDrop = 0, nBefore = count(dbW,"SELECT count(*) FROM viki_assert");
+                emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zEpoch = "old/c40o10";
+                { RETAIN_BEGIN(VikiEmbed, &emb, ge); viki_reindex(&n); RETAIN_END(ge); }
+                check(count(dbW,"SELECT count(*) FROM viki_chunk WHERE epoch='old/c40o10'")>0,
+                      "W7 a second epoch's chunks exist", "none written");
+                check(viki_prune_epoch("old/c40o10", &nDrop)==VIKI_OK && nDrop>0
+                   && count(dbW,"SELECT count(*) FROM viki_chunk WHERE epoch='old/c40o10'")==0,
+                      "W8 pruning an epoch drops its projection", "chunks remain");
+                check(count(dbW,"SELECT count(*) FROM viki_assert")==nBefore,
+                      "W9 CONTROL: pruning a projection does NOT touch the assertions",
+                      "truth was deleted with the projection");
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbW);
+    }
+
     printf("\n== K: calendar assertions ==\n");
     {
         /* These are ported from the predecessor's cal-probe, and every one of
