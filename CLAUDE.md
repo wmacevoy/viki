@@ -240,6 +240,27 @@ sh edge/tools/build-tools.sh                 # the native key-custody tools -> b
                                             #                    converter, via sqlcipher_export
                                             #   LibreSSL + SQLCipher come from fossil-see's
                                             #   vendor tree; nothing new is downloaded
+sh build/substrate-probe.sh <empty-dir>     # INVERTED CONTROLS. Every assertion says the
+                                            #   SUBSTRATE CANNOT do something, and names the
+                                            #   viki code that exists only because of it. So a
+                                            #   FAILURE IS GOOD NEWS -- it means Fossil/SQLite
+                                            #   grew a capability and a workaround is now dead
+                                            #   weight. Do NOT restore the limitation to make it
+                                            #   green; delete the code it names.
+                                            #   Written because a comment is a claim and a claim
+                                            #   with no test never expires: `unversioned cat` was
+                                            #   forked once per blob for ~a year on a comment
+                                            #   saying SQL could not decompress uv content, and
+                                            #   `decompress()` had been registered the whole time
+                                            #   by the same call that registers `content()`.
+                                            #   T0 IS A NON-VACUITY GATE and exits 2 rather than
+                                            #   reporting: it runs the detector against a
+                                            #   limitation KNOWN to have lifted (json finfo's
+                                            #   missing deletions, fixed in fossil-see) and
+                                            #   refuses to print anything if the detector cannot
+                                            #   see it -- because "still limited" is also what a
+                                            #   broken detector prints. Exit 0 all held, 1 one
+                                            #   lifted, 2 detector unvalidated
 sh build/reader-probe.sh                    # the Chrome reader is OBSERVE ONLY, 9 assertions
                                             #   and they are safety properties, not style: no
                                             #   .click/.submit/dispatchEvent/innerHTML anywhere,
