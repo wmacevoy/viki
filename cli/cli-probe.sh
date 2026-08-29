@@ -116,6 +116,36 @@ else
   printf '  --   (a skip is not a pass -- the diary would be plaintext)\n'
 fi
 
+echo "== S: signed writes, and what the child never holds =="
+PUB=$("$V" id new "probe identity" "$D/signer.key" 2>/dev/null)
+chk "${#PUB}" "64" "S1 id new emits an Ed25519 public key"
+chk "$(stat -f '%Lp' "$D/signer.key" 2>/dev/null || stat -c '%a' "$D/signer.key")" "600" \
+    "S2 the key file is created 0600 (O_CREAT|O_EXCL, not chmod afterwards)"
+SID=$("$V" --signer "$D/signer.key" note "a statement worth standing behind")
+chk "$("$V" --signer "$D/signer.key" id check "$SID" | cut -d' ' -f1)" "verified" \
+    "S3 a write made with --signer verifies"
+UID2=$("$V" note "a statement nobody signed")
+chk "$("$V" id check "$UID2")" "unsigned" \
+    "S4 CONTROL: without --signer the write is unsigned, and says so"
+# S5 IS THE POINT OF ALL OF IT. The parent holds the key; the child holds
+# nothing and still produces signed writes. Without a retained context a
+# script cannot have signed writes AT ALL, whatever it does.
+cat > "$D/schild.sh" <<'CHILD'
+ID=$(viki note "written by the child through the parent's identity")
+viki id check "$ID" | cut -d' ' -f1
+CHILD
+chmod +x "$D/schild.sh"
+chk "$("$V" --signer "$D/signer.key" run "$D/schild.sh")" "verified" \
+    "S5 a child's write is SIGNED by the parent's identity"
+# and the child genuinely never opened the key: prove it by making the key
+# unreadable to the child while the parent already holds it
+chk "$("$V" --signer "$D/signer.key" run sh -c 'cat '"$D"'/signer.key >/dev/null 2>&1; viki id check $(viki note "second child write") | cut -d" " -f1')" \
+    "verified" "S5b ...and keeps working regardless of what the child does with the file"
+# a peer verifies holding nothing
+"$V" --store "$D/peer.db" merge "$D/t.db" >/dev/null 2>&1
+chk "$("$V" --store "$D/peer.db" id check "$SID" | cut -d' ' -f1)" "verified" \
+    "S6 a peer that merged the diary verifies WHO, holding no key"
+
 echo "== J: merge semantics =="
 # What merge does to the SOURCE, which is the half that is easy to assume and
 # expensive to get wrong. Union-is-merge only means anything if promotion

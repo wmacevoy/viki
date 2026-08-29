@@ -51,6 +51,8 @@
 #include <sys/time.h>
 #include "viki_core.h"
 #include "viki_cal.h"
+#include <dlfcn.h>
+#include <fcntl.h>
 
 #define VIKI_CTX_ENV "VIKI_CONTEXT"
 
@@ -77,7 +79,12 @@ static int usage(void){
 "  --keyfile PATH          unlock an encrypted diary (mode 600). Else\n"
 "                          $VIKI_KEY, else a prompt on a terminal.\n"
 "                          64 hex chars is used as a RAW key (no KDF).\n"
-"  --store PATH            default $VIKI_STORE, else ./viki.db\n",
+"  --signer PATH           Ed25519 key file (mode 600): name, then 64 hex\n"
+"  --embedder PATH.so      a library exporting the embedder ABI\n"
+"  --store PATH            default $VIKI_STORE, else ./viki.db\n"
+"\n"
+"  `run` retains BOTH for the whole command, so children get signed writes\n"
+"  and hybrid retrieval while never holding a key or a model.\n",
         zProg, VIKI_CTX_ENV);
     return 2;
 }
@@ -196,7 +203,63 @@ static int apply_key(sqlite3 *db, const char *zPath, const char *zKeyFile){
     return 1;
 }
 
-static const char *zKeyFile = 0;
+static const char *zKeyFile  = 0;
+static const char *zSignerFile = 0;
+static const char *zEmbedLib = 0;
+
+/* ---- the embedder seam ----------------------------------------------
+**
+** A MODEL IS A FILE AND FILES ARE THE HOST'S, so core takes a callback and
+** the CLI dlopen()s whatever provides it. Three symbols, and the ABI is
+** deliberately tiny because everything interesting -- ONNX Runtime, CoreML,
+** a remote service -- fits behind it:
+**
+**   int  viki_embedder_open (const void *pModel, size_t n, int *pnDim, void **pp);
+**   int  viki_embedder_embed(void *p, const char *zText, float *aOut, int nDim);
+**   void viki_embedder_close(void *p);
+**
+** pModel is the model BLOB out of the diary, or NULL when the library knows
+** where its own weights are. That is the shape that lets one model database
+** serve several diaries without any of them carrying a copy. */
+typedef int  (*fnEmbOpen )(const void*, size_t, int*, void**);
+typedef int  (*fnEmbEmbed)(void*, const char*, float*, int);
+typedef void (*fnEmbClose)(void*);
+typedef struct {
+    void *hLib; void *pApp;
+    fnEmbEmbed xEmbed; fnEmbClose xClose;
+} Embedder;
+
+static int embed_thunk(void *pApp, const char *zText, float *aOut, int nDim){
+    Embedder *e = (Embedder*)pApp;
+    return e->xEmbed(e->pApp, zText, aOut, nDim);
+}
+
+static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
+                         const char *zModelId){
+    fnEmbOpen xOpen;
+    memset(e, 0, sizeof *e);
+    e->hLib = dlopen(zPath, RTLD_NOW);
+    if( !e->hLib ){ fprintf(stderr,"%s: %s\n", zProg, dlerror()); return -1; }
+    xOpen     = (fnEmbOpen )dlsym(e->hLib, "viki_embedder_open");
+    e->xEmbed = (fnEmbEmbed)dlsym(e->hLib, "viki_embedder_embed");
+    e->xClose = (fnEmbClose)dlsym(e->hLib, "viki_embedder_close");
+    if( !xOpen || !e->xEmbed ){
+        fprintf(stderr,"%s: %s does not export the embedder ABI\n", zProg, zPath);
+        dlclose(e->hLib); e->hLib = 0; return -1;
+    }
+    pOut->nDim = 0;
+    if( xOpen(0, 0, &pOut->nDim, &e->pApp)!=0 || pOut->nDim<=0 ){
+        fprintf(stderr,"%s: %s failed to open its model\n", zProg, zPath);
+        dlclose(e->hLib); e->hLib = 0; return -1;
+    }
+    pOut->xEmbed = embed_thunk;
+    pOut->pApp   = e;
+    pOut->zModel = zModelId;
+    return 0;
+}
+static void embedder_close(Embedder *e){
+    if( e->hLib ){ if( e->xClose ) e->xClose(e->pApp); dlclose(e->hLib); e->hLib = 0; }
+}
 
 static sqlite3 *open_store(const char *zPath){
     sqlite3 *db = 0;
@@ -372,12 +435,107 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
         return 0;
     }
+    if( !strcmp(argv[0],"id") && argc>=2 ){
+        if( !strcmp(argv[1],"new") && argc>=3 ){
+            char zSeed[80];
+            VikiIdKey *p = viki_ed25519_generate(argv[2], zSeed);
+            FILE *f;
+            int fd;
+            if( !p ){ fprintf(stderr,"%s: could not generate a key\n",zProg); return 1; }
+            if( argc<4 ){ fprintf(stderr,"%s: id new NAME KEYFILE\n",zProg); viki_ed25519_free(p); return 1; }
+            /* 0600 AT CREATION, not chmod afterwards: between creat and chmod
+            ** is a window, and this is a signing key. */
+            fd = open(argv[3], O_WRONLY|O_CREAT|O_EXCL, 0600);
+            if( fd<0 ){ fprintf(stderr,"%s: %s: %s\n",zProg,argv[3],strerror(errno)); viki_ed25519_free(p); return 1; }
+            f = fdopen(fd,"w");
+            fprintf(f, "%s\n%s\n", viki_ed25519_name(p), zSeed);
+            fclose(f);
+            memset(zSeed, 0, sizeof zSeed);
+            fprintf(out, "%s\n", viki_ed25519_pub(p));
+            viki_ed25519_free(p);
+            return 0;
+        }
+        if( !strcmp(argv[1],"add") ){
+            /* Records the RETAINED identity in this diary, so peers can verify
+            ** what it signs. Recording is not trusting. */
+            const VikiIdentity *pI = RETAINED(VikiIdentity) ? RECALL(VikiIdentity) : 0;
+            if( !pI ){ fprintf(stderr,"%s: id add needs --signer\n",zProg); return 1; }
+            fprintf(out, "%s\n", pI->zSigner);
+            return 0;
+        }
+        if( !strcmp(argv[1],"check") && argc>=3 ){
+            VikiSigState st2; char zWho[VIKI_ID_HEX+1];
+            static const char *az[] = {"unsigned","verified","BAD SIGNATURE","unknown signer"};
+            if( viki_signed(argv[2], &st2, zWho)!=VIKI_OK ){
+                fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+            fprintf(out, "%s%s%.12s\n", az[st2], st2==VIKI_SIG_NONE?"":"  by ", zWho);
+            return st2==VIKI_SIG_BAD ? 1 : 0;
+        }
+        return usage();
+    }
     if( !strcmp(argv[0],"sql") && argc>=2 ){
         if( viki_sql(argv[1], prSql, out)!=VIKI_OK ){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
         return 0;
     }
     return usage();
+}
+
+/* ---- what the parent retains -----------------------------------------
+**
+** THIS IS THE API GUARANTEE MADE CONCRETE. Without a held context every
+** invocation starts with NOTHING retained -- so a script cannot have signed
+** writes or hybrid retrieval at all, whatever it does. With one, the parent
+** retains them once and every child inherits the EFFECTS through the socket
+** while holding neither the key nor the model.
+**
+** The order matters: the identity assertion must be written before it can be
+** the signer, and writing it needs the store. */
+typedef struct {
+    VikiIdKey   *pId;
+    VikiIdentity id;
+    Embedder     emb;
+    VikiEmbed    embed;
+    int          bId, bEmbed;
+} Held;
+
+static int held_open(Held *h){
+    memset(h, 0, sizeof *h);
+    if( zSignerFile ){
+        char zErr[256], zAssert[VIKI_ID_HEX+1];
+        h->pId = viki_ed25519_load(zSignerFile, zErr, sizeof zErr);
+        if( !h->pId ){ fprintf(stderr,"%s: %s\n",zProg,zErr); return -1; }
+        /* core's batteries-included path: it records the identity and fills
+        ** the callbacks. The CLI supplies no crypto of its own. */
+        /* Recording the identity is idempotent -- it is content-addressed on
+        ** (public key, name) -- so this is safe to do on every run and is
+        ** what makes the signer's key available to any peer that merges. */
+        if( viki_identity_ed25519(h->pId, &h->id, zAssert)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg());
+            viki_ed25519_free(h->pId); h->pId = 0; return -1;
+        }
+        h->id.zSigner = strdup(zAssert);
+        h->bId = 1;
+    }else{
+        /* VERIFY-ONLY, always. Even with no signing key this process can say
+        ** who wrote what -- which is the point of asymmetric signatures and
+        ** costs nothing to offer. */
+        h->id.zSigner = 0;
+        h->id.pApp    = 0;
+        h->id.xSign   = 0;
+        h->id.xVerify = viki_ed25519_verify;
+        h->bId = 1;
+    }
+    if( zEmbedLib ){
+        if( embedder_open(zEmbedLib, &h->emb, &h->embed, zEmbedLib)!=0 ) return -1;
+        h->bEmbed = 1;
+    }
+    return 0;
+}
+static void held_close(Held *h){
+    if( h->bEmbed ) embedder_close(&h->emb);
+    if( h->pId ) viki_ed25519_free(h->pId);
+    free((void*)h->id.zSigner);
 }
 
 /* ---- viki run: one warm context, held by the parent -------------------
@@ -530,8 +688,18 @@ static int run_cmd(const char *zStore, int argc, char **argv,
     }
 
     {   RETAIN_BEGIN(VikiStore, &st, g);
+        Held held;
         int bDrain = 0;
         st.db = db;
+        if( held_open(&held)!=0 ){
+            kill(pid, SIGTERM); waitpid(pid, 0, 0);
+            sqlite3_close(db); close(srv); unlink(zSock); rmdir(zDir);
+            return 1;
+        }
+        /* Retained AROUND the serve loop, so every request the children make
+        ** is answered with the identity and the model already in scope. */
+        RETAIN_BEGIN(VikiIdentity, &held.id, gi);
+        RETAIN_BEGIN(VikiEmbed,    &held.embed, ge);
         /* SELECT WITH A TIMEOUT, NOT A BLOCKING accept().
         **
         ** signal() installs a BSD-style handler with SA_RESTART, so SIGCHLD
@@ -559,6 +727,9 @@ static int run_cmd(const char *zStore, int argc, char **argv,
             if( k<0 && errno!=EINTR ) break;
             if( bChildGone ){ if( bDrain ) break; bDrain = 1; }
         }
+        RETAIN_END(ge);
+        RETAIN_END(gi);
+        held_close(&held);
         RETAIN_END(g);
     }
     {   int status = 0;
@@ -592,7 +763,9 @@ int main(int argc, char **argv){
                     zProg, zProg);
             return 2;
         }
-        if( !strcmp(argv[i],"--keyfile") && i+1<argc ){ zKeyFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
+        if( !strcmp(argv[i],"--signer") && i+1<argc ){ zSignerFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
+        else if( !strcmp(argv[i],"--embedder") && i+1<argc ){ zEmbedLib=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
+        else if( !strcmp(argv[i],"--keyfile") && i+1<argc ){ zKeyFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--store") && i+1<argc ){ zStore=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--lines") && i+1<argc ){ nLines=atoi(argv[i+1]); memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--overlap") && i+1<argc ){ nOverlap=atoi(argv[i+1]); memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
@@ -613,9 +786,16 @@ int main(int argc, char **argv){
     }
     db = open_store(zStore);
     if( !db ) return 1;
-    {   RETAIN_BEGIN(VikiStore, &st, g);
+    {   Held held;
+        RETAIN_BEGIN(VikiStore, &st, g);
         st.db = db;
+        if( held_open(&held)!=0 ){ sqlite3_close(db); return 1; }
+        RETAIN_BEGIN(VikiIdentity, &held.id, gi);
+        RETAIN_BEGIN(VikiEmbed,    &held.embed, ge);
         rc = do_verb(stdout, argc-1, argv+1, nLines, nOverlap);
+        RETAIN_END(ge);
+        RETAIN_END(gi);
+        held_close(&held);
         RETAIN_END(g);
     }
     sqlite3_close(db);

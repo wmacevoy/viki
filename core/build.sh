@@ -29,7 +29,17 @@ if [ -z "$SQLITE" ] && [ -n "$FS" ] && [ -f "$FS/vendor/sqlcipher-libressl/sqlit
     SQLITE="$FS/vendor/sqlcipher-libressl"
     VIKI_CRYPTO="$FS/vendor/libressl-build-out"
 fi
-[ -n "$SQLITE" ] || SQLITE="$ROOT/vendor/download-cache/sqlite-amalgamation-3530400"
+# BEDROCK, NOT AN OPTION (Warren, 2026-08-29): "viki core can depend on
+# sqlcipher and libressl". There is no stock-SQLite fallback -- a diary that
+# silently is not encrypted is worse than a build that will not start, and a
+# fallback is how the first becomes possible.
+if [ -z "$SQLITE" ]; then
+  echo "ERR: SQLCipher-LibreSSL not found." >&2
+  echo "     Looked for <fossil-see>/vendor/sqlcipher-libressl/sqlite3.c beside" >&2
+  echo "     this checkout and in vendor/. Build fossil-see, or set" >&2
+  echo "     VIKI_FOSSILSEE_DIR / VIKI_SQLITE_DIR." >&2
+  exit 2
+fi
 RETAIN="${VIKI_RETAIN_DIR:-}"
 if [ -z "$RETAIN" ]; then
   for c in "$ROOT/../retain-recall/ports/c" "$ROOT/vendor/retain-recall/ports/c"; do
@@ -41,6 +51,9 @@ fi
 mkdir -p "$OUT"
 CFLAGS="-std=c11 -Wall -Wextra -Wno-unused-parameter -O2"
 INC="-I$ROOT/core/include -I$ROOT/core/src -I$SQLITE -I$RETAIN"
+# LibreSSL headers, when the SQLCipher path gave us a crypto tree. The CLI's
+# Ed25519 identity costs nothing new because SQLCipher already links it.
+[ -n "$VIKI_CRYPTO" ] && INC="$INC -I$VIKI_CRYPTO/include"
 # FTS5 is required: the keyword leg is not optional, and a build without it
 # would degrade silently rather than fail here.
 SQLFLAGS="-DSQLITE_ENABLE_FTS5 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=1"
@@ -57,8 +70,6 @@ if [ -n "$VIKI_CRYPTO" ]; then
     SQLFLAGS="$SQLFLAGS -I$VIKI_CRYPTO/include"
     LIBS="$VIKI_CRYPTO/lib/libcrypto.a $LIBS"
     echo "==> SQLCipher-LibreSSL (encryption at rest)"
-else
-    echo "==> stock SQLite (NO encryption at rest)"
 fi
 echo "==> sqlite3.o"
 [ -f "$OUT/sqlite3.o" ] && [ "$OUT/sqlite3.o" -nt "$SQLITE/sqlite3.c" ] \
@@ -66,10 +77,13 @@ echo "==> sqlite3.o"
 echo "==> viki-core"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_core.c" -o "$OUT/viki_core.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_cal.c"  -o "$OUT/viki_cal.o"
+cc $CFLAGS $INC -c "$ROOT/core/src/viki_ed25519.c" -o "$OUT/viki_ed25519.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/sha256.c"    -o "$OUT/sha256.o"
-ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/sha256.o"
+ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/viki_ed25519.o" "$OUT/sha256.o"
 echo "==> cli"
-cc $CFLAGS $INC -o "$OUT/viki" "$ROOT/cli/viki_cli.c" "$OUT/libvikicore.a" "$OUT/sqlite3.o" $LIBS
+cc $CFLAGS $INC -I"$ROOT/cli" -o "$OUT/viki" \
+   "$ROOT/cli/viki_cli.c" \
+   "$OUT/libvikicore.a" "$OUT/sqlite3.o" $LIBS
 echo "==> probe"
 cc $CFLAGS $INC -o "$OUT/core-probe" "$ROOT/core/test/core_probe.c" \
    "$OUT/libvikicore.a" "$OUT/sqlite3.o" $LIBS

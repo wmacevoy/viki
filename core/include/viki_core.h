@@ -226,6 +226,28 @@ typedef struct {
 
 RETAIN_DECLARE(VikiIdentity);
 
+/* ---- the built-in Ed25519 signer -------------------------------------
+** SQLCipher and LibreSSL are bedrock, so core ships a default signer rather
+** than leaving every host to write an EVP program. The CALLBACKS above stay
+** authoritative: a platform keystore fills VikiIdentity itself and never
+** touches any of this. Included is not mandatory.
+**
+** The key file is a name line then a 32-byte seed as 64 hex characters, mode
+** 600 -- the name is IN it because viki's identity is (public key, name), so
+** a rename is a different claim and must be visible. */
+typedef struct VikiIdKey VikiIdKey;
+VikiIdKey  *viki_ed25519_generate(const char *zName, char *zSeedHexOut); /* >=65 */
+VikiIdKey  *viki_ed25519_load(const char *zPath, char *zErr, size_t nErr);
+void        viki_ed25519_free(VikiIdKey*);
+const char *viki_ed25519_pub (const VikiIdKey*);
+const char *viki_ed25519_name(const VikiIdKey*);
+int viki_ed25519_sign  (void *pApp, const char *zId, unsigned char *aSig, int *pnSig);
+int viki_ed25519_verify(void *pApp, const char *zPubHex, const char *zId,
+                        const unsigned char *aSig, int nSig);
+/* Records the identity and fills xSign/xVerify/pApp. zIdOut receives the
+** identity's assertion id, which the caller assigns to zSigner. */
+VikiStatus viki_identity_ed25519(VikiIdKey*, VikiIdentity *pOut, char *zIdOut);
+
 /* An identity IS an assertion -- kind "identity", canon (name, public key) --
 ** so identities merge, are searchable, and travel with the diary. Recording
 ** one is not the same as trusting it; see viki_signed(). */

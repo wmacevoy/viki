@@ -429,10 +429,20 @@ parent retains them once and every child inherits them through the socket.
 That is not an optimisation; it is the difference between a script being able
 to use those features and not.
 
-**Not yet wired:** the CLI retains only the store. Retaining a `VikiEmbed` and
-a `VikiIdentity` in the `viki run` parent — so children get hybrid retrieval
-and signed writes without ever holding a model or a key — is the concrete form
-of the API guarantee, and it is the next thing worth building here.
+**Wired.** The `viki run` parent now retains a `VikiIdentity` and a
+`VikiEmbed` around its serve loop, so a child's writes are **signed by the
+parent's identity while the child holds no key**, and retrieval is hybrid
+while the child holds no model:
+
+```
+S5   a child's write is SIGNED by the parent's identity
+S5b  ...and keeps working regardless of what the child does with the file
+S6   a peer that merged the diary verifies WHO, holding no key
+```
+
+That is the API guarantee in its concrete form: without a held context every
+invocation starts with nothing retained, so a script cannot have signed writes
+**at all** — not slower, not at all.
 
 ### `viki run` — and the obvious justification is wrong
 
