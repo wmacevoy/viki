@@ -96,27 +96,63 @@ const char *viki_errmsg(void);   /* last error on this thread, never NULL */
 
 /* ---- the retained context ------------------------------------------- */
 
-typedef struct VikiTribeStruct VikiTribe;
-
-#define VIKI_RDONLY   0x01
-#define VIKI_NOFORK   0x02   /* the iOS build; see viki_fork_forbidden() */
-#define VIKI_NOMODEL  0x04   /* force degraded mode */
-
-VikiTribe *viki_tribe_open(const char *zRepo, const char *zKey, unsigned mFlags);
-void       viki_tribe_close(VikiTribe*);
-
-RETAIN_DECLARE(VikiTribe);
-/* RETAIN_DEFINE(VikiTribe) lives in viki_tribe.c -- one definition. */
-
-/*  VikiTribe *t = viki_tribe_open(zRepo, zKey, 0);
-**  RETAIN_BEGIN(VikiTribe, t, guard);
-**      viki_note("gate latch sticks below freezing");
-**      some_deep_callback();          // may also viki_note(); knows nothing of t
-**  RETAIN_END(guard);
+/* THREE TYPES, THREE STACKS, THREE LIFETIMES -- not one context struct.
 **
-** Nesting is the point, not a bonus: a second RETAIN_BEGIN inside the first
-** operates on another tribe and restores the outer one on scope exit, which
-** is the property getenv() cannot express at all. */
+** The first draft of this header had a single VikiTribe carrying repo, key,
+** url, user, model dir, epoch and flags. That BOLTS CONTEXT BUILDING ONTO
+** CONTEXT USE: a caller that only wants viki_note() must still produce a
+** model directory and an epoch, and a caller that already holds an open
+** repository cannot retain it without going through an opener that wants
+** everything else too.
+**
+** retain/recall keeps a stack PER TYPE, so the split costs nothing and each
+** verb recalls only what it actually needs:
+**
+**     viki_note()   VikiRepo
+**     viki_ask()    VikiRepo + VikiEpoch  (without the epoch: BM25 only)
+**     any fork site VikiPolicy
+**
+** AND DEGRADED MODE STOPS BEING A SPECIAL CASE. CLAUDE.md's law is that no
+** model is a required path, not a failure -- today that is
+** open_embedder_if_available() returning NULL and every caller remembering
+** not to treat it as fatal. Here it is simply `!RETAINED(VikiEpoch)`: the
+** ABSENCE OF A TYPE IS THE MODE, and there is no null to forget. */
+
+typedef struct { const char *zRepo, *zKey; }           VikiRepo;   /* L0 truth   */
+typedef struct { const char *zModelDir, *zEpoch; }     VikiEpoch;  /* L1 project */
+typedef struct { const char *zUrl, *zUser; }           VikiPeer;   /* sync ident */
+typedef struct { int noFork, readOnly; }               VikiPolicy; /* behaviour  */
+
+RETAIN_DECLARE(VikiRepo);
+RETAIN_DECLARE(VikiEpoch);
+RETAIN_DECLARE(VikiPeer);
+RETAIN_DECLARE(VikiPolicy);
+/* RETAIN_DEFINE(...) for each lives in viki_ctx.c -- one definition apiece. */
+
+/* Opening is SEPARATE from retaining, deliberately: a host that already has
+** the repository open (an iOS app, a test harness) retains its own VikiRepo
+** and never calls this. */
+VikiStatus viki_repo_open(const char *zRepo, const char *zKey, VikiRepo **ppOut);
+void       viki_repo_close(VikiRepo*);
+
+/*  VikiRepo *r; viki_repo_open(zRepo, zKey, &r);
+**  RETAIN_BEGIN(VikiRepo, r, g1);
+**      viki_note("gate latch sticks below freezing");   // repo is enough
+**      some_deep_callback();                            // knows nothing of r
+**      RETAIN_BEGIN(VikiEpoch, &ep, g2);
+**          viki_ask("what did I say about the gate?", 5, &hits);  // hybrid
+**      RETAIN_END(g2);
+**      viki_ask("...", 5, &hits);                       // BM25 only again
+**  RETAIN_END(g1);
+**
+** Verified against the real ports/c/retain.h, not assumed: the three stacks
+** are independent, an epoch pushed for one block stops applying outside it,
+** and a VikiPolicy pushed for a single call is popped correctly afterwards.
+**
+** Nesting is the point, not a bonus: a second RETAIN_BEGIN(VikiRepo,...)
+** operates on ANOTHER TRIBE and restores the outer one on scope exit, which
+** is what getenv() cannot express at all -- and SCOPES 4's verse (many
+** tribes, one device, one process) requires. */
 
 /* ---- the verbs. Every one takes ONLY its own argument. ---------------
 **

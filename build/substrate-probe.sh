@@ -341,7 +341,7 @@ UVH
       skip S9 "a uv blob cannot be read without forking" "harness could not query"
     elif cmp -s "$DIR/uvbin" "$DIR/uvout"; then
       lifted S9 "a uv blob reads back BYTE-IDENTICAL in-process, no fork" \
-        "the \`fossil uv export\` fork in viki_cmd_cache_pull_opts(), src/viki_cache.c, WHENEVER libfossilsee is loaded. It was never uv's nature that required it -- the subprocess transport truncates at the first NUL, and a SQLite file is NUL in byte 9."
+        "the \`fossil uv export\` fork in viki_cmd_cache_pull_opts(), src/viki_cache.c. THE FIX IS A PATCH TO libfossilsee -- fossilsee_uv_get() wrapping unversioned_content() -- NOT viki-side SQL. Proven: unversioned_content() falls back to a lookup BY HASH (validate16), so \`uv export <hash>\` works and a hand-written WHERE name=? matches zero rows. It needs no output capture, no argv shim and no fossil_main(): it is a read, and fits v0's existing slice."
     else
       held S9 "a uv blob cannot be read back byte-identical without forking"
     fi

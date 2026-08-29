@@ -320,6 +320,51 @@ real and the macros behave under nesting and early scope exit.
 
 ---
 
+### 4b. Two corrections to §4 itself, both from Warren's questions
+
+**(i) "is the context building bolted on to the context use?" — yes, it was.**
+The first draft had one `VikiTribe` carrying repo, key, url, user, model dir,
+epoch and flags. A caller that only wants `viki_note()` had to produce a model
+directory; a host that already holds an open repository could not retain it
+without an opener that wanted everything else too.
+
+retain keeps a stack **per type**, so splitting costs nothing:
+
+| verb | recalls |
+|---|---|
+| `viki_note()` | `VikiRepo` |
+| `viki_ask()` | `VikiRepo` + `VikiEpoch` — without the epoch, BM25 only |
+| any fork site | `VikiPolicy` |
+
+And **degraded mode stops being a special case.** CLAUDE.md's law is that no
+model is a required path, not a failure — today that is
+`open_embedder_if_available()` returning NULL and every caller remembering not
+to treat it as fatal. Here it is `!RETAINED(VikiEpoch)`: *the absence of a type
+is the mode*, and there is no null to forget. Verified against the real
+`retain.h` — the stacks are independent, an epoch pushed for one block stops
+applying outside it, and a policy pushed for one call pops correctly.
+
+Opening is also separated from retaining, so a host that already has the
+repository open retains its own `VikiRepo` and never calls the opener.
+
+**(ii) "is this a patch to libfossilsee?" — yes, and I had drifted back to the
+wrong answer.** One message after writing §1 of this document, I proposed
+removing the `uv export` fork by having *viki* issue
+`SELECT CASE WHEN encoding=1 THEN decompress(content) ... WHERE name=?`. That
+is the exact reflex §1 names: working around the substrate instead of on it.
+
+It is also **wrong**, and provably so rather than as a matter of taste.
+`unversioned_content()` falls back to a lookup **by hash** (`validate16`), so
+`fossil uv export <hash>` works. Measured: the hash form exports byte-identical
+content, and `WHERE name='<hash>'` matches **zero** rows. Hand-written SQL would
+have been a silent regression against the fork it replaced — a smaller version
+of exactly the eight facts in §1's table.
+
+The fix is `fossilsee_uv_get()`, a thin wrapper on `unversioned_content()`. It
+needs **none** of the machinery that blocks the rest of the v1 surface: no
+output capture, no argv shim, no `fossil_main()`. It is a read, and it fits
+libfossilsee v0's existing read-only slice.
+
 ## 5. What the correction deletes
 
 Not "what it adds" — that is the point of doing it.
