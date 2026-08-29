@@ -78,9 +78,10 @@ echo "==> viki-core"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_core.c" -o "$OUT/viki_core.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_cal.c"  -o "$OUT/viki_cal.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_task.c" -o "$OUT/viki_task.o"
+cc $CFLAGS $INC -c "$ROOT/core/src/viki_trace.c" -o "$OUT/viki_trace.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_ed25519.c" -o "$OUT/viki_ed25519.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/sha256.c"    -o "$OUT/sha256.o"
-ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/viki_task.o" "$OUT/viki_ed25519.o" "$OUT/sha256.o"
+ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/viki_task.o" "$OUT/viki_trace.o" "$OUT/viki_ed25519.o" "$OUT/sha256.o"
 echo "==> cli"
 cc $CFLAGS $INC -I"$ROOT/cli" -o "$OUT/viki" \
    "$ROOT/cli/viki_cli.c" \

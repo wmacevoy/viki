@@ -14,6 +14,7 @@
 #include "viki_core.h"
 #include "viki_cal.h"
 #include "viki_task.h"
+#include "viki_trace.h"
 
 static int nPass = 0, nFail = 0;
 static void ok(const char *z){ nPass++; printf("  ok    %s\n", z); }
@@ -47,6 +48,19 @@ static int taskTextHas(const char *zId, const char *zNeedle){
     thFound = 0;
     if( zSql ){ viki_sql(zSql, thRow, (void*)zNeedle); sqlite3_free(zSql); }
     return thFound;
+}
+
+/* ---- Y-series helpers ------------------------------------------------ */
+typedef struct { int n; char zOrder[8][80]; int aDepth[8]; int aFwd[8]; } Chain;
+static int chainCb(void *pApp, const VikiChainRow *r){
+    Chain *C = (Chain*)pApp;
+    if( C->n < 8 ){
+        snprintf(C->zOrder[C->n], sizeof(C->zOrder[0]), "%s", r->zText ? r->zText : "");
+        C->aDepth[C->n] = r->nDepth;
+        C->aFwd[C->n]   = r->bForward;
+    }
+    C->n++;
+    return 0;
 }
 
 /* ---- a stub embedder ------------------------------------------------
@@ -1338,6 +1352,116 @@ int main(void){
             RETAIN_END(g);
         }
         sqlite3_close(dbT);
+    }
+
+    /* ---- Y: CLAIMS AND THE CHAIN A LATER TRACE WALKS -------------------
+    **
+    ** Y3 is the one this file exists for, and it is not a style rule: the
+    ** claim that cost this project weeks -- "viki never forks" -- was written
+    ** by an earlier trace with no falsifier at all, and every session after
+    ** read it with the authority of a measurement. A k0 that cannot say what
+    ** would show it wrong is a confident error wearing knowledge's clothes,
+    ** so the write is refused rather than stored.
+    **
+    ** Y5 is the other one: the CORRECTION must come out before the thing
+    ** corrected, or a trace acts on the retired claim exactly the way the
+    ** trace before it did.
+    */
+    {
+        sqlite3 *dbY = 0; VikiDiaries sY; VikiDiary _dsY;
+        sqlite3_open(":memory:", &dbY); _dsY.zName="sY"; _dsY.db=dbY; _dsY.mFlags=0;
+        viki_diaries_one(&sY,&_dsY);
+        viki_attach(dbY);
+        {
+            VikiClaim c; char idA[VIKI_ID_HEX+1], idB[VIKI_ID_HEX+1], idC[VIKI_ID_HEX+1];
+            Chain C;
+            RETAIN_BEGIN(VikiDiaries, &sY, g);
+
+            memset(&c,0,sizeof c);
+            c.zText="the old belief"; c.zStatus="k4"; c.zTs="2026-08-01T00:00:00Z";
+            c.zBy="an earlier trace";
+            check(viki_claim(&c,idA)==VIKI_OK, "Y1 a claim with a valid status is stored", viki_errmsg());
+
+            memset(&c,0,sizeof c);
+            c.zText="nonsense"; c.zStatus="probably"; c.zTs="2026-08-01T00:00:01Z";
+            check(viki_claim(&c,idC)==VIKI_EINVAL,
+                  "Y2 a status outside k0..k4 is REFUSED", "it was stored");
+
+            memset(&c,0,sizeof c);
+            c.zText="asserted as knowledge, with no way to be wrong";
+            c.zStatus="k0"; c.zTs="2026-08-01T00:00:02Z";
+            check(viki_claim(&c,idC)==VIKI_EINVAL,
+                  "Y3 a k0 with NO FALSIFIER is REFUSED", "a confident error got in as knowledge");
+
+            /* CONTROL: the refusal is about k0 specifically, not about empty
+            ** falsifiers -- a k1 IS the admission of a gap and owes nothing. */
+            memset(&c,0,sizeof c);
+            c.zText="I do not know whether this holds on iOS";
+            c.zStatus="k1"; c.zTs="2026-08-01T00:00:03Z";
+            check(viki_claim(&c,idC)==VIKI_OK,
+                  "Y3b CONTROL: a k1 with no falsifier is fine (Y3 is about k0)", viki_errmsg());
+
+            /* CONTROL: and a k0 WITH a falsifier goes in, so Y3 is not just
+            ** "k0 is banned". */
+            memset(&c,0,sizeof c);
+            c.zText="this one was actually checked"; c.zStatus="k0";
+            c.zFalsifier="a run of the probe that comes out the other way";
+            c.zTs="2026-08-01T00:00:04Z";
+            check(viki_claim(&c,idC)==VIKI_OK,
+                  "Y3c CONTROL: a k0 WITH a falsifier is stored", viki_errmsg());
+
+            memset(&c,0,sizeof c);
+            c.zText="the correction"; c.zStatus="k0";
+            c.zFalsifier="a measurement that comes out the other way";
+            c.zBecause="a trace wrote it as a requirement and nobody measured it";
+            c.zTs="2026-08-29T00:00:00Z"; c.zSupersedes=idA; c.zBy="Warren";
+            check(viki_claim(&c,idB)==VIKI_OK, "Y4 a claim can retire another", viki_errmsg());
+
+            memset(&C,0,sizeof C);
+            check(viki_why(idA, chainCb, &C)==VIKI_OK && C.n==2,
+                  "Y5a the chain has the subject and its correction", "wrong count");
+            /* THE ORDERING ASSERTION. */
+            check(C.n==2 && C.aFwd[0]==1 && !strcmp(C.zOrder[0],"the correction")
+                         && C.aDepth[1]==0 && !strcmp(C.zOrder[1],"the old belief"),
+                  "Y5 the CORRECTION comes out before the thing corrected",
+                  C.n ? C.zOrder[0] : "empty");
+
+            /* ...and from the other end, the chain runs backward. */
+            memset(&C,0,sizeof C);
+            viki_why(idB, chainCb, &C);
+            check(C.n==2 && C.aDepth[0]==0 && C.aFwd[1]==0
+                  && !strcmp(C.zOrder[1],"the old belief"),
+                  "Y6 from the newer claim, the chain walks BACK to what it replaced",
+                  "no ancestor");
+
+            /* NOT FOUND AND NO-CHAIN MUST NOT LOOK THE SAME -- the same
+            ** coverage lie the brief is built to avoid. */
+            memset(&C,0,sizeof C);
+            check(viki_why("0000000000000000000000000000000000000000000000000000000000000000",
+                           chainCb, &C)==VIKI_ENOTFOUND && C.n==0,
+                  "Y7 an id that is not here is ENOTFOUND, not an empty chain",
+                  "absence read as 'nothing superseded it'");
+
+            /* AND IT IS NOT CLAIM-SPECIFIC: a task retired by an arrival is
+            ** the same shape, which is what makes this a core primitive
+            ** rather than a feature of claims. */
+            {   VikiTask t; VikiNote nt; char idT[VIKI_ID_HEX+1];
+                memset(&t,0,sizeof t);
+                t.zText="sue's report"; t.zWho="sue"; t.zDue="2026-09-02";
+                t.zTs="2026-08-29T01:00:00Z";
+                viki_task(&t, idT);
+                memset(&nt,0,sizeof nt);
+                nt.vftbl=&vikiNoteVftbl; nt.zText="sue reported";
+                nt.zTs="2026-08-30T00:00:00Z"; nt.zSupersedes=idT;
+                viki_put((VikiAssert*)&nt);
+                memset(&C,0,sizeof C);
+                check(viki_why(idT, chainCb, &C)==VIKI_OK && C.n==2 && C.aFwd[0]==1,
+                      "Y8 the chain works for ANY kind -- a task and its arrival",
+                      "claims only");
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbY);
     }
 
     printf("\n%d passed, %d failed\n", nPass, nFail);

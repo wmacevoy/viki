@@ -988,3 +988,52 @@ from its inputs.
 The Fossil-backed implementation is no longer the target; what `src/` still
 has and `core/` does not is now a MIGRATION LIST, not a parallel product. The
 ledger was the first item on it and is done.
+
+## Claims and the chain (2026-08-29)
+
+`viki_trace.c` adds the thing a *trace* needs, as distinct from what a person
+needs: **a claim that carries how sure it is, and a chain a later trace can
+walk backwards.**
+
+The case it was built from is this repository's own. *"viki never forks -- it
+can't on iOS"* was written into `CLAUDE.md` by an earlier trace of the same
+model that wrote this file. It was never measured. Every session afterwards
+read it with exactly the authority of *"chunks are 40 lines with 10-line
+overlap"*, which IS measured and carries a repro. Weeks of work followed. It
+was retired in one sentence of conversation on 2026-08-29.
+
+**The defect is that a document has one voice.** Present tense cannot say
+"a trace guessed this", so a confident error and a measurement arrive at the
+next reader identical -- and the next reader is a stranger who cannot feel the
+seam.
+
+    viki claim TEXT --status k0..k4 [--falsified-by W] [--by WHO]
+                    [--supersedes ID --because WHY]
+    viki why ID
+
+**Two refusals at write time.** A status outside `k0..k4` is not a status. And
+**a k0 with no falsifier is refused**: "it was checked" without "and here is
+what would have shown it wrong" is the exact shape of the error this file
+exists to make visible. Y3 pins it; Y3b and Y3c are the controls that keep the
+rule about k0 rather than about empty fields -- a k1 IS the admission of a gap
+and owes nothing.
+
+**`viki why` walks the chain BOTH ways, and forward first.** That ordering is
+the whole user-visible point: a trace arriving at a retired claim must meet the
+retirement *before* the claim, or it acts on it exactly the way the trace
+before it did. Y5 pins the order; flipping `ORDER BY fwd DESC` to `ASC` turns
+it red and nothing else.
+
+**`supersedes` was in the schema and indexed from the first commit, and every
+query over it asked one question** -- `NOT EXISTS (supersedes = a.id)`, "is
+this current?". Nothing ever asked what a thing replaced. The chain was
+write-only, so a correction was invisible to the next trace -- which is
+precisely the failure. `viki why` is the read side, and it closes the first
+item on the migration list.
+
+It works for **any** kind, not just claims: a task retired by an arrival walks
+the same chain (Y8). That assertion found a live bug -- `json_extract()`
+**throws** on a note's body rather than returning NULL, because a note's body
+is raw text and only claims and tasks are JSON. `coalesce()` cannot degrade
+past an abort. Every read is now guarded by `json_valid()`, factored into one
+CTE so the guard cannot be applied twice and forgotten once.

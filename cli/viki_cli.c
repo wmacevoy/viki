@@ -52,6 +52,7 @@
 #include <time.h>
 #include "viki_core.h"
 #include "viki_task.h"
+#include "viki_trace.h"
 #include "viki_cal.h"
 #include "sha256.h"
 #include <dlfcn.h>
@@ -73,6 +74,12 @@ static int usage(void){
 "  ledger [--me NAME]    what is owed, to whom, by when. LIVE only:\n"
 "                        anything superseded has left.  --json\n"
 "  coverage              which channels fed this diary, and when last\n"
+"  claim TEXT            what a trace believes, and HOW SURE.  --status k0..k4\n"
+"                        --falsified-by W (required for k0) --by WHO\n"
+"                        --supersedes ID --because WHY  retires an older claim\n"
+"  why ID                the chain BOTH ways: what replaced this, and what\n"
+"                        this replaced.  Newest first, so a reader meets the\n"
+"                        correction before the thing corrected\n"
 "  pending               captures never structured into a task\n"
 "  ask QUERY [-k N]      hybrid retrieval\n"
 "  forget ID             withdraw an assertion (local; peers keep theirs)\n"
@@ -541,6 +548,30 @@ static int covRow(void *pApp, int nCol, const char *const *az){
     return 0;
 }
 
+
+/* ---- printing a supersession chain -----------------------------------
+** FORWARD FIRST, and that ordering is the point rather than a preference: a
+** trace arriving at a retired claim must meet the retirement BEFORE the
+** claim, or it will act on it exactly the way the trace before it did. */
+struct whyPr { FILE *out; int nFwd, nBack; };
+static int whyRow(void *pApp, const VikiChainRow *r){
+    struct whyPr *c = (struct whyPr*)pApp;
+    const char *zArrow;
+    if( r->nDepth==0 )      zArrow = "  >>";
+    else if( r->bForward ){ zArrow = "  ^ "; c->nFwd++; }
+    else                  { zArrow = "  v "; c->nBack++; }
+    fprintf(c->out, "%s %.12s  %-6s %s%s%s\n", zArrow, r->zId, r->zKind,
+            r->zStatus && r->zStatus[0] ? "[" : "",
+            r->zStatus ? r->zStatus : "",
+            r->zStatus && r->zStatus[0] ? "] " : "");
+    fprintf(c->out, "       %s\n", r->zText ? r->zText : "");
+    if( r->zBecause && r->zBecause[0] )
+        fprintf(c->out, "       because: %s\n", r->zBecause);
+    if( r->zBy && r->zBy[0] )
+        fprintf(c->out, "       by: %s   %s\n", r->zBy, r->zTs ? r->zTs : "");
+    return 0;
+}
+
 /* ---- the verbs, executed against a retained store --------------------- */
 static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
     int n = 0;
@@ -641,6 +672,45 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
               " ORDER BY a.ts", covRow, &j)!=VIKI_OK ){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
         fputs(j.n ? "\n]\n" : "]\n", out);
+        return 0;
+    }
+    if( !strcmp(argv[0],"claim") && argc>=2 ){
+        VikiClaim c; char zId[VIKI_ID_HEX+1]; int i;
+        memset(&c, 0, sizeof(c));
+        c.zText = argv[1];
+        c.zTs   = isoNow();
+        for(i=2;i+1<argc;i++){
+            if(!strcmp(argv[i],"--status"))            c.zStatus=argv[++i];
+            else if(!strcmp(argv[i],"--falsified-by")) c.zFalsifier=argv[++i];
+            else if(!strcmp(argv[i],"--because"))      c.zBecause=argv[++i];
+            else if(!strcmp(argv[i],"--by"))           c.zBy=argv[++i];
+            else if(!strcmp(argv[i],"--supersedes"))   c.zSupersedes=argv[++i];
+        }
+        if( viki_claim(&c, zId)!=VIKI_OK ){
+            fprintf(stderr,"%s: refused.\n",zProg);
+            fprintf(stderr,"%s:   --status must be one of k0 k1 k2 k3 k4\n",zProg);
+            fprintf(stderr,"%s:   a k0 also needs --falsified-by: \"it was checked\"\n",zProg);
+            fprintf(stderr,"%s:   without \"and here is what would have shown it wrong\"\n",zProg);
+            fprintf(stderr,"%s:   is the exact shape of a confident error.\n",zProg);
+            return 1; }
+        fprintf(out, "%s\n", zId);
+        return 0;
+    }
+    if( !strcmp(argv[0],"why") && argc>=2 ){
+        struct whyPr c; VikiStatus rc;
+        memset(&c, 0, sizeof(c)); c.out = out;
+        rc = viki_why(argv[1], whyRow, &c);
+        if( rc==VIKI_ENOTFOUND ){
+            /* NOT FOUND AND NO-CHAIN MUST NOT PRINT THE SAME. */
+            fprintf(stderr,"%s: no assertion %s in this diary.\n",zProg,argv[1]);
+            fprintf(stderr,"%s: that is NOT the same as \"nothing superseded it\".\n",zProg);
+            return 1; }
+        if( rc!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        fprintf(out, "\n  %d newer (^ what replaced it), %d older (v what it replaced)\n",
+                c.nFwd, c.nBack);
+        if( c.nFwd==0 )
+            fprintf(out, "  nothing has superseded this. It still stands.\n");
         return 0;
     }
     if( !strcmp(argv[0],"ask") && argc>=2 ){
