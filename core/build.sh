@@ -27,8 +27,9 @@ echo "==> sqlite3.o"
 [ -f "$OUT/sqlite3.o" ] || cc $CFLAGS -w $SQLFLAGS -I$SQLITE -c "$SQLITE/sqlite3.c" -o "$OUT/sqlite3.o"
 echo "==> viki-core"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_core.c" -o "$OUT/viki_core.o"
+cc $CFLAGS $INC -c "$ROOT/core/src/viki_cal.c"  -o "$OUT/viki_cal.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/sha256.c"    -o "$OUT/sha256.o"
-ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/sha256.o"
+ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/sha256.o"
 echo "==> probe"
 cc $CFLAGS $INC -o "$OUT/core-probe" "$ROOT/core/test/core_probe.c" \
    "$OUT/libvikicore.a" "$OUT/sqlite3.o" -lm -lpthread

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "viki_core.h"
+#include "viki_cal.h"
 
 static int nPass = 0, nFail = 0;
 static void ok(const char *z){ nPass++; printf("  ok    %s\n", z); }
@@ -308,6 +309,130 @@ int main(void){
             RETAIN_END(g);
         }
         sqlite3_close(dbG);
+    }
+
+    printf("\n== K: calendar assertions ==\n");
+    {
+        /* These are ported from the predecessor's cal-probe, and every one of
+        ** them corresponds to a place an ICS parser is silently WRONG rather
+        ** than loudly broken. */
+        sqlite3 *dbK = 0; VikiStore sK; int nAdd = 0;
+        sqlite3_open(":memory:", &dbK); sK.db = dbK;
+        viki_attach(dbK); viki_cal_attach(dbK);
+        {
+            RETAIN_BEGIN(VikiStore, &sK, g);
+            check(viki_cal_shred("not a calendar at all", 21, "probe", &nAdd)==VIKI_EINVAL,
+                  "K1 CONTROL: input with no BEGIN:VCALENDAR is REFUSED",
+                  "an HTML error page would read as a quiet day");
+
+            {   /* fold, quoted-colon params, VALARM nesting, four time forms */
+                static const char zIcs[] =
+                  "BEGIN:VCALENDAR\r\n"
+                  "BEGIN:VEVENT\r\n"
+                  "UID:ev1@probe\r\n"
+                  "DTSTAMP:20260801T120000Z\r\n"
+                  "SEQUENCE:0\r\n"
+                  "SUMMARY:Quarterly review with the whole tea\r\n m about budget\r\n"
+                  "ORGANIZER;CN=\"Doe, J:R\":mailto:j@example.com\r\n"
+                  "DTSTART;TZID=America/Denver:20260901T150000\r\n"
+                  "DTEND;TZID=America/Denver:20260901T160000\r\n"
+                  "BEGIN:VALARM\r\n"
+                  "ACTION:DISPLAY\r\n"
+                  "DURATION:-PT15M\r\n"
+                  "END:VALARM\r\n"
+                  "END:VEVENT\r\n"
+                  "END:VCALENDAR\r\n";
+                char *z = 0;
+                viki_cal_shred(zIcs, sizeof(zIcs)-1, "probe", &nAdd);
+                check(nAdd==1, "K2 one VEVENT shredded", "wrong count");
+                viki_sql("SELECT summary FROM viki_event", 0, 0);
+                z = 0;
+                {   sqlite3_stmt *q=0;
+                    sqlite3_prepare_v2(dbK,"SELECT summary FROM viki_event",-1,&q,0);
+                    if(sqlite3_step(q)==SQLITE_ROW) z=strdup((const char*)sqlite3_column_text(q,0));
+                    sqlite3_finalize(q);
+                }
+                /* THE FOLD IS CRLF + SPACE AND BOTH GO. Keeping the space
+                ** corrupts every long SUMMARY into a plausible string. */
+                check(z && strcmp(z,"Quarterly review with the whole team about budget")==0,
+                      "K3 a folded SUMMARY is rejoined with NO stray space", z?z:"none");
+                free(z);
+                {   sqlite3_stmt *q=0; char *o=0;
+                    sqlite3_prepare_v2(dbK,"SELECT organizer FROM viki_event",-1,&q,0);
+                    if(sqlite3_step(q)==SQLITE_ROW) o=strdup((const char*)sqlite3_column_text(q,0));
+                    sqlite3_finalize(q);
+                    /* the colon ending the params is NOT the first colon */
+                    check(o && strcmp(o,"mailto:j@example.com")==0,
+                          "K4 a quoted CN containing a colon does not split the line", o?o:"none");
+                    free(o);
+                }
+                {   sqlite3_stmt *q=0; char *d=0;
+                    sqlite3_prepare_v2(dbK,"SELECT coalesce(duration,'') FROM viki_event",-1,&q,0);
+                    if(sqlite3_step(q)==SQLITE_ROW) d=strdup((const char*)sqlite3_column_text(q,0));
+                    sqlite3_finalize(q);
+                    /* a VALARM's DURATION is the ALARM's: without the nesting
+                    ** skip a one-hour appointment reads as fifteen minutes */
+                    check(d && d[0]==0,
+                          "K5 a VALARM's DURATION does NOT become the meeting's", d?d:"none");
+                    free(d);
+                }
+                {   sqlite3_stmt *q=0; char *f=0,*t=0;
+                    sqlite3_prepare_v2(dbK,"SELECT dtstart_form, dtstart_tzid FROM viki_event",-1,&q,0);
+                    if(sqlite3_step(q)==SQLITE_ROW){
+                        f=strdup((const char*)sqlite3_column_text(q,0));
+                        t=strdup((const char*)sqlite3_column_text(q,1));
+                    }
+                    sqlite3_finalize(q);
+                    check(f && strcmp(f,"zoned")==0 && t && strcmp(t,"America/Denver")==0,
+                          "K6 a TZID time is 'zoned' and keeps its IANA name", f?f:"none");
+                    free(f); free(t);
+                }
+                check(count(dbK,"SELECT count(*) FROM viki_event WHERE dtstart LIKE '%+%' OR dtstart LIKE '%-0%'")==0,
+                      "K7 CONTROL: no UTC OFFSET is ever stored -- only the TZID", "an offset leaked in");
+            }
+
+            {   /* RFC 5546 precedence, through core's shared resolver */
+                static const char zUpd[] =
+                  "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+                  "UID:ev1@probe\r\nDTSTAMP:20260802T120000Z\r\nSEQUENCE:1\r\n"
+                  "SUMMARY:Quarterly review MOVED\r\n"
+                  "DTSTART;TZID=America/Denver:20260902T150000\r\n"
+                  "END:VEVENT\r\nEND:VCALENDAR\r\n";
+                int seen = 0;
+                viki_cal_shred(zUpd, sizeof(zUpd)-1, "probe", &nAdd);
+                viki_cal_reproject(&n);
+                {   sqlite3_stmt *q=0; char *sm=0;
+                    sqlite3_prepare_v2(dbK,
+                      "SELECT summary FROM viki_event e JOIN viki_assert a ON a.id=e.id"
+                      " WHERE a.arank=(SELECT max(arank) FROM viki_assert WHERE akey=a.akey)",
+                      -1,&q,0);
+                    if(sqlite3_step(q)==SQLITE_ROW) sm=strdup((const char*)sqlite3_column_text(q,0));
+                    sqlite3_finalize(q);
+                    check(sm && strstr(sm,"MOVED")!=0,
+                          "K8 a higher SEQUENCE wins -- RFC 5546, via core's ONE resolver",
+                          sm?sm:"none");
+                    free(sm);
+                }
+                check(count(dbK,"SELECT count(*) FROM viki_assert WHERE kind='event'")==2,
+                      "K9 CONTROL: the superseded assertion STAYS in the store", "it was replaced");
+                (void)seen;
+            }
+
+            {   /* the date-bound bug: ISO in, RFC 5545 basic stored */
+                int nHit = 0;
+                viki_sql("SELECT 1", 0, 0);
+                {   sqlite3_stmt *q=0;
+                    sqlite3_prepare_v2(dbK,
+                      "SELECT count(*) FROM viki_event WHERE sortkey>='20260901T000000'"
+                      " AND sortkey<='20260903T235959'", -1,&q,0);
+                    if(sqlite3_step(q)==SQLITE_ROW) nHit=sqlite3_column_int(q,0);
+                    sqlite3_finalize(q);
+                }
+                check(nHit>0, "K10 events are findable by a normalised range", "none in range");
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbK);
     }
 
     printf("\n%d passed, %d failed\n", nPass, nFail);

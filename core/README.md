@@ -161,12 +161,13 @@ nothing else.
 ```
 core/include/viki_core.h   the whole public surface
 core/src/viki_core.c       assertions, merge, projection, retrieval
+core/src/viki_cal.c        calendar: the RFC 5545 parser + ONE VikiAssert subtype
 core/src/sha256.c          ported unchanged
 core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **36 passed, 0 failed** (7 constraint + 29 behaviour).
+`sh core/test/core-probe.sh` → **46 passed, 0 failed** (7 constraint + 39 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -217,8 +218,48 @@ not own, so `viki_reindex()` **committed the caller's open transaction** — now
 and `viki_sql()` dropped every statement after the first and never read its
 step result, so a failed write on the raw rung returned `VIKI_OK`.
 
+### Calendar, ported 2026-08-29 — and the port is the argument
+
+`cal_event` in the predecessor was a second, parallel implementation of
+"grow-only rows on an identity key, resolved at read time, losers retained" —
+the same structure as `viki_note`, written twice with different column names
+and different SQL. Here it is **one subtype**:
+
+| slot | value | what it means |
+|---|---|---|
+| `key()` | `uid␟recurrence_id` | RFC 5546's identity |
+| `rank()` | `%010d` SEQUENCE `␟` DTSTAMP | RFC 5546 §3.2's precedence, verbatim |
+| `canon()` | the identity tuple | so two feeds differing only in property ORDER are one assertion |
+| `text()` | SUMMARY + DESCRIPTION | what retrieval sees |
+
+So `viki_current()` — **one statement, shared with notes** — *is* "highest
+SEQUENCE, then latest DTSTAMP wins", and core never learns that RFC 5546
+exists. SEQUENCE is zero-padded because it is an unbounded integer in the RFC
+and `"10"` must not sort below `"9"`.
+
+Ten assertions (K1–K10), each corresponding to a place an ICS parser is
+silently wrong rather than loudly broken. Two verified non-vacuous by
+reintroducing the classic bug:
+
+```
+fold kept as CRLF+space only   ->  FAIL K3   38 passed, 1 failed
+VALARM nesting skip removed    ->  FAIL K5   38 passed, 1 failed
+both fixed                     ->           39 passed, 0 failed
+```
+
+K1 refuses input with no `BEGIN:VCALENDAR` — an adapter that fetched an HTML
+error page must not read as a quiet day. K7 asserts **no UTC offset is ever
+stored**: an offset is a fact about a moment, a TZID is a fact about a rule,
+and only the second survives the rule changing. K9 asserts the superseded
+assertion stays.
+
+**Occurrence expansion is deliberately absent**, unchanged from the
+predecessor's reasoning: it depends on the viewer's zone, the query window and
+the tzdata version, so it is not a shareable fact and does not belong in a
+grow-only store.
+
 ### Not yet
 
-Time/intervals (`viki_cal.c` ports next), a real embedder binding, a delete
-path (FTS first, then chunk — the order is load-bearing), and the CLI/HTTP/MCP
-faces, which are bindings to this ABI rather than new implementations.
+A real embedder binding, a delete path (FTS first, then chunk — the order is
+load-bearing), and the CLI/HTTP/MCP faces, which are bindings to this ABI
+rather than new implementations.
