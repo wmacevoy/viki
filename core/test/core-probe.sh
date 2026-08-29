@@ -20,14 +20,24 @@ none "C2 no network (no socket/connect/send/recv)"    '\b(socket\(|connect\(|sen
 none "C3 no subprocess (no fork/exec/popen/system)"   '\b(fork\(|exec[lv]|popen\(|system\()'
 none "C4 no fossil (no fossil symbol anywhere)"       'fossil'
 none "C5 no threading primitives of core's own"       'pthread_|thrd_|mtx_'
-# C5b: core keeps NO mutable process-global. The one _Thread_local permitted is
-# the error buffer -- per-thread precisely BECAUSE the context it describes is,
-# and a shared one would let one thread read another's failure. Anything else
-# thread-local would be core rolling its own context mechanism instead of using
-# retain, which is the thing C5 exists to prevent.
-tls=$(grep -nE '_Thread_local|VIKI_TLS' $SRC | grep -v 'define VIKI_TLS' | grep -v 'g_err' || true)
-[ -z "$tls" ] && ok "C5b the only thread-local is the error buffer" \
-               || bad "C5b core has thread-local state other than g_err" "$tls"
+# C5b: core keeps NO mutable PROCESS-global. Exactly two thread-locals are
+# permitted, and both are per-thread for the same reason -- the context they
+# describe is:
+#
+#   g_err     the last error. Shared, one thread would read another's failure,
+#             and viki_errmsg() is the only way a caller learns WHY.
+#   g_pWatch  the listener registry. A store is reached through a retained
+#             VikiStore, and retain's stacks are thread-local, so a store is
+#             already per-thread; a shared registry would be the only piece
+#             disagreeing about that.
+#
+# Anything ELSE going thread-local is core rolling its own context mechanism
+# instead of using retain, which is what C5 exists to prevent. The list is
+# explicit rather than a pattern so adding a third requires saying why.
+tls=$(grep -nE '_Thread_local|VIKI_TLS' $SRC | grep -v 'define VIKI_TLS' \
+      | grep -vE 'g_err|g_pWatch' || true)
+[ -z "$tls" ] && ok "C5b thread-local state is exactly g_err and g_pWatch" \
+               || bad "C5b core grew a third thread-local" "$tls"
 # C6 is the positive control for C1-C5: if the grep itself were broken, every
 # one of them would pass against any file at all.
 if grep -qE 'sqlite3_open|sqlite3_prepare' $SRC; then
@@ -48,6 +58,28 @@ if grep -q 'json_extract' $SRC; then
   ok "C7b CONTROL: json_extract IS present (C7 is not passing on an empty file)"
 else
   bad "C7b CONTROL failed" "no json_extract -- C7 proves nothing"
+fi
+
+# C8: THE HOST NEVER READS THE TABLES.
+#
+# "all interactions are through viki-core, no poking at the sql tables
+# directly" is a requirement, and the probe is the only host core has -- so
+# the probe is where it is enforced. It may call viki_sql(), which IS the API
+# (SCOPES 1b requires a raw rung so a curated verb is never the only door);
+# it may NOT open a statement on the connection itself.
+#
+# The failure this prevents is not untidiness. A probe that reads the tables
+# keeps passing while the API is missing the verb it needed -- so the gap is
+# never reported, and the first real host discovers it instead.
+PROBE="$ROOT/core/test/core_probe.c"
+raw=$(grep -nE 'sqlite3_(prepare|exec)' "$PROBE" | grep -vE 'sqlite3_open|:memory:' || true)
+[ -z "$raw" ] && ok "C8 the probe reads core ONLY through the API" \
+              || bad "C8 the probe prepares its own statements on core's tables" \
+                     "$(printf '%s' "$raw" | head -3)"
+if grep -q 'viki_count\|viki_each\|viki_sql' "$PROBE"; then
+  ok "C8b CONTROL: it does read through the API (C8 is not passing on an empty file)"
+else
+  bad "C8b CONTROL failed" "no API reads at all -- C8 proves nothing"
 fi
 
 echo

@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **71 passed, 0 failed** (9 constraint + 62 behaviour).
+`sh core/test/core-probe.sh` → **84 passed, 0 failed** (11 constraint + 73 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -293,6 +293,40 @@ V4           the COARSE (8-line) added        -> one range holds both ✓ found
 The vector leg's budget is **per chunking** (`row_number() OVER (PARTITION BY
 chunking)`), because without that partition the finest policy takes every slot
 simply by having the most rows.
+
+### Observability, and "no poking at the tables"
+
+`viki_watch()` gives semantic events, not row events — *"an assertion
+arrived"*, not *"a row was inserted into viki_assert"*. The schema is core's
+business and has already changed once (ranges replaced ordinals), so a
+listener is told things in the vocabulary of the API.
+
+**Events are write-only by construction.** `PUT`, `SUPERSEDED`, `FORGOTTEN`,
+`MERGED`, `PROJECTED`. A read can be an arbitrary join and has no change to
+announce; O5 asserts that reads fire nothing.
+
+**They are buffered and flushed on COMMIT, discarded on rollback.** Core runs
+inside `SAVEPOINT`s on a connection it does not own, so the host may roll back
+after us — and a listener that wrote to a UI or told a peer cannot take that
+back. O6 asserts a host `ROLLBACK` is never announced. A listener that tries
+to *write* gets `VIKI_EBUSY` rather than reentering the queue it is being
+dispatched from (O9).
+
+**And the requirement that all interaction goes through core is enforced, not
+stated.** `viki_count()` and `viki_each()` exist so a caller never names a
+table; `viki_cal_events()` covers the calendar. **C8 greps the probe** for
+statements prepared on the connection itself — the probe is the only host core
+has, so it is where the rule is testable. `viki_sql()` is allowed, because it
+*is* the API (SCOPES §1b: a curated verb must never be the only door).
+
+That conversion immediately paid for itself twice: it broke A5, which had been
+counting the wrong store (`viki_count()` answers about the *retained* one), and
+it exposed a real inconsistency — `VIKI_N_CURRENT` counted "nothing explicitly
+supersedes it" while `viki_current()` means "wins its key by rank". **Those are
+not the same**: an update that wins by a higher RFC 5546 sequence sets no
+supersedes link, so the older assertion is unsuperseded and no longer current.
+Two notions under one name is exactly the drift a single resolver was meant to
+prevent.
 
 ### Withdrawal, and a rule that turned out to be narrower than inherited
 

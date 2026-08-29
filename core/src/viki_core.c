@@ -150,6 +150,128 @@ VikiStatus viki_attach(sqlite3 *db){
     return VIKI_OK;
 }
 
+/* ---- observability ---------------------------------------------------
+**
+** Events are BUFFERED and flushed on COMMIT. Core runs inside SAVEPOINTs on a
+** connection it does not own, so the host may roll back after us; announcing
+** a change during the operation would tell a listener about something that
+** never happened, and a listener that wrote to a UI or told a peer cannot
+** take that back. SQLite's commit/rollback hooks are what make "never an
+** uncommitted change, never a missed committed one" true rather than hoped.
+**
+** State is per-CONNECTION, held in a small registry rather than a global, so
+** two stores in one process notify independently. */
+#define VIKI_MAX_WATCH 8
+#define VIKI_MAX_QUEUE 256
+
+typedef struct {
+    VikiEventKind kind;
+    char zId[VIKI_ID_HEX+1];
+    char zKey[256];
+    char zOther[VIKI_ID_HEX+1];
+    int  n;
+} QEvent;
+
+typedef struct WatchSet WatchSet;
+struct WatchSet {
+    sqlite3      *db;
+    WatchSet     *pNext;
+    viki_watch_fn axFn[VIKI_MAX_WATCH];
+    void         *apApp[VIKI_MAX_WATCH];
+    int           anTok[VIKI_MAX_WATCH];
+    int           nNextTok;
+    QEvent        aQ[VIKI_MAX_QUEUE];
+    int           nQ;
+    int           bOverflow;   /* more events than the queue holds          */
+    int           bDispatching;/* reentrancy guard -- see viki_watch()      */
+};
+static VIKI_TLS WatchSet *g_pWatch = 0;
+
+static WatchSet *watch_find(sqlite3 *db, int bCreate){
+    WatchSet *p;
+    for(p=g_pWatch; p; p=p->pNext) if( p->db==db ) return p;
+    if( !bCreate ) return 0;
+    p = (WatchSet*)calloc(1, sizeof(*p));
+    if( !p ) return 0;
+    p->db = db; p->nNextTok = 1;
+    p->pNext = g_pWatch; g_pWatch = p;
+    return p;
+}
+
+static void watch_flush(void *pArg){
+    WatchSet *p = (WatchSet*)pArg;
+    int i, w;
+    if( !p || p->bDispatching ) return;
+    p->bDispatching = 1;
+    for(i=0;i<p->nQ;i++){
+        VikiEvent2 ev;
+        ev.kind   = p->aQ[i].kind;
+        ev.zId    = p->aQ[i].zId[0]    ? p->aQ[i].zId    : 0;
+        ev.zKey   = p->aQ[i].zKey[0]   ? p->aQ[i].zKey   : 0;
+        ev.zOther = p->aQ[i].zOther[0] ? p->aQ[i].zOther : 0;
+        ev.n      = p->aQ[i].n;
+        for(w=0;w<VIKI_MAX_WATCH;w++)
+            if( p->axFn[w] ) p->axFn[w](p->apApp[w], &ev);
+    }
+    p->nQ = 0; p->bOverflow = 0;
+    p->bDispatching = 0;
+}
+static int on_commit(void *pArg){ watch_flush(pArg); return 0; }
+/* DISCARDED, not flushed: the host rolled back, so none of it happened. */
+static void on_rollback(void *pArg){
+    WatchSet *p = (WatchSet*)pArg;
+    if( p ){ p->nQ = 0; p->bOverflow = 0; }
+}
+
+static void emit(sqlite3 *db, VikiEventKind k, const char *zId,
+                 const char *zKey, const char *zOther, int n){
+    WatchSet *p = watch_find(db, 0);
+    QEvent *e;
+    if( !p || p->nQ>=VIKI_MAX_QUEUE ){ if( p ) p->bOverflow = 1; return; }
+    e = &p->aQ[p->nQ++];
+    memset(e, 0, sizeof(*e));
+    e->kind = k; e->n = n;
+    if( zId )    snprintf(e->zId,    sizeof(e->zId),    "%s", zId);
+    if( zKey )   snprintf(e->zKey,   sizeof(e->zKey),   "%s", zKey);
+    if( zOther ) snprintf(e->zOther, sizeof(e->zOther), "%s", zOther);
+    /* NOT INSIDE A HOST TRANSACTION: our savepoint already released and
+    ** SQLite auto-committed, so the commit hook will not fire again. Flush
+    ** now rather than holding events until some unrelated later commit. */
+    if( sqlite3_get_autocommit(db) ) watch_flush(p);
+}
+
+VikiStatus viki_watch(sqlite3 *db, viki_watch_fn x, void *pApp, int *pnToken){
+    WatchSet *p;
+    int i;
+    if( !db || !x ) return VIKI_EINVAL;
+    p = watch_find(db, 1);
+    if( !p ) return VIKI_ENOMEM;
+    for(i=0;i<VIKI_MAX_WATCH;i++) if( !p->axFn[i] ) break;
+    if( i==VIKI_MAX_WATCH ) return VIKI_EBUSY;
+    p->axFn[i] = x; p->apApp[i] = pApp; p->anTok[i] = p->nNextTok++;
+    if( pnToken ) *pnToken = p->anTok[i];
+    sqlite3_commit_hook(db, on_commit, p);
+    sqlite3_rollback_hook(db, on_rollback, p);
+    return VIKI_OK;
+}
+
+VikiStatus viki_unwatch(sqlite3 *db, int nToken){
+    WatchSet *p = watch_find(db, 0);
+    int i;
+    if( !p ) return VIKI_ENOTFOUND;
+    for(i=0;i<VIKI_MAX_WATCH;i++)
+        if( p->axFn[i] && p->anTok[i]==nToken ){ p->axFn[i]=0; p->apApp[i]=0; return VIKI_OK; }
+    return VIKI_ENOTFOUND;
+}
+
+/* Refuses a mutation attempted from inside a listener. Without this a
+** listener that noted something would append to the queue it is being
+** dispatched from. */
+static int watch_busy(sqlite3 *db){
+    WatchSet *p = watch_find(db, 0);
+    return p && p->bDispatching;
+}
+
 /* ---- assertions ------------------------------------------------------ */
 static void hex_sha256(const char *z, char *zOut){
     viki_sha256_hex(z, strlen(z), zOut);
@@ -185,6 +307,7 @@ VikiStatus viki_put(VikiAssert *p){
     const char *zCanon;
     int rc;
     if( !db ) return VIKI_ENOCTX;
+    if( watch_busy(db) ) return fail(VIKI_EBUSY, "viki_put: called from a listener%s","");
     if( !p || !p->vftbl ) return fail(VIKI_EINVAL, "viki_put: null assertion%s", "");
     /* EVERY slot is checked, not just canon(). akey/arank/atext are NOT NULL
     ** in the schema and INSERT OR IGNORE suppresses a NOT NULL violation just
@@ -253,7 +376,10 @@ VikiStatus viki_put(VikiAssert *p){
         if( !bHave ) return fail(VIKI_ESQL,
             "viki_put: row was rejected and no prior copy exists (%s)",
             sqlite3_errmsg(db));
+        return VIKI_OK;                 /* already stored: not a new event */
     }
+    emit(db, p->zSupersedes ? VIKI_EV_SUPERSEDED : VIKI_EV_PUT,
+         p->zId, p->vftbl->key(p), p->zSupersedes, 1);
     return VIKI_OK;
 }
 
@@ -353,6 +479,7 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
                     rc!=SQLITE_OK ? sqlite3_errmsg(db) : sqlite3_errmsg(pOther));
     }
     tx_end(db, "viki_merge", 1);
+    emit(db, VIKI_EV_MERGED, 0, 0, 0, n);
     if( pnAdded ) *pnAdded = n;
     return VIKI_OK;
 }
@@ -486,6 +613,7 @@ VikiStatus viki_reindex(const VikiChunking *pCh, int *pnChunked){
     }
     sqlite3_finalize(st);
     tx_end(db, "viki_reindex", 1);
+    emit(db, VIKI_EV_PROJECTED, 0, 0, 0, nTot);
     if( pnChunked ) *pnChunked = nTot;
     return VIKI_OK;
 }
@@ -575,6 +703,7 @@ VikiStatus viki_forget(const char *zId){
         sqlite3_finalize(st);
     }
     tx_end(db, "viki_forget", 1);
+    emit(db, VIKI_EV_FORGOTTEN, zId, 0, 0, 1);
     return VIKI_OK;
 }
 
@@ -892,5 +1021,81 @@ VikiStatus viki_sql(const char *zSql, viki_row x, void *pApp){
             return fail(VIKI_ESQL, "viki_sql: %s", sqlite3_errmsg(db));
         zTail = zNext;
     }
+    return VIKI_OK;
+}
+
+/* ---- reading without knowing the schema ------------------------------
+** These exist so a host never needs to name a table. core's own probe is
+** written against them, which is what keeps that claim honest: if the probe
+** cannot be expressed here, the API has a gap rather than the probe having
+** an excuse. */
+VikiStatus viki_count(VikiCountWhat what, const char *zFilter, int *pn){
+    sqlite3 *db = db_or_null();
+    sqlite3_stmt *st = 0;
+    const char *zSql = 0;
+    int rc;
+    if( pn ) *pn = 0;
+    if( !db ) return VIKI_ENOCTX;
+    switch( what ){
+      case VIKI_N_ASSERT:
+        zSql = "SELECT count(*) FROM viki_assert WHERE (?1 IS NULL OR kind=?1)"; break;
+      case VIKI_N_CURRENT:
+        /* THE RESOLVED WINNERS -- one per key -- which is what viki_current()
+        ** returns. An earlier version counted "assertions nothing explicitly
+        ** supersedes", and those are NOT the same thing: an update that wins
+        ** by RANK (a higher RFC 5546 sequence, say) sets no supersedes link,
+        ** so the older assertion is still unsuperseded while no longer being
+        ** current. Two notions with one name is exactly the kind of drift
+        ** having a single resolver was supposed to prevent. */
+        zSql = "SELECT count(DISTINCT akey) FROM viki_assert a"
+               " WHERE (?1 IS NULL OR a.kind=?1)"
+               "   AND NOT EXISTS(SELECT 1 FROM viki_assert s WHERE s.supersedes=a.id)"; break;
+      case VIKI_N_RANGE:
+        zSql = "SELECT count(*) FROM viki_chunk WHERE (?1 IS NULL OR model=?1)"; break;
+      case VIKI_N_VECTOR:
+        zSql = "SELECT count(*) FROM viki_chunk WHERE vec IS NOT NULL"
+               " AND (?1 IS NULL OR model=?1)"; break;
+      case VIKI_N_CHUNKING:
+        zSql = "SELECT count(DISTINCT chunking) FROM viki_chunk"
+               " WHERE (?1 IS NULL OR model=?1)"; break;
+      case VIKI_N_MODEL:
+        zSql = "SELECT count(DISTINCT model) FROM viki_chunk WHERE model<>''"
+               " AND (?1 IS NULL OR model=?1)"; break;
+      default: return fail(VIKI_EINVAL, "viki_count: unknown counter%s","");
+    }
+    if( sqlite3_prepare_v2(db, zSql, -1, &st, 0)!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_count: %s", sqlite3_errmsg(db));
+    if( zFilter ) sqlite3_bind_text(st, 1, zFilter, -1, SQLITE_STATIC);
+    else          sqlite3_bind_null(st, 1);
+    rc = sqlite3_step(st);
+    if( rc==SQLITE_ROW && pn ) *pn = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    return rc==SQLITE_ROW ? VIKI_OK : VIKI_ESQL;
+}
+
+VikiStatus viki_each(const char *zKind, const char *zKey,
+                     viki_assert_row x, void *pApp){
+    sqlite3 *db = db_or_null();
+    sqlite3_stmt *st = 0;
+    if( !db ) return VIKI_ENOCTX;
+    if( sqlite3_prepare_v2(db,
+        "SELECT a.id, a.kind, a.akey, a.ts, a.body,"
+        "       NOT EXISTS(SELECT 1 FROM viki_assert s WHERE s.supersedes=a.id)"
+        "  FROM viki_assert a"
+        " WHERE (?1 IS NULL OR a.kind=?1) AND (?2 IS NULL OR a.akey=?2)"
+        " ORDER BY a.arank DESC", -1, &st, 0)!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_each: %s", sqlite3_errmsg(db));
+    if( zKind ) sqlite3_bind_text(st, 1, zKind, -1, SQLITE_STATIC); else sqlite3_bind_null(st,1);
+    if( zKey  ) sqlite3_bind_text(st, 2, zKey,  -1, SQLITE_STATIC); else sqlite3_bind_null(st,2);
+    while( sqlite3_step(st)==SQLITE_ROW ){
+        if( x && x(pApp,
+              (const char*)sqlite3_column_text(st,0),
+              (const char*)sqlite3_column_text(st,1),
+              (const char*)sqlite3_column_text(st,2),
+              (const char*)sqlite3_column_text(st,3),
+              (const char*)sqlite3_column_text(st,4),
+              sqlite3_column_int(st,5)) ) break;
+    }
+    sqlite3_finalize(st);
     return VIKI_OK;
 }

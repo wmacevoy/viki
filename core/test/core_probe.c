@@ -62,11 +62,107 @@ static const struct VikiAssertVftbl nullKeyVftbl = {
     &nullKeyType, nkKey, nkRank, nkText, nkCanon
 };
 
-static int count(sqlite3 *db, const char *zSql){
-    sqlite3_stmt *st = 0; int n = -1;
-    if( sqlite3_prepare_v2(db, zSql, -1, &st, 0)==SQLITE_OK
-     && sqlite3_step(st)==SQLITE_ROW ) n = sqlite3_column_int(st, 0);
-    sqlite3_finalize(st); return n;
+/* THE PROBE DOES NOT READ THE TABLES.
+**
+** Everything below goes through the API, and that is a requirement rather
+** than tidiness: if a property cannot be asserted through viki_count() /
+** viki_each() / viki_ask(), the API has a gap, and a probe reaching past it
+** would hide that gap instead of reporting it. core-probe.sh's C8 enforces
+** it by grepping this file for table names.
+**
+** The one exception is viki_sql(), which IS the API -- SCOPES 1b requires a
+** raw rung so a curated verb is never the only door. Using it here is going
+** THROUGH core, not around it. */
+static int nOf(VikiCountWhat what, const char *zFilter){
+    int n = -1;
+    viki_count(what, zFilter, &n);
+    return n;
+}
+/* Collects the bodies of matching assertions, for assertions about content. */
+typedef struct { char *az[16]; int n; int nCurrent; } Bodies;
+static int collect(void *pApp, const char *zId, const char *zKind,
+                   const char *zKey, const char *zTs, const char *zBody, int bCur){
+    Bodies *b = (Bodies*)pApp;
+    (void)zId; (void)zKind; (void)zKey; (void)zTs;
+    if( bCur ) b->nCurrent++;
+    if( b->n < 16 ) b->az[b->n++] = zBody ? strdup(zBody) : 0;
+    return 0;
+}
+static void bodies_free(Bodies *b){ int i; for(i=0;i<b->n;i++) free(b->az[i]); b->n=0; }
+/* A scalar read THROUGH viki_sql -- the sanctioned raw rung (SCOPES 1b),
+** not a second door. Used only where the assertion is deliberately about the
+** SCHEMA CONTRACT rather than about behaviour: "viki_chunk has no text
+** column", "no two rows share a range". Those are white-box on purpose, and
+** going through viki_sql keeps even them inside the API. */
+static int sqlRow(void *pApp, int nCol, const char *const *az){
+    (void)nCol; *(int*)pApp = az[0] ? atoi(az[0]) : 0; return 1;
+}
+static int sqlN(const char *zSql){ int n = -1; viki_sql(zSql, sqlRow, &n); return n; }
+
+static Bodies gather(const char *zKind, const char *zKey){
+    Bodies b; memset(&b,0,sizeof b); viki_each(zKind, zKey, collect, &b); return b;
+}
+
+/* Collects resolved events through the calendar's own read verb, so the
+** probe never names viki_event either. */
+typedef struct {
+    int n; char zTzid[64]; char zForm[16]; char zSummary[128];
+    int nZoned, nOffset, nFloating;
+    int  bMasterOnly;      /* recurrence_id == "" -- the series master       */
+    char zWant[64];
+    char zWantUid[64];
+} Cal;
+static int calRow(void *pApp, const VikiEvent *e){
+    Cal *c = (Cal*)pApp;
+    if( c->bMasterOnly && e->zRecurrenceId[0] ) return 0;
+    if( c->zWant[0] && strcmp(e->zRecurrenceId, c->zWant)!=0 ) return 0;
+    if( c->zWantUid[0] && strcmp(e->zUid, c->zWantUid)!=0 ) return 0;
+    c->n++;
+    if( e->zDtstartForm && strcmp(e->zDtstartForm,"zoned")==0 )    c->nZoned++;
+    if( e->zDtstartForm && strcmp(e->zDtstartForm,"floating")==0 ) c->nFloating++;
+    if( e->zDtstart && (strchr(e->zDtstart,'+') || strchr(e->zDtstart,'Z')) ) c->nOffset++;
+    snprintf(c->zTzid, sizeof c->zTzid, "%s", e->zDtstartTzid?e->zDtstartTzid:"");
+    snprintf(c->zForm, sizeof c->zForm, "%s", e->zDtstartForm?e->zDtstartForm:"");
+    snprintf(c->zSummary, sizeof c->zSummary, "%s", e->zSummary?e->zSummary:"");
+    return 0;
+}
+/* zRecur: NULL = every row, "" = the series MASTER only (an empty string is
+** a real recurrence-id value, so it cannot double as "no filter"), otherwise
+** that override. */
+static Cal calAll(const char *zRecur, const char *zUid){
+    Cal c; memset(&c,0,sizeof c);
+    if( zRecur && !zRecur[0] ) c.bMasterOnly = 1;
+    else if( zRecur ) snprintf(c.zWant, sizeof c.zWant, "%s", zRecur);
+    if( zUid )   snprintf(c.zWantUid, sizeof c.zWantUid, "%s", zUid);
+    viki_cal_events(0, 0, calRow, &c);
+    return c;
+}
+
+/* ---- a listener ------------------------------------------------------ */
+typedef struct {
+    int nPut, nSup, nForget, nMerge, nProject;
+    char zLastId[VIKI_ID_HEX+1];
+    char zLastKey[256];
+    int  bMutateRefused;
+} Seen;
+static void onEvent(void *pApp, const VikiEvent2 *e){
+    Seen *s = (Seen*)pApp;
+    switch( e->kind ){
+      case VIKI_EV_PUT:        s->nPut++;     break;
+      case VIKI_EV_SUPERSEDED: s->nSup++;     break;
+      case VIKI_EV_FORGOTTEN:  s->nForget++;  break;
+      case VIKI_EV_MERGED:     s->nMerge++;   break;
+      case VIKI_EV_PROJECTED:  s->nProject++; break;
+    }
+    if( e->zId )  snprintf(s->zLastId,  sizeof(s->zLastId),  "%s", e->zId);
+    if( e->zKey ) snprintf(s->zLastKey, sizeof(s->zLastKey), "%s", e->zKey);
+}
+/* A listener that tries to WRITE. Must be refused, not deadlock or corrupt
+** the queue it is being dispatched from. */
+static void onEventMutating(void *pApp, const VikiEvent2 *e){
+    Seen *s = (Seen*)pApp;
+    (void)e;
+    if( viki_note("written from inside a listener")==VIKI_EBUSY ) s->bMutateRefused = 1;
 }
 
 int main(void){
@@ -92,22 +188,27 @@ int main(void){
         check(viki_note("the gate latch sticks below freezing")==VIKI_OK,
               "A2 viki_note() takes one argument", viki_errmsg());
         via_callback(0);
-        check(count(dbA,"SELECT count(*) FROM viki_assert")==2,
+        check(nOf(VIKI_N_ASSERT,0)==2,
               "A3 a note four frames down, through a callback, was stored", "count != 2");
 
         viki_noteid("identical bytes", id1);
         viki_noteid("identical bytes", id2);
-        check(strcmp(id1,id2)==0 && count(dbA,"SELECT count(*) FROM viki_assert")==3,
+        check(strcmp(id1,id2)==0 && nOf(VIKI_N_ASSERT,0)==3,
               "A4 identity IS the content hash: same bytes, same id, one row", "differed");
 
-        {   /* a nested store, then the outer restored */
+        {   /* A nested store, then the outer restored.
+            ** nB is read INSIDE the nested scope on purpose: viki_count()
+            ** answers about the RETAINED store, so asking outside would ask
+            ** about A. That the counts cannot be taken from the wrong place
+            ** is the property, not an inconvenience. */
+            int nB;
             RETAIN_BEGIN(VikiStore, &sB, gB);
             viki_note("this belongs to store B");
+            nB = nOf(VIKI_N_ASSERT,0);
             RETAIN_END(gB);
+            check(nB==1 && nOf(VIKI_N_ASSERT,0)==3,
+                  "A5 a nested store is separate, and the outer one is restored", "leaked");
         }
-        check(count(dbB,"SELECT count(*) FROM viki_assert")==1
-           && count(dbA,"SELECT count(*) FROM viki_assert")==3,
-              "A5 a nested store is separate, and the outer one is restored", "leaked");
         RETAIN_END(gA);
     }
     check(viki_note("after scope")==VIKI_ENOCTX,
@@ -150,7 +251,7 @@ int main(void){
             check(zBody && strcmp(zBody,"draft three")==0,
                   "S2 a superseded assertion is NOT current", zBody?zBody:"none");
             free(zBody);
-            check(count(dbA,"SELECT count(*) FROM viki_assert WHERE akey='plan'")==3,
+            check(gather(0,"plan").n==3,
                   "S3 CONTROL: the superseded row is RETAINED, not deleted", "row vanished");
         }
         RETAIN_END(g);
@@ -192,7 +293,7 @@ int main(void){
         {
             RETAIN_BEGIN(VikiEmbed, &emb, ge);
             viki_reindex(0, &n);
-            check(count(dbA,"SELECT count(*) FROM viki_chunk WHERE vec IS NOT NULL")>0,
+            check(nOf(VIKI_N_VECTOR,0)>0,
                   "E2 reindex at an embed epoch stored vectors", "no vectors");
             rank_gate = -1;
             if( viki_ask("boundary fastener hinge", 5, &h)==VIKI_OK ){
@@ -237,13 +338,13 @@ int main(void){
 
             {   /* identity must cover POSITION, not just content */
                 VikiNote a, b;
-                int before = count(dbG,"SELECT count(*) FROM viki_assert");
+                int before = nOf(VIKI_N_ASSERT,0);
                 memset(&a,0,sizeof a); a.vftbl=&vikiNoteVftbl;
                 a.zText="same words"; a.zKey="k1"; a.zTs="2026-01-01T00:00:00Z";
                 memset(&b,0,sizeof b); b.vftbl=&vikiNoteVftbl;
                 b.zText="same words"; b.zKey="k2"; b.zTs="2026-01-01T00:00:00Z";
                 viki_put((VikiAssert*)&a); viki_put((VikiAssert*)&b);
-                check(count(dbG,"SELECT count(*) FROM viki_assert")==before+2
+                check(nOf(VIKI_N_ASSERT,0)==before+2
                       && strcmp(a.zId,b.zId)!=0,
                       "G2 same text under a DIFFERENT key is a different assertion",
                       "the second write vanished into the first");
@@ -262,12 +363,11 @@ int main(void){
 
             {   /* core must never commit the caller's transaction */
                 int after;
-                sqlite3_exec(dbG, "BEGIN", 0, 0, 0);
+                viki_sql("BEGIN", 0, 0);
                 viki_note("written inside the CALLER's transaction");
                 viki_reindex(0, &n);                 /* used to COMMIT it */
-                sqlite3_exec(dbG, "ROLLBACK", 0, 0, 0);
-                after = count(dbG,
-                  "SELECT count(*) FROM viki_assert WHERE body LIKE '%CALLER%'");
+                viki_sql("ROLLBACK", 0, 0);
+                after = sqlN("SELECT count(*) FROM viki_assert WHERE body LIKE '%CALLER%'");
                 check(after==0,
                       "G3 core does not commit the caller's open transaction",
                       "the rollback could not undo it -- core had committed");
@@ -280,7 +380,7 @@ int main(void){
             }
             {   /* ...and must run every statement it was given */
                 viki_sql("CREATE TABLE g5a(x); CREATE TABLE g5b(x);", 0, 0);
-                check(count(dbG,"SELECT count(*) FROM sqlite_master WHERE name IN ('g5a','g5b')")==2,
+                check(sqlN("SELECT count(*) FROM sqlite_master WHERE name IN ('g5a','g5b')")==2,
                       "G5 viki_sql runs EVERY statement, not just the first",
                       "the tail was dropped");
             }
@@ -309,6 +409,87 @@ int main(void){
             RETAIN_END(g);
         }
         sqlite3_close(dbG);
+    }
+
+    printf("\n== O: observability -- writes only, on commit ==\n");
+    {
+        sqlite3 *dbO = 0; VikiStore sO; Seen seen; int tok = 0;
+        char idO[VIKI_ID_HEX+1];
+        memset(&seen, 0, sizeof seen);
+        sqlite3_open(":memory:", &dbO); sO.db = dbO; viki_attach(dbO);
+        check(viki_watch(dbO, onEvent, &seen, &tok)==VIKI_OK && tok>0,
+              "O1 a listener can be registered", viki_errmsg());
+        {
+            RETAIN_BEGIN(VikiStore, &sO, g);
+            viki_noteid("the first thing worth remembering", idO);
+            check(seen.nPut==1 && strcmp(seen.zLastId, idO)==0,
+                  "O2 a write notifies, and names the assertion", "no event");
+
+            {   /* supersession is its OWN event, not a second put */
+                VikiNote a; memset(&a,0,sizeof a); a.vftbl=&vikiNoteVftbl;
+                a.zText="the corrected version"; a.zKey="k"; a.zTs="2026-01-02T00:00:00Z";
+                a.zSupersedes = idO;
+                viki_put((VikiAssert*)&a);
+                check(seen.nSup==1, "O3 a supersession is a distinct event", "not distinguished");
+            }
+            viki_reindex(0, &n);
+            check(seen.nProject==1, "O4 a projection pass notifies once, with a count", "no event");
+
+            /* NOTHING FIRES FOR A READ. A read can be an arbitrary join, and
+            ** there is no change to announce -- so the event set is
+            ** write-only by construction, not by omission. */
+            {
+                int before = seen.nPut + seen.nSup + seen.nForget
+                           + seen.nMerge + seen.nProject;
+                viki_ask("remembering", 3, &h); viki_hits_free(h); h=0;
+                { Bodies b = gather(0,0); bodies_free(&b); }
+                nOf(VIKI_N_ASSERT,0);
+                check(before == seen.nPut + seen.nSup + seen.nForget
+                              + seen.nMerge + seen.nProject,
+                      "O5 CONTROL: reads fire NOTHING -- the event set is write-only",
+                      "a read produced an event");
+            }
+
+            /* ROLLED BACK WORK MUST NOT BE ANNOUNCED. A listener that wrote to
+            ** a UI or told a peer cannot take it back, so events are buffered
+            ** and discarded when the host rolls back. */
+            {
+                int before = seen.nPut;
+                viki_sql("BEGIN", 0, 0);
+                viki_note("this will be rolled back");
+                viki_sql("ROLLBACK", 0, 0);
+                check(seen.nPut==before,
+                      "O6 a change the HOST rolled back is never announced",
+                      "the listener was told about work that did not happen");
+                { Bodies b = gather(0,0);
+                  check(b.n>0, "O6b CONTROL: the store still has its earlier assertions",
+                        "the rollback took everything"); bodies_free(&b); }
+            }
+
+            check(viki_forget(idO)==VIKI_OK && seen.nForget==1,
+                  "O7 a withdrawal notifies", "no event");
+
+            check(viki_unwatch(dbO, tok)==VIKI_OK, "O8 a listener can be removed", "failed");
+            {
+                int before = seen.nPut;
+                viki_note("after unwatch");
+                check(seen.nPut==before, "O8b CONTROL: an unwatched listener stops hearing",
+                      "still receiving");
+            }
+
+            {   /* a listener that writes is refused, not deadlocked */
+                Seen s2; int t2 = 0;
+                memset(&s2, 0, sizeof s2);
+                viki_watch(dbO, onEventMutating, &s2, &t2);
+                viki_note("this triggers the mutating listener");
+                check(s2.bMutateRefused==1,
+                      "O9 a listener that tries to WRITE is refused with EBUSY",
+                      "it was allowed to reenter");
+                viki_unwatch(dbO, t2);
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbO);
     }
 
     printf("\n== V: ranges, and two chunkings over one blob ==\n");
@@ -355,12 +536,12 @@ int main(void){
                     ** Two policies over the same assertion at the same model
                     ** used to agree on the key (content_hash, model, ordinal)
                     ** and disagree on the text. The extent is in the key now. */
-                    int before = count(dbV,"SELECT count(*) FROM viki_chunk");
+                    int before = nOf(VIKI_N_RANGE,0);
                     viki_reindex(&coarse, &n);
-                    check(count(dbV,"SELECT count(*) FROM viki_chunk") > before,
+                    check(nOf(VIKI_N_RANGE,0) > before,
                           "V2 a SECOND chunking adds ranges without disturbing the first",
                           "the second policy collided with the first");
-                    check(count(dbV,"SELECT count(DISTINCT chunking) FROM viki_chunk")==2,
+                    check(nOf(VIKI_N_CHUNKING,0)==2,
                           "V3 both chunkings coexist over one assertion", "only one survived");
                 }
                 /* THE REASON FOR TWO CHUNKINGS, and V5 is its control. */
@@ -376,7 +557,7 @@ int main(void){
                 viki_hits_free(h); h=0;
                 RETAIN_END(ge);
             }
-            check(count(dbV,"SELECT count(*) FROM viki_chunk c JOIN viki_chunk d"
+            check(sqlN("SELECT count(*) FROM viki_chunk c JOIN viki_chunk d"
                             " ON c.id=d.id AND c.lo=d.lo AND c.hi=d.hi AND c.model=d.model"
                             " AND c.seq<>d.seq")==0,
                   "V5 CONTROL: no two rows share (id, lo, hi, model) -- the key is the extent",
@@ -384,12 +565,10 @@ int main(void){
             {   /* THE TEXT EXISTS EXACTLY ONCE. viki_chunk has no text column
                 ** at all; a chunk's text is computed by substr over the
                 ** assertion, which is what makes overlap free. */
-                sqlite3_stmt *q = 0; int bHasText = 0;
-                sqlite3_prepare_v2(dbV,"SELECT count(*) FROM pragma_table_info('viki_chunk') WHERE name='text'",-1,&q,0);
-                if(sqlite3_step(q)==SQLITE_ROW) bHasText = sqlite3_column_int(q,0);
-                sqlite3_finalize(q);
+                int bHasText = sqlN("SELECT count(*) FROM pragma_table_info('viki_chunk')"
+                                    " WHERE name='text'");
                 check(bHasText==0, "V6 viki_chunk stores NO text -- ranges only", "a text column exists");
-                check(count(dbV,"SELECT count(*) FROM viki_chunk_text WHERE text<>''")>0,
+                check(sqlN("SELECT count(*) FROM viki_chunk_text WHERE text<>''")>0,
                       "V6b CONTROL: the text is still reachable, computed from the range",
                       "the view returns nothing");
             }
@@ -420,8 +599,8 @@ int main(void){
             viki_hits_free(h); h=0;
 
             check(viki_forget(idW)==VIKI_OK, "W2 viki_forget removes the assertion", viki_errmsg());
-            check(count(dbW,"SELECT count(*) FROM viki_assert")==1
-               && count(dbW,"SELECT count(*) FROM viki_chunk")==1,
+            check(nOf(VIKI_N_ASSERT,0)==1
+               && nOf(VIKI_N_RANGE,0)==1,
                   "W3 the assertion and its chunks are gone", "rows remain");
 
             check(viki_ask("hunter2", 5, &h)==VIKI_OK && h && h->n==0,
@@ -441,7 +620,7 @@ int main(void){
             ** the explicit-value 'delete' command (which needs no content row)
             ** or `DELETE FROM viki_fts WHERE rowid=?` (which does, and for
             ** which the delete ORDER becomes load-bearing). */
-            check(count(dbW,"SELECT count(*) FROM viki_fts WHERE viki_fts MATCH 'hunter2'")==0,
+            check(sqlN("SELECT count(*) FROM viki_fts WHERE viki_fts MATCH 'hunter2'")==0,
                   "W4b the withdrawn text is gone from the FTS INDEX itself",
                   "viki_fts still matches it -- the withdrawal was cosmetic");
 
@@ -453,15 +632,15 @@ int main(void){
                   "W6 CONTROL: forgetting again reports NOT FOUND, not success", "returned OK");
 
             {   /* pruning a dead epoch leaves the assertions alone */
-                int nDrop = 0, nBefore = count(dbW,"SELECT count(*) FROM viki_assert");
+                int nDrop = 0, nBefore = nOf(VIKI_N_ASSERT,0);
                 emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "old-v1";
                 { RETAIN_BEGIN(VikiEmbed, &emb, ge); viki_reindex(0, &n); RETAIN_END(ge); }
-                check(count(dbW,"SELECT count(*) FROM viki_chunk WHERE model='old-v1'")>0,
+                check(nOf(VIKI_N_RANGE,"old-v1")>0,
                       "W7 a second model's ranges exist", "none written");
                 check(viki_prune_model("old-v1", &nDrop)==VIKI_OK && nDrop>0
-                   && count(dbW,"SELECT count(*) FROM viki_chunk WHERE model='old-v1'")==0,
+                   && nOf(VIKI_N_RANGE,"old-v1")==0,
                       "W8 pruning a model drops its ranges", "chunks remain");
-                check(count(dbW,"SELECT count(*) FROM viki_assert")==nBefore,
+                check(nOf(VIKI_N_ASSERT,0)==nBefore,
                       "W9 CONTROL: pruning a projection does NOT touch the assertions",
                       "truth was deleted with the projection");
             }
@@ -494,38 +673,32 @@ int main(void){
                   "\"duration\":\"PT1H\",\"status\":\"confirmed\","
                   "\"recurrenceRules\":[{\"frequency\":\"weekly\"}],"
                   "\"recurrenceOverrides\":{\"2026-09-08T15:00:00\":{\"title\":\"moved to Boulder\"}}}";
-                sqlite3_stmt *q=0; char *z=0;
+                Cal c;
                 check(viki_cal_ingest(zJs, "probe", &nAdd)==VIKI_OK && nAdd==2,
                       "K2 one Event plus its override become TWO assertions", "wrong count");
-                sqlite3_prepare_v2(dbK,"SELECT tzid FROM viki_event WHERE recurrence_id=''",-1,&q,0);
-                if(sqlite3_step(q)==SQLITE_ROW) z=strdup((const char*)sqlite3_column_text(q,0));
-                sqlite3_finalize(q);
-                check(z && strcmp(z,"America/Denver")==0,
-                      "K3 the IANA zone name is kept", z?z:"none");
-                free(z);
+                c = calAll("", 0);
+                check(strcmp(c.zTzid,"America/Denver")==0,
+                      "K3 the IANA zone name is kept", c.zTzid);
                 /* jsCalendar's `start` is LOCAL AS WRITTEN and `timeZone` is a
                 ** NAME, so "never store an offset" is the format rather than a
                 ** rule this code has to enforce. */
-                check(count(dbK,"SELECT count(*) FROM viki_event WHERE start LIKE '%+%' OR start LIKE '%Z'")==0,
-                      "K4 CONTROL: no UTC OFFSET is stored -- start is local, zone is a name",
-                      "an offset leaked in");
+                { Cal all = calAll(0,0);
+                  check(all.nOffset==0,
+                        "K4 CONTROL: no UTC OFFSET is stored -- start is local, zone is a name",
+                        "an offset leaked in"); }
                 /* Scoped to the master: the override INHERITS the zone, which
                 ** is correct (RFC 8984 SS 4.3 -- an override patches the
                 ** recurrence, it does not restate it) and would make an
                 ** unscoped count read 2. */
-                check(count(dbK,"SELECT count(*) FROM viki_event WHERE form='zoned' AND recurrence_id=''")==1
-                   && count(dbK,"SELECT count(*) FROM viki_event WHERE form='zoned'")==2,
-                      "K5 timeZone present and not Etc/UTC means 'zoned' (and an override inherits it)",
-                      "wrong form");
+                { Cal m = calAll("",0), all = calAll(0,0);
+                  check(m.nZoned==1 && all.nZoned==2,
+                        "K5 timeZone present and not Etc/UTC means 'zoned' (and an override inherits it)",
+                        "wrong form"); }
                 /* the override is keyed by its recurrence id, which IS the
                 ** (uid, recurrence-id) identity RFC 5546 resolution needs */
-                sqlite3_prepare_v2(dbK,
-                  "SELECT summary FROM viki_event WHERE recurrence_id='2026-09-08T15:00:00'",-1,&q,0);
-                z=0; if(sqlite3_step(q)==SQLITE_ROW) z=strdup((const char*)sqlite3_column_text(q,0));
-                sqlite3_finalize(q);
-                check(z && strcmp(z,"moved to Boulder")==0,
-                      "K6 a recurrenceOverride is its own assertion on its own key", z?z:"none");
-                free(z);
+                c = calAll("2026-09-08T15:00:00", 0);
+                check(c.n==1 && strcmp(c.zSummary,"moved to Boulder")==0,
+                      "K6 a recurrenceOverride is its own assertion on its own key", c.zSummary);
             }
 
             {   /* RFC 5546 precedence through core's shared resolver */
@@ -533,20 +706,17 @@ int main(void){
                   "{\"@type\":\"Event\",\"uid\":\"ev1@probe\",\"sequence\":1,"
                   "\"updated\":\"2026-08-02T12:00:00Z\",\"title\":\"Quarterly review MOVED\","
                   "\"start\":\"2026-09-02T15:00:00\",\"timeZone\":\"America/Denver\"}";
-                sqlite3_stmt *q=0; char *z=0;
+                Cal c;
                 viki_cal_ingest(zUpd, "probe", &nAdd);
                 viki_cal_reproject(&n);
-                sqlite3_prepare_v2(dbK,
-                  "SELECT summary FROM viki_event e JOIN viki_assert a ON a.id=e.id"
-                  " WHERE a.arank=(SELECT max(arank) FROM viki_assert WHERE akey=a.akey)"
-                  "   AND e.recurrence_id=''", -1,&q,0);
-                if(sqlite3_step(q)==SQLITE_ROW) z=strdup((const char*)sqlite3_column_text(q,0));
-                sqlite3_finalize(q);
-                check(z && strstr(z,"MOVED")!=0,
-                      "K7 a higher sequence wins -- RFC 5546, via core's ONE resolver", z?z:"none");
-                free(z);
-                check(count(dbK,"SELECT count(*) FROM viki_assert WHERE kind='event' AND akey LIKE 'ev1@probe%'")==3,
-                      "K8 CONTROL: the superseded assertion STAYS in the store", "it was replaced");
+                /* viki_cal_events returns the RESOLVED tier, so the winner is
+                ** the only master row it yields -- no rank query needed here. */
+                c = calAll("", "ev1@probe");
+                check(c.n==1 && strstr(c.zSummary,"MOVED")!=0,
+                      "K7 a higher sequence wins -- RFC 5546, via core's ONE resolver", c.zSummary);
+                check(nOf(VIKI_N_ASSERT,"event")==3 && nOf(VIKI_N_CURRENT,"event")==2,
+                      "K8 CONTROL: 3 assertions stored, 2 resolved winners (master + override)",
+                      "wrong counts");
             }
 
             {   /* an array, and a JMAP envelope, without the caller saying which */
@@ -562,21 +732,18 @@ int main(void){
             }
 
             {   /* the range-bound normalisation */
-                int nHit = 0;
-                sqlite3_stmt *q=0;
-                sqlite3_prepare_v2(dbK,
-                  "SELECT count(*) FROM viki_event WHERE sortkey>='20261001T000000'"
-                  " AND sortkey<='20261002T235959'", -1,&q,0);
-                if(sqlite3_step(q)==SQLITE_ROW) nHit=sqlite3_column_int(q,0);
-                sqlite3_finalize(q);
-                check(nHit==2, "K11 a normalised range finds events stored as ISO", "wrong count");
+                Cal c; memset(&c,0,sizeof c);
+                viki_cal_events("2026-10-01", "2026-10-02", calRow, &c);
+                check(c.n==2, "K11 an ISO range finds events stored as ISO -- bounds normalised",
+                      "wrong count");
             }
             {   /* a floating time has no zone and is NOT UTC */
                 static const char zFl[] =
                   "{\"@type\":\"Event\",\"uid\":\"f@p\",\"start\":\"2026-11-01T09:00:00\"}";
                 viki_cal_ingest(zFl, "probe", &nAdd);
-                check(count(dbK,"SELECT count(*) FROM viki_event WHERE uid='f@p' AND form='floating'")==1,
-                      "K12 no timeZone means FLOATING, which is not UTC", "wrong form");
+                { Cal c = calAll(0,"f@p");
+                  check(c.n==1 && c.nFloating==1,
+                        "K12 no timeZone means FLOATING, which is not UTC", c.zForm); }
             }
             RETAIN_END(g);
         }

@@ -29,7 +29,8 @@ extern "C" {
 ** told is worse than one that is absent. */
 typedef enum {
     VIKI_OK = 0,
-    VIKI_ENOCTX, VIKI_ESQL, VIKI_ENOMEM, VIKI_EINVAL, VIKI_ENOTFOUND
+    VIKI_ENOCTX, VIKI_ESQL, VIKI_ENOMEM, VIKI_EINVAL, VIKI_ENOTFOUND,
+    VIKI_EBUSY            /* a listener tried to mutate; see viki_watch */
 } VikiStatus;
 const char *viki_errmsg(void);
 
@@ -177,6 +178,81 @@ void       viki_hits_free(VikiHits*);
 /* ---- the convenience that is the whole point ------------------------- */
 VikiStatus viki_note(const char *zText);
 VikiStatus viki_noteid(const char *zText, char *zIdOut);   /* >= 65 bytes */
+
+/* ---- observability ---------------------------------------------------
+**
+** A HOST MUST NOT HAVE TO POLL, AND MUST NOT HAVE TO READ THE TABLES.
+** These are SEMANTIC events, not row events: "an assertion arrived", not
+** "a row was inserted into viki_assert". The schema is core's business and
+** is free to change -- ranges replaced ordinals once already -- so anything
+** a listener is told is expressed in the vocabulary of the API.
+**
+** WHEN THEY FIRE, AND WHY IT IS NOT IMMEDIATELY.
+**
+** Core runs inside SAVEPOINTs on a connection it does not own, so the host
+** may roll back afterwards. Firing during the operation would announce
+** changes that never happened -- and a listener that wrote to a UI, sent a
+** notification, or told a peer could not take it back. So events are BUFFERED
+** and flushed on COMMIT, and DISCARDED on rollback. viki_attach() installs
+** SQLite's commit/rollback hooks for exactly this.
+**
+** A listener therefore never sees an uncommitted change, and never misses a
+** committed one.
+**
+** REENTRANCY: a listener MUST NOT call a mutating viki_* function. Doing so
+** is refused with VIKI_EBUSY rather than deadlocking or corrupting the
+** buffer. Reads are fine. */
+typedef enum {
+    VIKI_EV_PUT = 1,      /* an assertion was stored                        */
+    VIKI_EV_SUPERSEDED,   /* ...and it superseded another (zOther is which) */
+    VIKI_EV_FORGOTTEN,    /* an assertion was removed                       */
+    VIKI_EV_MERGED,       /* a merge completed; zId is NULL, n is the count */
+    VIKI_EV_PROJECTED     /* reindex added ranges; zId is NULL, n is count  */
+} VikiEventKind;
+
+typedef struct {
+    VikiEventKind kind;
+    const char   *zId;    /* the assertion, or NULL for bulk events         */
+    const char   *zKey;   /* what it competes on, when known                */
+    const char   *zOther; /* the superseded id, for VIKI_EV_SUPERSEDED      */
+    int           n;      /* count, for bulk events                         */
+} VikiEvent2;
+
+typedef void (*viki_watch_fn)(void *pApp, const VikiEvent2 *pEv);
+
+/* Watches are per-STORE, not global: they live on the sqlite3* so two stores
+** in one process notify independently. */
+VikiStatus viki_watch(sqlite3 *db, viki_watch_fn x, void *pApp, int *pnToken);
+VikiStatus viki_unwatch(sqlite3 *db, int nToken);
+
+/* ---- reading without knowing the schema ------------------------------
+** Enough that a caller never needs to name a table. If something cannot be
+** asked here, that is a gap in the API rather than a reason to reach past
+** it -- core's own probe is written against these, which is what keeps the
+** claim honest. */
+typedef enum {
+    VIKI_N_ASSERT = 1,    /* assertions stored                              */
+    VIKI_N_CURRENT,       /* RESOLVED WINNERS, one per key -- what
+                          ** viki_current() returns. NOT the same as
+                          ** "nothing supersedes it": an update that wins
+                          ** by RANK sets no supersedes link.            */
+    VIKI_N_RANGE,         /* chunk ranges                                   */
+    VIKI_N_VECTOR,        /* ...carrying a vector                           */
+    VIKI_N_CHUNKING,      /* distinct chunking policies present             */
+    VIKI_N_MODEL          /* distinct models present                        */
+} VikiCountWhat;
+
+/* zFilter is optional and matches an assertion KIND ("note", "event", ...)
+** or, for range counts, a model name. NULL counts everything. */
+VikiStatus viki_count(VikiCountWhat what, const char *zFilter, int *pn);
+
+/* Iterate assertions, newest rank first. zKind and zKey are optional
+** filters. Returning non-zero from the callback stops the walk. */
+typedef int (*viki_assert_row)(void *pApp, const char *zId, const char *zKind,
+                               const char *zKey, const char *zTs,
+                               const char *zBody, int bCurrent);
+VikiStatus viki_each(const char *zKind, const char *zKey,
+                     viki_assert_row x, void *pApp);
 
 /* ---- the raw rung (SCOPES 1b: a curated verb is never the only door) -- */
 typedef int (*viki_row)(void*, int nCol, const char *const *azVal);
