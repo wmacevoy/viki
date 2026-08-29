@@ -166,7 +166,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    6 constraint + 20 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **26 passed, 0 failed.**
+`sh core/test/core-probe.sh` → **35 passed, 0 failed** (6 constraint + 29 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -188,6 +188,34 @@ error rather than a silent drop. C6 asserts the constraint greps find
 - resolution at read time, losers retained, ONE statement for every type
 - three-leg RRF retrieval, degraded mode reported rather than hidden
 - nested stores, outer restored on scope exit
+
+### Audited 2026-08-29, and it mattered
+
+An 11-agent adversarial audit over five independent lenses (memory, SQL,
+retrieval, API contract, gaps-vs-design), each dimension's findings then
+refuted by a skeptic, produced **23 surviving findings against code the
+original 26 assertions were already green against.** Every one is now fixed
+and carries a standing assertion. The two that mattered most:
+
+- **Degraded mode returned ZERO hits over any corpus indexed with an
+  embedder.** All three legs filtered on the retained epoch, and degraded
+  epoch is `''` — so the keyword and literal legs, which need no model at
+  all, matched nothing. The required working path answered "nothing is
+  known" about a store full of text. *Four of the five lenses found this
+  independently.* The probe missed it because its R section reindexed
+  degraded FIRST, so `''` chunks happened to exist before the E section
+  added an embed epoch. **G1 indexes only at the embed epoch, and fails
+  against the original code — verified by reverting.**
+- **Identity covered content but not position.** `id = sha256(canon())` meant
+  two assertions with the same text under different keys collided into one
+  row, so the second silently vanished and grow-only quietly lost a write.
+  Identity is now framed: `sha256(kind␟key␟ts␟supersedes␟canon)`.
+
+Two more worth naming: core ran bare `BEGIN`/`COMMIT` on a connection it does
+not own, so `viki_reindex()` **committed the caller's open transaction** — now
+`SAVEPOINT`, which nests correctly whether or not the host is mid-transaction;
+and `viki_sql()` dropped every statement after the first and never read its
+step result, so a failed write on the raw rung returned `VIKI_OK`.
 
 ### Not yet
 

@@ -33,3 +33,4 @@ edge/dist/
 edge/vendor-wasm/
 # generated PWA icons are checked IN (they are small and part of the app);
 # only the built/pulled artefacts stay out.
+core/build/

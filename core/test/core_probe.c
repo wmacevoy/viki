@@ -50,6 +50,17 @@ static void c3(void){ deepest(); }
 static void c2(void){ c3(); }
 static void via_callback(void *ignored){ (void)ignored; c2(); }
 
+/* A deliberately broken subtype: key() returns NULL. Legal by the vftbl
+** signature, and exactly the shape an unkeyed calendar assertion would have. */
+static const VikiType   nullKeyType  = { "nullkey", 0, sizeof(VikiNote) };
+static const char *nkKey  (const VikiAssert *p){ (void)p; return 0; }
+static const char *nkRank (const VikiAssert *p){ return p->zTs ? p->zTs : ""; }
+static const char *nkText (const VikiAssert *p){ return ((const VikiNote*)p)->zText; }
+static const char *nkCanon(const VikiAssert *p){ return ((const VikiNote*)p)->zText; }
+static const struct VikiAssertVftbl nullKeyVftbl = {
+    &nullKeyType, nkKey, nkRank, nkText, nkCanon
+};
+
 static int count(sqlite3 *db, const char *zSql){
     sqlite3_stmt *st = 0; int n = -1;
     if( sqlite3_prepare_v2(db, zSql, -1, &st, 0)==SQLITE_OK
@@ -196,6 +207,107 @@ int main(void){
             RETAIN_END(ge);
         }
         RETAIN_END(g);
+    }
+
+    printf("\n== G: the audit's findings, as standing assertions ==\n");
+    {
+        /* Every assertion here corresponds to a defect an adversarial audit
+        ** found in code the 20 above were already green against. They are
+        ** written to fail on the ORIGINAL bug, not merely to exercise the
+        ** fixed line. */
+        sqlite3 *dbG = 0; VikiStore sG;
+        sqlite3_open(":memory:", &dbG); sG.db = dbG; viki_attach(dbG);
+        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zEpoch = "stub/c40o10";
+        {
+            RETAIN_BEGIN(VikiStore, &sG, g);
+            /* ORDER IS THE WHOLE POINT: index ONLY at the embed epoch. The
+            ** original probe reindexed degraded first, so epoch '' chunks
+            ** existed and hid this entirely. */
+            {
+                RETAIN_BEGIN(VikiEmbed, &emb, ge);
+                viki_note("the gate latch sticks below freezing");
+                viki_reindex(&n);
+                RETAIN_END(ge);
+            }
+            check(viki_ask("gate latch freezing", 5, &h)==VIKI_OK && h && h->n>0,
+                  "G1 degraded ask still answers over a corpus indexed WITH an embedder",
+                  "zero hits -- the required path returned 'nothing is known'");
+            viki_hits_free(h); h=0;
+
+            {   /* identity must cover POSITION, not just content */
+                VikiNote a, b;
+                int before = count(dbG,"SELECT count(*) FROM viki_assert");
+                memset(&a,0,sizeof a); a.vftbl=&vikiNoteVftbl;
+                a.zText="same words"; a.zKey="k1"; a.zTs="2026-01-01T00:00:00Z";
+                memset(&b,0,sizeof b); b.vftbl=&vikiNoteVftbl;
+                b.zText="same words"; b.zKey="k2"; b.zTs="2026-01-01T00:00:00Z";
+                viki_put((VikiAssert*)&a); viki_put((VikiAssert*)&b);
+                check(count(dbG,"SELECT count(*) FROM viki_assert")==before+2
+                      && strcmp(a.zId,b.zId)!=0,
+                      "G2 same text under a DIFFERENT key is a different assertion",
+                      "the second write vanished into the first");
+            }
+
+            {   /* a vtable slot returning NULL must fail loudly, not store
+                ** nothing and report success -- INSERT OR IGNORE suppresses a
+                ** NOT NULL violation exactly as happily as a duplicate key. */
+                VikiNote bad;
+                memset(&bad,0,sizeof bad); bad.vftbl=&nullKeyVftbl;
+                bad.zText="has no key"; bad.zTs="2026-01-01T00:00:00Z";
+                check(viki_put((VikiAssert*)&bad)!=VIKI_OK,
+                      "G2b a vtable slot returning NULL is refused, not silently dropped",
+                      "returned OK having written no row");
+            }
+
+            {   /* core must never commit the caller's transaction */
+                int after;
+                sqlite3_exec(dbG, "BEGIN", 0, 0, 0);
+                viki_note("written inside the CALLER's transaction");
+                viki_reindex(&n);                 /* used to COMMIT it */
+                sqlite3_exec(dbG, "ROLLBACK", 0, 0, 0);
+                after = count(dbG,
+                  "SELECT count(*) FROM viki_assert WHERE body LIKE '%CALLER%'");
+                check(after==0,
+                      "G3 core does not commit the caller's open transaction",
+                      "the rollback could not undo it -- core had committed");
+            }
+
+            {   /* the raw rung must report a step-time error */
+                VikiStatus rc2 = viki_sql("SELECT abs(-9223372036854775807-1)", 0, 0);
+                check(rc2!=VIKI_OK,
+                      "G4 viki_sql reports an error raised at STEP time", "returned OK");
+            }
+            {   /* ...and must run every statement it was given */
+                viki_sql("CREATE TABLE g5a(x); CREATE TABLE g5b(x);", 0, 0);
+                check(count(dbG,"SELECT count(*) FROM sqlite_master WHERE name IN ('g5a','g5b')")==2,
+                      "G5 viki_sql runs EVERY statement, not just the first",
+                      "the tail was dropped");
+            }
+            check(viki_get("nope", 0)==VIKI_ENOTFOUND,
+                  "G6 viki_get(id, NULL) is legal -- an existence check", "it crashed or errored");
+            {   /* a reserved/empty epoch must be refused, not silently no-op */
+                VikiEmbed bad = { stubEmbed, 0, DIM, "" };
+                RETAIN_BEGIN(VikiEmbed, &bad, gb);
+                check(viki_reindex(&n)==VIKI_EINVAL,
+                      "G7 an empty zEpoch is refused (it collides with 'unembedded')",
+                      "accepted, and reindex became a permanent no-op");
+                RETAIN_END(gb);
+            }
+            {   /* merging into a store that was never attached must fail */
+                sqlite3 *dbRaw = 0; VikiStore sRaw;
+                sqlite3_open(":memory:", &dbRaw); sRaw.db = dbRaw;
+                {
+                    RETAIN_BEGIN(VikiStore, &sRaw, gr);
+                    check(viki_merge(dbG, &n)!=VIKI_OK,
+                          "G8 a merge that cannot complete is NOT reported as success",
+                          "returned OK with a truncated union");
+                    RETAIN_END(gr);
+                }
+                sqlite3_close(dbRaw);
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbG);
     }
 
     printf("\n%d passed, %d failed\n", nPass, nFail);
