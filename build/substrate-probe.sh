@@ -250,32 +250,110 @@ else
   fi
 fi
 
-# ---- S7 -------------------------------------------------------------------
-# THE ONE THAT GATES "viki never forks". libfossilsee v0 is read-only SQL:
-# it exports no write and no sync verb, so `viki cache push/pull` must shell
-# out to `fossil uv add/sync/export` -- which cannot run on iOS at all.
-if [ -z "$LIB" ] || [ ! -f "$LIB" ]; then
-  skip S7 "libfossilsee exports no write or sync verb" "no libfossilsee"
-elif ! command -v nm >/dev/null 2>&1; then
-  skip S7 "libfossilsee exports no write or sync verb" "no nm"
+# ---- S7 / S8 / S9 --------------------------------------------------------
+# "viki cache push/pull forks" is THREE claims, not one, and they have three
+# different blockers. Splitting them matters because they die on different
+# days and only one of them is actually intrinsic:
+#
+#   uv export  read + decompress            -> needs NO fork in-process (S9)
+#   uv add     writable connection          -> blocked by fs_authorizer (S7)
+#   uv sync    the network sync protocol    -> genuinely not SQL (S8)
+#
+# unversioned_write() is REPLACE INTO unversioned + hname_hash + blob_compress
+# + admin_log. No artifact, no Merkle DAG -- consistent with SYNC.md's "uv
+# blobs are name-addressed with no hash in the protocol at all." So `uv add`
+# wants a WRITE, not a subprocess; and compression is optional (encoding=0 is
+# legal and Fossil reads both), so it does not even strictly want zlib.
+if [ -z "$LIB" ] || [ ! -f "$LIB" ] || ! command -v nm >/dev/null 2>&1; then
+  skip S7 "libfossilsee exports no WRITE verb" "no libfossilsee or no nm"
+  skip S8 "libfossilsee exports no SYNC verb" "no libfossilsee or no nm"
 else
   SYMS=$(nm -g "$LIB" 2>/dev/null | grep -o 'fossilsee_[a-z_]*' | sort -u)
   if [ -z "$SYMS" ]; then
-    skip S7 "libfossilsee exports no write or sync verb" "nm listed no fossilsee symbols"
-  elif printf '%s\n' "$SYMS" | grep -qE 'fossilsee_(sync|clone|uv_|wiki_put|ticket_new|ticket_change)'; then
-    lifted S7 "libfossilsee now exports a write or sync verb" \
-      "the fork in viki_cmd_cache_push_opts()/viki_cmd_cache_pull_opts(), src/viki_cache.c -- and with it the last reason VIKI_NO_FORK is not the default. See fossil-see embed/API_V1.md."
+    skip S7 "libfossilsee exports no WRITE verb" "nm listed no fossilsee symbols"
+    skip S8 "libfossilsee exports no SYNC verb" "nm listed no fossilsee symbols"
   else
-    held S7 "libfossilsee exports no write or sync verb (read-only SQL only)"
+    if printf '%s\n' "$SYMS" | grep -qE 'fossilsee_(uv_put|uv_add|wiki_put|ticket_new|ticket_change|write)'; then
+      lifted S7 "libfossilsee now exports a WRITE verb" \
+        "the `uv add` fork in viki_cmd_cache_push_opts(), src/viki_cache.c"
+    else
+      held S7 "libfossilsee exports no WRITE verb (fs_authorizer denies every write)"
+    fi
+    # S8 IS THE REAL BLOCKER ON "viki never forks". Everything else on the
+    # push/pull path is expressible as SQL; a network protocol is not.
+    if printf '%s\n' "$SYMS" | grep -qE 'fossilsee_(sync|clone|uv_sync|push|pull)'; then
+      lifted S8 "libfossilsee now exports a SYNC verb" \
+        "the `uv sync` fork in BOTH viki_cmd_cache_push_opts() and viki_cmd_cache_pull_opts(), src/viki_cache.c -- this is the last INTRINSIC reason VIKI_NO_FORK cannot be the default. See fossil-see embed/API_V1.md."
+    else
+      held S8 "libfossilsee exports no SYNC verb (the one genuinely un-SQL-able leg)"
+    fi
   fi
 fi
 
-# ---- S8 -------------------------------------------------------------------
+# ---- S9 -------------------------------------------------------------------
+# `viki cache pull` forks `fossil uv export` to get the cache db out. The
+# reason was never uv's nature -- it is that the SUBPROCESS transport cannot
+# carry an embedded NUL, and a SQLite file is NUL in its ninth byte. In
+# process there is no such limit. If this reads back byte-identical, the
+# export fork is dead code on any peer that loads the library.
+if [ -z "$LIB" ] || [ ! -f "$LIB" ]; then
+  skip S9 "a uv blob cannot be read without forking" "no libfossilsee"
+elif [ -z "$FOSSIL" ] || ! command -v cc >/dev/null 2>&1; then
+  skip S9 "a uv blob cannot be read without forking" "need fossil and cc"
+else
+  # a COMPRESSIBLE binary blob: encoding=1, so decompress() is exercised, and
+  # NUL appears early so a NUL-truncating transport is caught immediately.
+  "$ROOT/build/dist/viki" --version >/dev/null 2>&1   # (no-op; keeps shellcheck honest)
+  python3 - "$DIR/uvbin" <<'PYBIN' 2>/dev/null || true
+import struct, sys
+rows=b''.join(struct.pack('<IIQ', i, i%7, (i*2654435761) % (1<<32)) for i in range(20000))
+open(sys.argv[1],'wb').write(b'SQLite format 3\x00' + rows)
+PYBIN
+  if [ ! -s "$DIR/uvbin" ]; then
+    skip S9 "a uv blob cannot be read without forking" "could not build the binary fixture"
+  else
+    ( cd "$CO" && "$FOSSIL" unversioned add "$DIR/uvbin" --as probe.bin >/dev/null 2>&1 )
+    cat > "$DIR/uv.c" <<'UVH'
+#include <stdio.h>
+#include <string.h>
+#include <dlfcn.h>
+typedef struct fossilsee fossilsee;
+typedef int (*fs_row)(void*,int,const char*const*,const int*);
+static FILE *g_out;
+static int row(void*a,int n,const char*const*v,const int*l){
+    (void)a; if(n<1||!v[0]) return 0;
+    fwrite(v[0],1,(size_t)(l?l[0]:(int)strlen(v[0])),g_out); return 0; }
+int main(int c,char**v){
+    void *h; int (*o)(const char*,const char*,fossilsee**); void (*cl)(fossilsee*);
+    int (*s)(fossilsee*,const char*,fs_row,void*); fossilsee *p=0; int rc; (void)c;
+    h=dlopen(v[1],RTLD_NOW); if(!h) return 90;
+    o=dlsym(h,"fossilsee_open"); cl=dlsym(h,"fossilsee_close"); s=dlsym(h,"fossilsee_sql");
+    if(!o||!cl||!s) return 91;
+    if(o(v[2],0,&p)) return 92;
+    g_out=fopen(v[3],"wb"); if(!g_out) return 93;
+    rc=s(p,"SELECT CASE WHEN encoding=1 THEN decompress(content) ELSE content END"
+           "  FROM unversioned WHERE name='probe.bin';",row,0);
+    fclose(g_out); cl(p); return rc?1:0; }
+UVH
+    if ! cc -o "$DIR/uv" "$DIR/uv.c" >/dev/null 2>&1; then
+      skip S9 "a uv blob cannot be read without forking" "harness did not compile"
+    elif ! "$DIR/uv" "$LIB" "$REPO" "$DIR/uvout" >/dev/null 2>&1; then
+      skip S9 "a uv blob cannot be read without forking" "harness could not query"
+    elif cmp -s "$DIR/uvbin" "$DIR/uvout"; then
+      lifted S9 "a uv blob reads back BYTE-IDENTICAL in-process, no fork" \
+        "the \`fossil uv export\` fork in viki_cmd_cache_pull_opts(), src/viki_cache.c, WHENEVER libfossilsee is loaded. It was never uv's nature that required it -- the subprocess transport truncates at the first NUL, and a SQLite file is NUL in byte 9."
+    else
+      held S9 "a uv blob cannot be read back byte-identical without forking"
+    fi
+  fi
+fi
+
+# ---- S10 -------------------------------------------------------------------
 # The CLI `fossil finfo` drops deletions: its log-mode query inner-joins blob
 # on b.rid=mlink.fid while a deletion has fid==0. We fixed the JSON route in
 # fossil-see; the CLI still has it, and the web /finfo page never did.
 if [ -z "$FOSSIL" ]; then
-  skip S8 "the CLI 'fossil finfo' query omits deletions" "no fossil binary"
+  skip S10 "the CLI 'fossil finfo' query omits deletions" "no fossil binary"
 else
   ( cd "$CO" && echo a > d.txt && "$FOSSIL" add d.txt >/dev/null 2>&1 \
      && "$FOSSIL" commit -m add-d >/dev/null 2>&1 \
@@ -290,11 +368,11 @@ else
       WHERE filename.name='d.txt' AND mlink.fnid=filename.fnid
         AND event.objid=mlink.mid AND event.objid=ci.rid;" 2>/dev/null)
   if [ "${NALL:-0}" -eq 0 ]; then
-    skip S8 "the CLI 'fossil finfo' query omits deletions" "could not build the add/delete fixture"
+    skip S10 "the CLI 'fossil finfo' query omits deletions" "could not build the add/delete fixture"
   elif [ "${NCLI:-0}" -lt "${NALL:-0}" ]; then
-    held S8 "the CLI 'fossil finfo' query omits deletions ($NCLI of $NALL rows)"
+    held S10 "the CLI 'fossil finfo' query omits deletions ($NCLI of $NALL rows)"
   else
-    lifted S8 "the CLI 'fossil finfo' query now reports deletions" \
+    lifted S10 "the CLI 'fossil finfo' query now reports deletions" \
       "FINDINGS.md's route table, and the upstream report in fossil-see docs/ -- the CLI half is fixed"
   fi
 fi

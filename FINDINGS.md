@@ -12,6 +12,54 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## "push/pull forks" is three claims, and only ONE of them is intrinsic
+
+2026-08-29. `viki cache push/pull` shells out to `fossil uv add`, `uv sync` and
+`uv export`, and this was recorded as a single blocker: "libfossilsee's v0 ABI
+is read-only SQL, so push/pull must fork." Decomposed, the three legs have three
+different blockers and they die on different days.
+
+| leg | what it actually needs | fork required? |
+|---|---|---|
+| `uv export` | read + `decompress()` | **NO** -- in-process |
+| `uv add` | a WRITABLE connection | yes today, by `fs_authorizer` |
+| `uv sync` | the network sync protocol | **yes, intrinsically** |
+
+**`unversioned_write()` is not what its name suggests.** It is `hname_hash()` +
+`blob_compress()` + one `REPLACE INTO unversioned(...)` + `admin_log()` +
+`db_unset("uv-hash")`. No artifact, no Merkle DAG -- consistent with SYNC.md's
+"uv blobs are name-addressed with no hash in the protocol at all." So `uv add`
+wants a *write*, not a subprocess, and it does not even strictly want zlib:
+`encoding=0` is a legal stored form (Fossil picks it whenever compression saves
+less than 20%) and Fossil reads both.
+
+**The export leg's fork was never about uv at all.** It is the SUBPROCESS
+TRANSPORT that cannot carry an embedded NUL -- and a SQLite database is NUL in
+byte 9, so `fossil sql` truncates the cache immediately. In process there is no
+such limit. Measured, on a 320,016-byte compressible binary stored at
+`encoding=1` (`length(content)`=150,413):
+
+```
+in-process (libfossilsee SQL + decompress())   320016 bytes, byte-identical
+subprocess (fossil sql, same query)                16 bytes  -- dies at the
+                                                              first NUL, which
+                                                              is "SQLite
+                                                              format 3\0"
+```
+
+A 200,000-byte random blob (`encoding=0`) also round-trips byte-identical
+in-process, so this is not an artifact of the compressed path.
+
+**The wrong assumption it replaces:** that the whole push/pull path is blocked
+on the same missing capability, so nothing there can improve until
+libfossilsee grows sync. In fact the export fork is removable today on any peer
+that loads the library, and only `uv sync` is genuinely not expressible as SQL.
+
+**This is the substrate probe's first real catch** (`build/substrate-probe.sh`
+S9), found the day it was written -- which is the argument for the probe rather
+than for any particular result in it.
+
+---
 ## `fossil unversioned cat` was never the only way to read a uv blob: SQL has decompress()
 
 2026-08-29. `index_unversioned()` forked `fossil unversioned cat` once per
