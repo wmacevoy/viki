@@ -179,6 +179,79 @@ void       viki_hits_free(VikiHits*);
 VikiStatus viki_note(const char *zText);
 VikiStatus viki_noteid(const char *zText, char *zIdOut);   /* >= 65 bytes */
 
+/* ---- identity and signing -------------------------------------------
+**
+** CONTENT ADDRESSING ALREADY GIVES INTEGRITY. An assertion's id is the hash
+** of what it says, so tampering produces a DIFFERENT assertion rather than a
+** corrupted one. What it does not give is AUTHORITY: anyone holding the diary
+** can write anything into it, and the store cannot tell you who did.
+** Signatures supply exactly that missing half and nothing else.
+**
+** PLUGGABLE BY CONSTRUCTION, for the same reason the embedder is: core links
+** no crypto, so signing and verifying are HOST callbacks. That is what lets
+** the mechanism differ per platform without core knowing:
+**
+**   a human on a laptop   the private key lives in the Secure Enclave / TPM
+**                         and a THUMBPRINT authorises one signature. xSign
+**                         calls the platform; the key never enters this
+**                         process, let alone this library.
+**   an agent              its identity is an assertion IN YOUR OWN DIARY --
+**                         a name and a public key you wrote down -- and it
+**                         signs with the key you issued it. Its authority is
+**                         then traceable to an entry you can read.
+**   a headless peer       a file, an env var, an HSM. Core cannot tell.
+**
+** SIGNATURES ARE THEIR OWN ROWS, not a column, because SEVERAL identities may
+** sign ONE assertion. Countersigning is then union-merge like everything
+** else, and a signed copy can never be shadowed by an unsigned one -- which
+** it would be if the signature rode on the assertion and INSERT OR IGNORE
+** kept whichever arrived first.
+**
+** VERIFICATION NEEDS NO SECRET. Checking a signature uses only the signer's
+** recorded public key, so a peer that holds no private material can still
+** establish who said what. */
+typedef struct {
+    const char *zSigner;   /* the signing identity's assertion id           */
+    void       *pApp;
+    /* aSig is at most VIKI_SIG_MAX bytes. Return non-zero to decline --
+    ** declining is not an error: it is how a cancelled thumbprint prompt or
+    ** a locked keychain reports itself, and the assertion is then stored
+    ** UNSIGNED rather than lost. */
+    int (*xSign)  (void *pApp, const char *zId,
+                   unsigned char *aSig, int *pnSig);
+    int (*xVerify)(void *pApp, const char *zPubKey, const char *zId,
+                   const unsigned char *aSig, int nSig);
+} VikiIdentity;
+#define VIKI_SIG_MAX 128
+
+RETAIN_DECLARE(VikiIdentity);
+
+/* An identity IS an assertion -- kind "identity", canon (name, public key) --
+** so identities merge, are searchable, and travel with the diary. Recording
+** one is not the same as trusting it; see viki_signed(). */
+VikiStatus viki_identity_put(const char *zName, const char *zPubKey,
+                             char *zIdOut);
+
+/* What core can say about a signature. All four are FACTS. Whether a verified
+** signer is a TRUSTED one is a judgment, and judgments live in the caller --
+** the same line coverage draws by reporting last-seen times and no
+** thresholds. */
+typedef enum {
+    VIKI_SIG_NONE = 0,   /* nobody signed it                                */
+    VIKI_SIG_OK,         /* verified against the signer's recorded key      */
+    VIKI_SIG_BAD,        /* a signature is present and does NOT verify      */
+    VIKI_SIG_UNKNOWN     /* signed by an identity this diary does not hold  */
+} VikiSigState;
+
+/* Reports the strongest state found across every signature on the assertion,
+** and which signer produced it. */
+VikiStatus viki_signed(const char *zId, VikiSigState *pState,
+                       char *zSignerOut);
+
+/* Countersign an assertion that is already stored -- the retained identity
+** adds its own row. */
+VikiStatus viki_countersign(const char *zId);
+
 /* ---- blobs: an assertion whose TEXT is not its BYTES -----------------
 **
 ** THE TWO VTABLE SLOTS WERE ALWAYS DIFFERENT THINGS, and a blob is what makes

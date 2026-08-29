@@ -165,6 +165,45 @@ static void onEventMutating(void *pApp, const VikiEvent2 *e){
     if( viki_note("written from inside a listener")==VIKI_EBUSY ) s->bMutateRefused = 1;
 }
 
+/* ---- two stand-in identities ----------------------------------------
+** A toy keyed hash, not a cipher: what is under test is core's BOOKKEEPING --
+** which rows exist, what merges, what verify is asked -- not anyone's
+** cryptography. A real host calls the Secure Enclave or an ed25519 library
+** here, and core cannot tell the difference, which is the point. */
+typedef struct { const char *zPub; const char *zPriv; int nSignCalls; int bDecline; } Key;
+static void toysig(const char *zPriv, const char *zId, unsigned char *aOut, int *pn){
+    unsigned h1 = 2166136261u, h2 = 16777619u;
+    const char *p;
+    int i;
+    for(p=zPriv; *p; p++){ h1 = (h1 ^ (unsigned char)*p) * 16777619u; }
+    for(p=zId;   *p; p++){ h2 = (h2 ^ (unsigned char)*p) * 2166136261u; h2 ^= h1; }
+    for(i=0;i<16;i++){ aOut[i] = (unsigned char)(h2 >> ((i%4)*8)); h2 = h2*31 + (unsigned)i; }
+    *pn = 16;
+}
+static int keySign(void *pApp, const char *zId, unsigned char *aSig, int *pnSig){
+    Key *k = (Key*)pApp;
+    k->nSignCalls++;
+    if( k->bDecline ) return 1;          /* a cancelled thumbprint prompt */
+    toysig(k->zPriv, zId, aSig, pnSig);
+    return 0;
+}
+/* VERIFY TAKES A PUBLIC KEY AND NOTHING ELSE -- no pApp secret is consulted.
+** A peer checking who said what holds no private material. */
+static int keyVerify(void *pApp, const char *zPubKey, const char *zId,
+                     const unsigned char *aSig, int nSig){
+    unsigned char aWant[VIKI_SIG_MAX]; int nWant = 0;
+    (void)pApp;
+    /* the toy's "public key" is its private key spelled backwards, so the
+    ** verifier can derive the expected signature without holding a secret of
+    ** its own -- the property S3 is about, faked just enough to test it */
+    { static char zPriv[64]; size_t n = strlen(zPubKey), i2;
+      if( n>=sizeof zPriv ) return 1;
+      for(i2=0;i2<n;i2++) zPriv[i2] = zPubKey[n-1-i2];
+      zPriv[n] = 0;
+      toysig(zPriv, zId, aWant, &nWant); }
+    return (nWant==nSig && memcmp(aWant,aSig,(size_t)nSig)==0) ? 0 : 1;
+}
+
 int main(void){
     sqlite3 *dbA = 0, *dbB = 0;
     VikiStore sA, sB;
@@ -409,6 +448,128 @@ int main(void){
             RETAIN_END(g);
         }
         sqlite3_close(dbG);
+    }
+
+    printf("\n== I: identity and signing ==\n");
+    {
+        sqlite3 *dbI=0, *dbP=0; VikiStore sI, sP;
+        Key kMe   = { "esiwed", "dewise", 0, 0 };   /* pub is priv reversed */
+        Key kAgent= { "tnega",  "agent",  0, 0 };
+        VikiIdentity idMe, idAgent;
+        char idMeAssert[VIKI_ID_HEX+1], idAgentAssert[VIKI_ID_HEX+1];
+        char idNote[VIKI_ID_HEX+1], zWho[VIKI_ID_HEX+1];
+        VikiSigState st2;
+        sqlite3_open(":memory:",&dbI); sI.db=dbI; viki_attach(dbI);
+        {
+            RETAIN_BEGIN(VikiStore, &sI, g);
+            /* AN IDENTITY IS AN ASSERTION IN YOUR OWN DIARY. The agent's is a
+            ** row you wrote, so its authority traces to something you can
+            ** read -- which is what makes an agent's actions attributable
+            ** without a second system. */
+            viki_identity_put("warren (laptop, secure enclave)", kMe.zPub, idMeAssert);
+            viki_identity_put("claude (agent, key I issued)",    kAgent.zPub, idAgentAssert);
+            check(nOf(VIKI_N_ASSERT,"identity")==2,
+                  "I1 identities are ordinary assertions in the diary", "not stored");
+
+            /* unsigned is a WORKING path, not a failure */
+            viki_noteid("written with no identity retained", idNote);
+            viki_signed(idNote, &st2, zWho);
+            check(st2==VIKI_SIG_NONE,
+                  "I2 with no identity retained, writes are UNSIGNED and fine", "wrong state");
+
+            idMe.zSigner=idMeAssert; idMe.pApp=&kMe;
+            idMe.xSign=keySign; idMe.xVerify=keyVerify;
+            idAgent.zSigner=idAgentAssert; idAgent.pApp=&kAgent;
+            idAgent.xSign=keySign; idAgent.xVerify=keyVerify;
+
+            {   RETAIN_BEGIN(VikiIdentity, &idMe, gi);
+                viki_noteid("the gate latch sticks below freezing", idNote);
+                viki_signed(idNote, &st2, zWho);
+                check(st2==VIKI_SIG_OK && strcmp(zWho, idMeAssert)==0,
+                      "I3 a retained identity signs what it writes, and verifies",
+                      "not verified");
+                RETAIN_END(gi); }
+
+            /* S5, THE ONE THAT MATTERS: another identity's key must NOT
+            ** verify, or the signature proves nothing about WHO. */
+            {   Key kImposter = { "esiwed", "wrongkey", 0, 0 };
+                VikiIdentity bad = idMe;
+                char idFake[VIKI_ID_HEX+1];
+                bad.pApp = &kImposter;
+                RETAIN_BEGIN(VikiIdentity, &bad, gb);
+                viki_noteid("a statement signed with the wrong key", idFake);
+                viki_signed(idFake, &st2, zWho);
+                check(st2==VIKI_SIG_BAD,
+                      "I4 CONTROL: a signature from another key does NOT verify",
+                      "an imposter passed -- the signature proves nothing about WHO");
+                RETAIN_END(gb); }
+
+            /* declining is not an error: a cancelled thumbprint stores the
+            ** assertion unsigned rather than losing it */
+            {   Key kLocked = { "esiwed", "dewise", 0, 1 };
+                VikiIdentity dec = idMe;
+                char idDec[VIKI_ID_HEX+1];
+                dec.pApp = &kLocked;
+                RETAIN_BEGIN(VikiIdentity, &dec, gd);
+                check(viki_noteid("written while the keychain was locked", idDec)==VIKI_OK,
+                      "I5 a DECLINED signature still stores the assertion", "the write was lost");
+                viki_signed(idDec, &st2, zWho);
+                check(st2==VIKI_SIG_NONE, "I5b ...unsigned, and honestly reported as such",
+                      "it claimed a signature");
+                RETAIN_END(gd); }
+
+            /* countersigning: several identities on one statement */
+            {   RETAIN_BEGIN(VikiIdentity, &idAgent, ga);
+                viki_countersign(idNote);
+                RETAIN_END(ga); }
+            check(sqlN("SELECT count(*) FROM viki_sig WHERE id IS NOT NULL")>=2,
+                  "I6 several identities can sign ONE assertion", "countersign did not add a row");
+            RETAIN_END(g);
+        }
+
+        /* S3: VERIFICATION NEEDS NO SECRET. A fresh peer merges the diary and
+        ** can establish who said what while holding no private material at
+        ** all -- it never retains a signer, only a verifier. */
+        sqlite3_open(":memory:",&dbP); sP.db=dbP; viki_attach(dbP);
+        {
+            VikiIdentity vOnly;
+            memset(&vOnly, 0, sizeof vOnly);
+            vOnly.xVerify = keyVerify;      /* no xSign, no zSigner, no key */
+            RETAIN_BEGIN(VikiStore, &sP, gp);
+            viki_merge(dbI, &n);
+            check(n>0, "I7 a peer merges the diary", "nothing merged");
+            RETAIN_BEGIN(VikiIdentity, &vOnly, gv);
+            viki_signed(idNote, &st2, zWho);
+            check(st2==VIKI_SIG_OK,
+                  "I8 that peer verifies WHO said it, holding NO private key",
+                  "signatures did not survive the merge, or verify needs a secret");
+            RETAIN_END(gv);
+            RETAIN_END(gp);
+        }
+        /* CONTROL: a peer that has the signature but NOT the signer's identity
+        ** must say UNKNOWN, not OK and not BAD -- that is a fact about its
+        ** coverage, and it is what a peer sees before the identity reaches it. */
+        {
+            sqlite3 *dbQ=0; VikiStore sQ; VikiIdentity vOnly;
+            memset(&vOnly, 0, sizeof vOnly); vOnly.xVerify = keyVerify;
+            sqlite3_open(":memory:",&dbQ); sQ.db=dbQ; viki_attach(dbQ);
+            RETAIN_BEGIN(VikiStore, &sQ, gq);
+            viki_sql("SELECT 1", 0, 0);
+            { sqlite3_stmt *w=0;
+              viki_sql("INSERT INTO viki_assert(id,kind,akey,arank,ts,body,atext)"
+                       " VALUES('x','note','k','r','t','b','b')", 0, 0);
+              (void)w; }
+            viki_sql("INSERT INTO viki_sig(id,signer,sig) VALUES('x','nobody',x'00')", 0, 0);
+            RETAIN_BEGIN(VikiIdentity, &vOnly, gv2);
+            viki_signed("x", &st2, zWho);
+            check(st2==VIKI_SIG_UNKNOWN,
+                  "I9 CONTROL: a signature from an identity this diary lacks is UNKNOWN",
+                  "it was reported as OK or BAD rather than as missing coverage");
+            RETAIN_END(gv2);
+            RETAIN_END(gq);
+            sqlite3_close(dbQ);
+        }
+        sqlite3_close(dbI); sqlite3_close(dbP);
     }
 
     printf("\n== B: blobs -- the text is not the bytes ==\n");

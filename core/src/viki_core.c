@@ -14,6 +14,7 @@
 
 RETAIN_DEFINE(VikiStore);
 RETAIN_DEFINE(VikiEmbed);
+RETAIN_DEFINE(VikiIdentity);
 
 /* PER-THREAD, because the context it describes is. A shared buffer would let
 ** one thread's failure be read as another's -- and viki_errmsg() is the only
@@ -126,6 +127,18 @@ static const char zSchema[] =
   ");"
   "CREATE INDEX IF NOT EXISTS viki_chunk_id ON viki_chunk(id);"
 
+  /* SIGNATURES ARE ROWS, NOT A COLUMN. Several identities may sign one
+  ** assertion, so countersigning is union-merge like everything else -- and a
+  ** signed copy can never be shadowed by an unsigned one, which it would be if
+  ** the signature rode on the assertion and INSERT OR IGNORE kept whichever
+  ** arrived first. Grow-only on (id, signer), the same class as assertions. */
+  "CREATE TABLE IF NOT EXISTS viki_sig("
+  "  id     TEXT NOT NULL,"        /* the assertion signed                  */
+  "  signer TEXT NOT NULL,"        /* the signing identity's assertion id   */
+  "  sig    BLOB NOT NULL,"
+  "  PRIMARY KEY(id, signer)"
+  ") WITHOUT ROWID;"
+
   /* The payload of a blob assertion, kept OUT of viki_assert so that a 23 MB
   ** model does not sit in the row every resolve, count and merge scans. The
   ** assertion carries the description; this carries the bytes. */
@@ -155,6 +168,149 @@ VikiStatus viki_attach(sqlite3 *db){
         VikiStatus rc = fail(VIKI_ESQL, "viki_attach: %s", zErr);
         sqlite3_free(zErr); return rc;
     }
+    return VIKI_OK;
+}
+
+/* ---- identity and signing --------------------------------------------
+** Core links no crypto. Everything here is bookkeeping around two host
+** callbacks, which is what makes the mechanism pluggable: a thumbprint on a
+** laptop and an agent key written into your own diary reach this code the
+** same way. */
+static const VikiType vikiIdentityType = { "identity", 0, 0 };
+typedef struct {
+    const struct VikiAssertVftbl *vftbl;
+    char        zId[VIKI_ID_HEX+1];
+    const char *zTs;
+    const char *zSupersedes;
+    const char *zName;
+    const char *zCanon;
+} IdAssert;
+static const char *idKey  (const VikiAssert *p){ return ((const IdAssert*)p)->zCanon; }
+static const char *idRank (const VikiAssert *p){ return p->zTs ? p->zTs : ""; }
+static const char *idText (const VikiAssert *p){ return ((const IdAssert*)p)->zName; }
+static const char *idCanon(const VikiAssert *p){ return ((const IdAssert*)p)->zCanon; }
+static const struct VikiAssertVftbl vikiIdentityVftbl = {
+    &vikiIdentityType, idKey, idRank, idText, idCanon
+};
+
+VikiStatus viki_identity_put(const char *zName, const char *zPubKey, char *zIdOut){
+    IdAssert a;
+    char *zCanon;
+    VikiStatus rc;
+    if( !db_or_null() ) return VIKI_ENOCTX;
+    if( !zName || !zPubKey || !*zPubKey )
+        return fail(VIKI_EINVAL, "viki_identity_put: name and public key required%s","");
+    memset(&a, 0, sizeof a);
+    a.vftbl = &vikiIdentityVftbl;
+    a.zName = zName;
+    /* Identity is (name, public key). The SAME key under a different name is a
+    ** different assertion, because the name is part of the claim -- and a
+    ** rename must be visible rather than silent. */
+    zCanon = sqlite3_mprintf("%s\x1f%s", zPubKey, zName);
+    if( !zCanon ) return fail(VIKI_ENOMEM, "viki_identity_put: out of memory%s","");
+    a.zCanon = zCanon;
+    rc = viki_put((VikiAssert*)&a);
+    sqlite3_free(zCanon);
+    if( rc==VIKI_OK && zIdOut ) memcpy(zIdOut, a.zId, VIKI_ID_HEX+1);
+    return rc;
+}
+
+/* The public key of a recorded identity, from its canon (pubkey \x1f name). */
+static char *identity_pubkey(sqlite3 *db, const char *zSigner){
+    sqlite3_stmt *st = 0; char *z = 0;
+    if( sqlite3_prepare_v2(db,
+        "SELECT body FROM viki_assert WHERE id=?1 AND kind='identity'",
+        -1, &st, 0)!=SQLITE_OK ) return 0;
+    sqlite3_bind_text(st, 1, zSigner, -1, SQLITE_STATIC);
+    if( sqlite3_step(st)==SQLITE_ROW ){
+        const char *zBody = (const char*)sqlite3_column_text(st, 0);
+        const char *zSep = zBody ? strchr(zBody, '\x1f') : 0;
+        if( zSep ){
+            size_t n = (size_t)(zSep - zBody);
+            z = (char*)malloc(n+1);
+            if( z ){ memcpy(z, zBody, n); z[n] = 0; }
+        }
+    }
+    sqlite3_finalize(st);
+    return z;
+}
+
+/* Adds the retained identity's signature for zId. Declining is not an error:
+** a cancelled thumbprint or a locked keychain stores the assertion UNSIGNED
+** rather than losing it. */
+static void sign_if_able(sqlite3 *db, const char *zId){
+    const VikiIdentity *pI;
+    unsigned char aSig[VIKI_SIG_MAX];
+    int nSig = (int)sizeof aSig;
+    sqlite3_stmt *st = 0;
+    if( !RETAINED(VikiIdentity) ) return;
+    pI = RECALL(VikiIdentity);
+    if( !pI || !pI->xSign || !pI->zSigner ) return;
+    if( pI->xSign(pI->pApp, zId, aSig, &nSig)!=0 ) return;
+    if( nSig<=0 || nSig>(int)sizeof aSig ) return;
+    if( sqlite3_prepare_v2(db,
+        "INSERT OR IGNORE INTO viki_sig(id,signer,sig) VALUES(?1,?2,?3)",
+        -1, &st, 0)!=SQLITE_OK ) return;
+    sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 2, pI->zSigner, -1, SQLITE_STATIC);
+    sqlite3_bind_blob(st, 3, aSig, nSig, SQLITE_TRANSIENT);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+}
+
+VikiStatus viki_countersign(const char *zId){
+    sqlite3 *db = db_or_null();
+    if( !db ) return VIKI_ENOCTX;
+    if( !RETAINED(VikiIdentity) )
+        return fail(VIKI_EINVAL, "viki_countersign: no identity retained%s","");
+    if( viki_get(zId, 0)!=VIKI_OK ) return VIKI_ENOTFOUND;
+    sign_if_able(db, zId);
+    return VIKI_OK;
+}
+
+VikiStatus viki_signed(const char *zId, VikiSigState *pState, char *zSignerOut){
+    sqlite3 *db = db_or_null();
+    const VikiIdentity *pI = RETAINED(VikiIdentity) ? RECALL(VikiIdentity) : 0;
+    sqlite3_stmt *st = 0;
+    VikiSigState best = VIKI_SIG_NONE;
+    char zBest[VIKI_ID_HEX+1];
+    zBest[0] = 0;
+    if( pState ) *pState = VIKI_SIG_NONE;
+    if( zSignerOut ) zSignerOut[0] = 0;
+    if( !db ) return VIKI_ENOCTX;
+    if( sqlite3_prepare_v2(db, "SELECT signer, sig FROM viki_sig WHERE id=?1",
+                           -1, &st, 0)!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_signed: %s", sqlite3_errmsg(db));
+    sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+    while( sqlite3_step(st)==SQLITE_ROW ){
+        const char *zSigner = (const char*)sqlite3_column_text(st, 0);
+        const unsigned char *aSig = (const unsigned char*)sqlite3_column_blob(st, 1);
+        int nSig = sqlite3_column_bytes(st, 1);
+        char *zPub = identity_pubkey(db, zSigner);
+        VikiSigState thisOne;
+        if( !zPub ){
+            /* Signed by somebody this diary has never heard of. That is not a
+            ** failure -- it is a fact about coverage, and it is exactly what a
+            ** peer sees before the signer's identity assertion reaches it. */
+            thisOne = VIKI_SIG_UNKNOWN;
+        }else if( pI && pI->xVerify
+               && pI->xVerify(pI->pApp, zPub, zId, aSig, nSig)==0 ){
+            thisOne = VIKI_SIG_OK;
+        }else{
+            thisOne = VIKI_SIG_BAD;
+        }
+        free(zPub);
+        /* strongest wins: OK > BAD > UNKNOWN > NONE */
+        if( thisOne==VIKI_SIG_OK
+         || (thisOne==VIKI_SIG_BAD && best!=VIKI_SIG_OK)
+         || (thisOne==VIKI_SIG_UNKNOWN && best==VIKI_SIG_NONE) ){
+            best = thisOne;
+            if( zSigner ) snprintf(zBest, sizeof zBest, "%s", zSigner);
+        }
+    }
+    sqlite3_finalize(st);
+    if( pState ) *pState = best;
+    if( zSignerOut ) snprintf(zSignerOut, VIKI_ID_HEX+1, "%s", zBest);
     return VIKI_OK;
 }
 
@@ -473,6 +629,7 @@ VikiStatus viki_put(VikiAssert *p){
             sqlite3_errmsg(db));
         return VIKI_OK;                 /* already stored: not a new event */
     }
+    sign_if_able(db, p->zId);
     emit(db, p->zSupersedes ? VIKI_EV_SUPERSEDED : VIKI_EV_PUT,
          p->zId, p->vftbl->key(p), p->zSupersedes, 1);
     return VIKI_OK;
@@ -572,6 +729,27 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
         tx_end(db, "viki_merge", 0);
         return fail(VIKI_ESQL, "viki_merge: incomplete: %s",
                     rc!=SQLITE_OK ? sqlite3_errmsg(db) : sqlite3_errmsg(pOther));
+    }
+    /* SIGNATURES MERGE TOO. They are grow-only rows on (id, signer), so union
+    ** is merge for them exactly as for assertions -- and without this a peer
+    ** would receive a statement while losing the evidence of who stood behind
+    ** it, which is the half signing exists to supply. */
+    {   sqlite3_stmt *q = 0, *w = 0;
+        if( sqlite3_prepare_v2(pOther, "SELECT id,signer,sig FROM viki_sig",
+                               -1, &q, 0)==SQLITE_OK ){
+            if( sqlite3_prepare_v2(db,
+                "INSERT OR IGNORE INTO viki_sig(id,signer,sig) VALUES(?1,?2,?3)",
+                -1, &w, 0)==SQLITE_OK ){
+                while( sqlite3_step(q)==SQLITE_ROW ){
+                    int c;
+                    sqlite3_reset(w); sqlite3_clear_bindings(w);
+                    for(c=0;c<3;c++) sqlite3_bind_value(w, c+1, sqlite3_column_value(q, c));
+                    sqlite3_step(w);
+                }
+                sqlite3_finalize(w);
+            }
+            sqlite3_finalize(q);
+        }
     }
     tx_end(db, "viki_merge", 1);
     emit(db, VIKI_EV_MERGED, 0, 0, 0, n);
@@ -791,6 +969,11 @@ VikiStatus viki_forget(const char *zId){
         "SELECT seq, text FROM viki_chunk_text WHERE seq IN"
         " (SELECT seq FROM viki_chunk WHERE id=?1)",
         "DELETE FROM viki_chunk WHERE id=?1", zId);
+    if( sqlite3_prepare_v2(db, "DELETE FROM viki_sig WHERE id=?1",
+                           -1, &st, 0)==SQLITE_OK ){
+        sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);
+        sqlite3_step(st); sqlite3_finalize(st); st = 0;
+    }
     if( sqlite3_prepare_v2(db, "DELETE FROM viki_assert WHERE id=?1",
                            -1, &st, 0)==SQLITE_OK ){
         sqlite3_bind_text(st, 1, zId, -1, SQLITE_STATIC);

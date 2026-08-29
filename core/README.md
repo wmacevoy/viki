@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **97 passed, 0 failed** (11 constraint + 86 behaviour).
+`sh core/test/core-probe.sh` → **107 passed, 0 failed** (11 constraint + 96 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -504,7 +504,208 @@ the container, not the contract.
 
 ---
 
+## Identity: what signing adds, and what it must not decide
+
+> *"what gives signed changes, a tribe is identity. maybe this is pluggable —
+> what lets this be a thumbprint on a laptop open an identity. what lets an
+> agent trace have an identity (something in your own diary) and a human use a
+> fingerprint?"* — Warren, 2026-08-29
+
+**Content addressing already gives integrity.** An assertion's id is the hash
+of what it says, so tampering produces a *different* assertion rather than a
+corrupted one. What it does not give is **authority**: anyone holding the diary
+can write anything into it, and the store cannot say who did. Signatures supply
+exactly that missing half — the predecessor reached the same conclusion
+(`keywrap-probe`'s S-series) and its lessons are the assertions here.
+
+### Pluggable falls out of the existing shape
+
+Core links no crypto, so signing and verifying are **host callbacks**, retained
+like the embedder. That is what lets the mechanism differ per platform without
+core knowing:
+
+| | how it signs |
+|---|---|
+| **a human on a laptop** | the private key lives in the Secure Enclave / TPM and a **thumbprint authorises one signature**. `xSign` calls the platform; the key never enters this process, let alone this library. |
+| **an agent** | its identity is an assertion **in your own diary** — a name and a public key you wrote down — and it signs with the key you issued it. Its authority traces to an entry you can read. |
+| **a headless peer** | a file, an env var, an HSM. Core cannot tell. |
+
+`RETAIN_DECLARE(VikiIdentity)` — so an identity is retained for a scope exactly
+as a store or an embedder is, and **unsigned is a working path** (I2), not a
+failure. A *declined* signature — a cancelled thumbprint, a locked keychain —
+stores the assertion unsigned rather than losing it (I5, I5b). Losing a write
+because a prompt was dismissed would be the worst possible trade.
+
+### Signatures are rows, not a column
+
+Several identities may sign one assertion, so countersigning is union-merge
+like everything else (I6) — and a signed copy can never be shadowed by an
+unsigned one, which it would be if the signature rode on the assertion and
+`INSERT OR IGNORE` kept whichever arrived first.
+
+`viki_merge` carries signatures too. Without that a peer would receive a
+statement while losing the evidence of who stood behind it, which is the half
+signing exists to supply.
+
+### Four facts, and no judgment
+
+`viki_signed()` returns `NONE`, `OK`, `BAD` or `UNKNOWN`. All four are facts.
+**Whether a verified signer is a *trusted* one is a judgment, and judgments
+live in the caller** — the same line `coverage` draws by reporting last-seen
+times and no thresholds.
+
+`UNKNOWN` is the one worth having: a signature from an identity this diary does
+not hold is not a failure, it is a fact about *coverage*, and it is precisely
+what a peer sees before the signer's identity assertion reaches it (I9).
+
+### The two assertions that carry the weight
+
+- **I4** — a signature made with another key must **not** verify. Without it a
+  signature proves nothing about *who*, which is the only thing it was added
+  for. This is the predecessor's S5, and it is the one that matters.
+- **I8** — a fresh peer merges the diary and establishes who said what while
+  **holding no private material at all**: it retains a verifier with no
+  `xSign`, no signer id, and no key. That is the predecessor's S3, and it is
+  what makes signatures useful to someone who was not there.
+
 ## Blobs: the vector is of a DESCRIPTION, not of the payload
+
+> *"blobs can have custom chunking — this one is a vector of a description
+> that the blob of onnx coefficients."* — Warren, 2026-08-29
+
+`VikiAssert` has always had two slots that a note makes look redundant:
+
+    canon()   the bytes identity is computed over
+    text()    what gets chunked and embedded
+
+A blob is what makes the difference load-bearing. Chunking 23 MB of int8 ONNX
+coefficients would produce ranges of noise and a vector that means nothing —
+the bytes have no semantic content. What is worth embedding is a
+**description**, so the blob's single range covers the description and its
+vector is the description's.
+
+That is the general shape, not a special case for models: a PDF's text is its
+extracted text, an image's is its caption or OCR, a recording's is its
+transcript. **The payload is addressed; the description is searched.**
+
+Measured on the real pinned model:
+
+```
+model on disk    23,026,053 bytes
+stored                    52 ms
+ranges over it             1        <- over the DESCRIPTION
+ask "which embedding model do I have"
+                 -> all-MiniLM-L6-v2 sentence embedding model, ONNX, int8...
+read back        23,026,053 bytes in 14.8 ms, byte-identical
+diary on disk    23,097,344 bytes   (100.3% of the model)
+```
+
+Three decisions inside it, each with an assertion:
+
+- **Identity is the caller's content hash**, not a rehash. The host already has
+  it — D-12 pins the model's checksum — and rehashing 23 MB inside a put pays
+  twice for a number that must match the pin anyway. Identity is
+  `(content hash, description)`, so the same bytes described differently are
+  **two claims about one payload**, which is right: the description is the
+  claim (B6).
+- **The payload lives outside `viki_assert`** (B5), so a 23 MB model does not
+  sit in the row that every resolve, count and merge scans.
+- **`viki_blob_get()` returns a borrowed pointer** valid until the next core
+  call, because `sqlite3_column_blob()` owns that memory until its statement is
+  stepped — so exactly one statement is held alive. That is stated in the
+  header rather than left for a caller to discover.
+
+B4b is the control worth naming: the indexed range must hold the description
+and **not** the coefficients. Without it, B4 would pass just as happily over a
+range full of binary that happened to contain the query's letters.
+
+### And this is how images arrive
+
+An image is the same thing: the payload is the PNG, the text is a caption or
+OCR. Nothing about it is a special case.
+
+**The consequence worth being explicit about** is why the description goes
+through the *ordinary* chunk path rather than a side table: it lands in
+`viki_chunk_text`, so `viki_fts` indexes it, so **the primitive legs find it**.
+A photograph is findable by a keyword query **with no embedder loaded at all**
+— which is the state a phone, a fresh clone, or any degraded run is actually
+in.
+
+```
+B7   an image blob is found by the KEYWORD leg, no embedder
+B7b  CONTROL: ...and that search really was degraded
+B7c  CONTROL: the PAYLOAD is not searchable, only the description
+```
+
+B7b matters because without it B7 would pass just as well with an embedder
+quietly retained, and would then be a claim about vectors rather than about
+keywords. B7c is the other edge: binary must never reach the index.
+
+---
+
+## Three answers: the word, the size, and scratch
+
+### The word: **diary**, and it earns it
+
+`SOFTWARE-ENGINEERING-2` §4 says conceptual integrity shows up first in
+vocabulary, so this is worth settling rather than drifting. **A viki database is
+a diary**, and the argument is that every property of the noun is already a
+property of the thing:
+
+| a diary | a viki store |
+|---|---|
+| append-only — you do not un-write yesterday | grow-only; superseded assertions stay |
+| dated | every assertion carries `ts`, and `rank` is usually lexical time |
+| one writer | one peer writes it; **merging diaries** is what a tribe is |
+| kept, not filed | queried, not read start to finish |
+
+It also fixes `viki_merge` in the mind: you are merging diaries, and union is
+merge because two people writing the same sentence wrote one fact.
+
+**Do not use "journal".** In a library whose contract is SQLite, "journal"
+already means the rollback journal, and `PRAGMA journal_mode=WAL` is in the
+CLI's own open path. A word that means two things in one file is the drift
+§4 warns about.
+
+`SCOPES` §4 already defines **a tribe** as one L0 instance; that stays. A tribe
+is the set of diaries that merge. A diary is one peer's file.
+
+### The size: **store it uncompressed** — DECIDED
+
+The 90 MB figure came from a blob of *random bytes* I generated to test
+throughput. The real pinned model is **23,026,053 bytes** —
+`all-MiniLM-L6-v2`, `model_qint8_arm64.onnx` — which is 23% of a <100 MB
+payload budget, not 90%.
+
+```
+raw                   23,026,053 bytes
+gzip -6               17,464,371          75.8%
+zstd -19              16,919,669          73.5%
+gunzip to memory           79.3 ms
+```
+
+**Decision (Warren, 2026-08-29): store it uncompressed.** ~25% is not worth
+the trouble for a core feature at this size, and the numbers say why rather
+than the other way round: 6 MB saved, 79 ms paid on every load, plus a
+decompressor, plus a materialised-uncompressed cache to manage, plus the
+question of where that cache lives.
+
+The ranking is the useful part to keep: **quantisation already did the heavy
+lifting.** A float32 MiniLM-L6 is ~90 MB; int8 took it to 23 — a 4× cut,
+against gzip's 1.3×. If the payload budget ever binds, the next lever is the
+model, not the container. Do not revisit compression before that.
+
+### Scratch: deferred, not designed
+
+A scratch diary would need no new machinery — a store you either `viki merge`
+or delete — and that was verified before deciding not to build it. **Deferred
+(Warren, 2026-08-29): "let's worry about scratch if it comes up for a reason."**
+
+The merge properties it exercised are kept in `cli/cli-probe.sh` under their own
+name, because they are true of `merge` whether or not anyone ever calls a store
+"scratch": promotion copies rather than links, so deleting the source afterwards
+does not un-promote, and a store that was never merged leaves no trace.
+, not of the payload
 
 > *"blobs can have custom chunking — this one is a vector of a description
 > that the blob of onnx coefficients."* — Warren, 2026-08-29
