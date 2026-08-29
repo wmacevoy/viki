@@ -76,9 +76,17 @@ fi
 # The failure this prevents is not untidiness. A probe that reads the tables
 # keeps passing while the API is missing the verb it needed -- so the gap is
 # never reported, and the first real host discovers it instead.
+#
+# WHAT IS ALLOWED, and the line is the documented boundary rather than a
+# convenience: the host OPENS AND KEYS the connection -- sqlite3_open,
+# PRAGMA key, PRAGMA cipher_version -- because that is precisely the part core
+# never learns about. What it may not do is name a CORE TABLE in a statement
+# of its own; for that there is viki_sql(), which is the API.
 PROBE="$ROOT/core/test/core_probe.c"
-raw=$(grep -nE 'sqlite3_(prepare|exec)' "$PROBE" | grep -vE 'sqlite3_open|:memory:' || true)
-[ -z "$raw" ] && ok "C8 the probe reads core ONLY through the API" \
+raw=$(grep -nE 'sqlite3_(prepare|exec)' "$PROBE" \
+      | grep -E 'viki_assert|viki_chunk|viki_fts|viki_sig|viki_blob|viki_event' \
+      | grep -v 'viki_sql' || true)
+[ -z "$raw" ] && ok "C8 the probe never names a core table outside the API" \
               || bad "C8 the probe prepares its own statements on core's tables" \
                      "$(printf '%s' "$raw" | head -3)"
 if grep -q 'viki_count\|viki_each\|viki_sql' "$PROBE"; then

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "viki_core.h"
 #include "viki_cal.h"
 
@@ -317,7 +318,7 @@ int main(void){
         RETAIN_END(g);
     }
 
-    printf("\n== E: the vector leg ==\n");
+    printf("\n== Q: the vector leg ==\n");
     {
         RETAIN_BEGIN(VikiStore, &sA, g);
         emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
@@ -325,25 +326,25 @@ int main(void){
         ** target cannot find it. If this passes, E2 below proves nothing. */
         check(viki_ask("boundary fastener hinge", 5, &h)==VIKI_OK
               && (h->n==0 || !strstr(h->a[0].zText,"gate latch")),
-              "E1 CONTROL: without vectors, a no-shared-word query MISSES",
-              "it found it anyway -- E2 would be vacuous");
+              "Q1 CONTROL: without vectors, a no-shared-word query MISSES",
+              "it found it anyway -- Q3 would be vacuous");
         viki_hits_free(h); h=0;
 
         {
             RETAIN_BEGIN(VikiEmbed, &emb, ge);
             viki_reindex(0, &n);
             check(nOf(VIKI_N_VECTOR,0)>0,
-                  "E2 reindex at an embed epoch stored vectors", "no vectors");
+                  "Q2 reindex at an embed model stored vectors", "no vectors");
             rank_gate = -1;
             if( viki_ask("boundary fastener hinge", 5, &h)==VIKI_OK ){
                 for(i=0;i<h->n;i++)
                     if( strstr(h->a[i].zText,"gate latch") ){ rank_gate = i; break; }
             }
             check(rank_gate==0,
-                  "E3 the vector leg finds a chunk sharing NO WORD with the query",
+                  "Q3 the vector leg finds a chunk sharing NO WORD with the query",
                   "not at rank 1");
             check(h && h->bDegraded==0,
-                  "E4 with an embedder retained, hits are NOT degraded", "still degraded");
+                  "Q4 with an embedder retained, hits are NOT degraded", "still degraded");
             viki_hits_free(h); h=0;
             RETAIN_END(ge);
         }
@@ -448,6 +449,84 @@ int main(void){
             RETAIN_END(g);
         }
         sqlite3_close(dbG);
+    }
+
+    printf("\n== E: encryption at rest ==\n");
+    {
+        /* A DIARY HOLDS WHAT SOMEONE TOLD IT IN CONFIDENCE, so encryption is
+        ** the baseline rather than an option. These assertions are the
+        ** predecessor's E-series, ported: the point is never "we called
+        ** PRAGMA key and it returned OK" -- SQLCipher-less builds do that
+        ** happily -- but that the bytes on disk are really ciphertext, proved
+        ** against a plaintext control written by the SAME binary. */
+        sqlite3 *dbE=0; VikiStore sE;
+        int bCipher = 0;
+        sqlite3_open(":memory:",&dbE);
+        {   sqlite3_stmt *q=0;
+            if( sqlite3_prepare_v2(dbE,"PRAGMA cipher_version",-1,&q,0)==SQLITE_OK
+             && sqlite3_step(q)==SQLITE_ROW
+             && sqlite3_column_text(q,0) ) bCipher = 1;
+            sqlite3_finalize(q); }
+        sqlite3_close(dbE);
+        if( !bCipher ){
+            printf("  --    E1-E5 skipped: built against stock SQLite, NOT SQLCipher\n");
+            printf("  --    (a skip here is not a pass -- the diary would be plaintext)\n");
+        }else{
+            const char *zKey = "PRAGMA key = \"x'2b7e151628aed2a6abf7158809cf4f3c"
+                               "762e7160f38b4da56a784d9045190cfe'\"";
+            const char *zEnc = "/tmp/vk_probe_enc.db", *zPln = "/tmp/vk_probe_pln.db";
+            char aHdr[16]; FILE *f; int bLeakE=0, bLeakP=0;
+            unlink(zEnc); unlink(zPln);
+            sqlite3_open(zEnc,&dbE);
+            check(sqlite3_exec(dbE,zKey,0,0,0)==SQLITE_OK, "E0 PRAGMA key is accepted", "rejected");
+            sE.db=dbE; viki_attach(dbE);
+            { RETAIN_BEGIN(VikiStore,&sE,g); viki_note("the gate latch sticks below freezing"); RETAIN_END(g); }
+            sqlite3_close(dbE);
+            /* the SAME binary and the SAME content, unkeyed */
+            sqlite3_open(zPln,&dbE); sE.db=dbE; viki_attach(dbE);
+            { RETAIN_BEGIN(VikiStore,&sE,g); viki_note("the gate latch sticks below freezing"); RETAIN_END(g); }
+            sqlite3_close(dbE);
+
+            f=fopen(zEnc,"rb"); memset(aHdr,0,sizeof aHdr);
+            if(f){ if(fread(aHdr,1,15,f)!=15){} fclose(f); }
+            check(memcmp(aHdr,"SQLite format 3",15)!=0,
+                  "E1 the keyed diary does NOT begin 'SQLite format 3'", "it is plaintext");
+            f=fopen(zPln,"rb"); memset(aHdr,0,sizeof aHdr);
+            if(f){ if(fread(aHdr,1,15,f)!=15){} fclose(f); }
+            check(memcmp(aHdr,"SQLite format 3",15)==0,
+                  "E2 CONTROL: the unkeyed one DOES (so E1 can fail)", "control is wrong");
+
+            {   /* the note itself must not be readable in the file */
+                char *zBuf; long n2; size_t rd;
+                f=fopen(zEnc,"rb"); fseek(f,0,SEEK_END); n2=ftell(f); fseek(f,0,SEEK_SET);
+                zBuf=(char*)malloc((size_t)n2+1); rd=fread(zBuf,1,(size_t)n2,f); fclose(f);
+                zBuf[rd]=0;
+                { size_t k; for(k=0;k+10<rd;k++) if(!memcmp(zBuf+k,"gate latch",10)){ bLeakE=1; break; } }
+                free(zBuf);
+                f=fopen(zPln,"rb"); fseek(f,0,SEEK_END); n2=ftell(f); fseek(f,0,SEEK_SET);
+                zBuf=(char*)malloc((size_t)n2+1); rd=fread(zBuf,1,(size_t)n2,f); fclose(f);
+                zBuf[rd]=0;
+                { size_t k; for(k=0;k+10<rd;k++) if(!memcmp(zBuf+k,"gate latch",10)){ bLeakP=1; break; } }
+                free(zBuf);
+            }
+            check(!bLeakE, "E3 the note does not appear in the keyed file", "plaintext on disk");
+            check(bLeakP,  "E3b CONTROL: it DOES in the unkeyed one (so E3 can fail)", "control is wrong");
+
+            {   /* a wrong key must fail, non-interactively */
+                sqlite3 *dbW2=0; int rcW;
+                sqlite3_open(zEnc,&dbW2);
+                sqlite3_exec(dbW2,"PRAGMA key = \"x'00112233445566778899aabbccddeeff"
+                                  "00112233445566778899aabbccddeeff'\"",0,0,0);
+                /* sqlite_master, not a core table: a wrong key fails to
+                ** decrypt the FILE, so any read fails -- and reaching for a
+                ** viki table here would have been the probe naming core's
+                ** schema to test something that is purely the host's. */
+                rcW = sqlite3_exec(dbW2,"SELECT count(*) FROM sqlite_master",0,0,0);
+                sqlite3_close(dbW2);
+                check(rcW!=SQLITE_OK, "E4 a WRONG key is rejected", "it opened anyway");
+            }
+            unlink(zEnc); unlink(zPln);
+        }
     }
 
     printf("\n== I: identity and signing ==\n");
