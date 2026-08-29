@@ -163,10 +163,10 @@ core/include/viki_core.h   the whole public surface
 core/src/viki_core.c       assertions, merge, projection, retrieval
 core/src/sha256.c          ported unchanged
 core/build.sh              no downloads, no submodules, no fossil
-core/test/core-probe.sh    6 constraint + 20 behaviour assertions
+core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **35 passed, 0 failed** (6 constraint + 29 behaviour).
+`sh core/test/core-probe.sh` → **36 passed, 0 failed** (7 constraint + 29 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.

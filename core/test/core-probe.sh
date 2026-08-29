@@ -19,7 +19,15 @@ none "C1 no filesystem (no fopen/open/stat/mkdir)"    '\b(fopen|freopen|[^_a-z]o
 none "C2 no network (no socket/connect/send/recv)"    '\b(socket\(|connect\(|send\(|recv\(|getaddrinfo)'
 none "C3 no subprocess (no fork/exec/popen/system)"   '\b(fork\(|exec[lv]|popen\(|system\()'
 none "C4 no fossil (no fossil symbol anywhere)"       'fossil'
-none "C5 no threads or globals for context"           '_Thread_local|pthread_'
+none "C5 no threading primitives of core's own"       'pthread_|thrd_|mtx_'
+# C5b: core keeps NO mutable process-global. The one _Thread_local permitted is
+# the error buffer -- per-thread precisely BECAUSE the context it describes is,
+# and a shared one would let one thread read another's failure. Anything else
+# thread-local would be core rolling its own context mechanism instead of using
+# retain, which is the thing C5 exists to prevent.
+tls=$(grep -nE '_Thread_local|VIKI_TLS' $SRC | grep -v 'define VIKI_TLS' | grep -v 'g_err' || true)
+[ -z "$tls" ] && ok "C5b the only thread-local is the error buffer" \
+               || bad "C5b core has thread-local state other than g_err" "$tls"
 # C6 is the positive control for C1-C5: if the grep itself were broken, every
 # one of them would pass against any file at all.
 if grep -qE 'sqlite3_open|sqlite3_prepare' $SRC; then
