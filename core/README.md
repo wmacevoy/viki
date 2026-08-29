@@ -531,13 +531,12 @@ CLI's own open path. A word that means two things in one file is the drift
 `SCOPES` §4 already defines **a tribe** as one L0 instance; that stays. A tribe
 is the set of diaries that merge. A diary is one peer's file.
 
-### The size: 23 MB, not 90 — my benchmark was misleading
+### The size: **store it uncompressed** — DECIDED
 
 The 90 MB figure came from a blob of *random bytes* I generated to test
-throughput. The real pinned model is **23,026,053 bytes** — `all-MiniLM-L6-v2`,
-`model_qint8_arm64.onnx`. That is 23% of a <100 MB payload budget, not 90%.
-
-Compression on the real file:
+throughput. The real pinned model is **23,026,053 bytes** —
+`all-MiniLM-L6-v2`, `model_qint8_arm64.onnx` — which is 23% of a <100 MB
+payload budget, not 90%.
 
 ```
 raw                   23,026,053 bytes
@@ -546,35 +545,24 @@ zstd -19              16,919,669          73.5%
 gunzip to memory           79.3 ms
 ```
 
-So "compressed, then uncompressed as needed" buys **~6 MB for ~79 ms per
-load**. Worth having, and worth being honest about the ranking: **quantisation
-already did the heavy lifting.** A float32 MiniLM-L6 is ~90 MB; int8 took it to
-23 MB — a 4× cut, against gzip's 1.3×. If the payload budget ever binds, the
-next lever is the model, not the container.
+**Decision (Warren, 2026-08-29): store it uncompressed.** ~25% is not worth
+the trouble for a core feature at this size, and the numbers say why rather
+than the other way round: 6 MB saved, 79 ms paid on every load, plus a
+decompressor, plus a materialised-uncompressed cache to manage, plus the
+question of where that cache lives.
 
-The shape, when it is worth doing, is the one core already uses everywhere:
-**ship compressed, materialise uncompressed on first use, treat the
-uncompressed copy as a projection** — derived, disposable, regenerable, exactly
-`viki_chunk`'s standing. And it is a **host** concern, not core's: the host
-already opens the model database and supplies the embedder callback, so it
-already owns decompression. Core does not grow a zlib dependency for this.
+The ranking is the useful part to keep: **quantisation already did the heavy
+lifting.** A float32 MiniLM-L6 is ~90 MB; int8 took it to 23 — a 4× cut,
+against gzip's 1.3×. If the payload budget ever binds, the next lever is the
+model, not the container. Do not revisit compression before that.
 
-### Scratch: it needs no feature
+### Scratch: deferred, not designed
 
-A scratch diary is **a store you either merge or delete**. That is machinery
-that already exists, so half-formed thinking has somewhere to go without a
-`draft` flag, a second table, or a rule about what `ask` should hide.
+A scratch diary would need no new machinery — a store you either `viki merge`
+or delete — and that was verified before deciding not to build it. **Deferred
+(Warren, 2026-08-29): "let's worry about scratch if it comes up for a reason."**
 
-```sh
-VIKI_STORE=scratch.db viki note "half-formed: maybe the hinge, not the latch"
-viki merge scratch.db     # promote it -- union, so it is idempotent
-rm scratch.db             # or it never happened
-```
-
-J1–J5 assert it, including the two controls that matter: deleting the scratch
-file after a merge does **not** un-promote (the merge copied assertions, it did
-not link to them), and a scratch store that was never merged leaves **no
-trace**.
-
-That second one is the property worth having. Scratch you cannot discard
-cleanly is not scratch — it is just more memory you now have to curate.
+The merge properties it exercised are kept in `cli/cli-probe.sh` under their own
+name, because they are true of `merge` whether or not anyone ever calls a store
+"scratch": promotion copies rather than links, so deleting the source afterwards
+does not un-promote, and a store that was never merged leaves no trace.

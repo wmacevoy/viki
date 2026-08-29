@@ -63,27 +63,27 @@ case "$SOCK" in
   *)        bad "S3 CONTROL: unrecognised context form" "$SOCK" ;;
 esac
 
-echo "== J: scratch work =="
-# A SCRATCH DIARY IS NOT A FEATURE. It is a store you either merge or delete,
-# which is machinery that already exists -- so half-formed thinking has
-# somewhere to go without a "draft" flag, a second table, or a rule about what
-# ask should hide.
+echo "== J: merge semantics =="
+# What merge does to the SOURCE, which is the half that is easy to assume and
+# expensive to get wrong. Union-is-merge only means anything if promotion
+# COPIES: if it linked, deleting a source would silently retract everything it
+# contributed, and a peer going offline would take its history with it.
 VIKI_STORE="$D/scratch.db" "$V" note "half-formed: maybe the hinge, not the latch" >/dev/null
 VIKI_STORE="$D/scratch.db" "$V" note "TODO check the north gate too" >/dev/null
-chk "$(VIKI_STORE=$D/scratch.db "$V" count assert)" "2" "J1 a scratch store takes notes independently"
+chk "$(VIKI_STORE=$D/scratch.db "$V" count assert)" "2" "J1 a second store takes notes independently"
 BEFORE=$("$V" count assert)
 "$V" merge "$D/scratch.db" >/dev/null
-chk "$("$V" count assert)" "$((BEFORE+2))" "J2 merging PROMOTES the scratch work"
+chk "$("$V" count assert)" "$((BEFORE+2))" "J2 merging brings the other store's assertions in"
 "$V" reindex >/dev/null
 "$V" ask "hinge" >/dev/null 2>&1 && ok "J3 ...and it is searchable afterwards" \
                                   || bad "J3 promoted notes are not searchable"
 rm -f "$D/scratch.db"*
-chk "$("$V" count assert)" "$((BEFORE+2))" "J4 CONTROL: deleting the scratch file does not un-promote"
-# and a scratch store that was NEVER merged simply vanishes with the file
-VIKI_STORE="$D/thrown.db" "$V" note "an idea that went nowhere" >/dev/null
+chk "$("$V" count assert)" "$((BEFORE+2))" "J4 CONTROL: merge COPIED -- deleting the source does not retract it"
+# and a store that was never merged contributed nothing to begin with
+VIKI_STORE="$D/thrown.db" "$V" note "written only to the other store" >/dev/null
 AFTER=$("$V" count assert)
 rm -f "$D/thrown.db"*
-chk "$("$V" count assert)" "$AFTER" "J5 CONTROL: an unmerged scratch store leaves no trace"
+chk "$("$V" count assert)" "$AFTER" "J5 CONTROL: an unmerged store leaves no trace in this one"
 
 echo "== F: degradation =="
 # A stale context -- a killed parent, a copied environment -- must degrade to
