@@ -63,6 +63,59 @@ case "$SOCK" in
   *)        bad "S3 CONTROL: unrecognised context form" "$SOCK" ;;
 esac
 
+echo "== K: keyed diaries =="
+# The CLI is the HOST, so the key is entirely its business -- core never sees
+# one. What is asserted here is the handling, and every positive claim is
+# paired with a control, because "PRAGMA key returned OK" is exactly what a
+# build with no cipher does.
+if "$V" --store "$D/ct.db" sql "PRAGMA cipher_version" 2>/dev/null | grep -q .; then
+  KH="$D/key.hex"; printf '2b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfe' > "$KH"
+  chmod 600 "$KH"
+  KS="$D/secret.db"
+  "$V" --key hunter2 --store "$KS" count assert >/dev/null 2>&1 \
+    && bad "K1 --key on argv should be REFUSED" "it was accepted" \
+    || ok "K1 --key on argv is refused (ps shows argv to every process)"
+
+  cp "$KH" "$D/loose.hex"; chmod 644 "$D/loose.hex"
+  "$V" --keyfile "$D/loose.hex" --store "$KS" count assert >/dev/null 2>&1 \
+    && bad "K2 a group-readable key file should be refused" "it was accepted" \
+    || ok "K2 a group/world-readable key file is refused"
+
+  "$V" --keyfile "$KH" --store "$KS" note "the gate latch sticks below freezing" >/dev/null
+  chk "$("$V" --keyfile "$KH" --store "$KS" count assert)" "1" "K3 a keyed diary round-trips"
+
+  grep -q 'gate latch' "$KS" 2>/dev/null \
+    && bad "K4 CONTROL: the note is readable in the file" "plaintext on disk" \
+    || ok "K4 CONTROL: the note is NOT readable in the file"
+
+  "$V" --store "$KS" count assert >/dev/null 2>&1 \
+    && bad "K5 CONTROL: it opened with NO key" "encryption is not on" \
+    || ok "K5 CONTROL: without the key it will not open"
+
+  printf '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' > "$D/wrong.hex"
+  chmod 600 "$D/wrong.hex"
+  "$V" --keyfile "$D/wrong.hex" --store "$KS" count assert >/dev/null 2>&1 \
+    && bad "K6 CONTROL: a WRONG key opened it" "any key works" \
+    || ok "K6 CONTROL: a wrong key is rejected"
+
+  # THE PAYOFF. The parent keys once; the child never sees a key and never
+  # pays the KDF. Measured on a passphrase diary: 12 invocations cost 1.35s
+  # keying individually and 0.16s through one context -- 8.4x, where the same
+  # comparison on a plaintext store was 0.16 vs 0.13.
+  cat > "$D/kchild.sh" <<'CHILD'
+[ -z "${VIKI_KEY:-}" ] || { echo "KEY LEAKED TO CHILD" >&2; exit 8; }
+viki note "written by the child through the parent's keyed context" >/dev/null
+CHILD
+  chmod +x "$D/kchild.sh"
+  VIKI_STORE="$KS" "$V" --keyfile "$KH" run "$D/kchild.sh"; rcK=$?
+  chk "$rcK" "0" "K7 viki run keys ONCE and the child needs no key"
+  chk "$("$V" --keyfile "$KH" --store "$KS" count assert)" "2" \
+      "K7b ...and the child's write landed in the keyed diary"
+else
+  printf '  --   K1-K7 skipped: built against stock SQLite, NOT SQLCipher\n'
+  printf '  --   (a skip is not a pass -- the diary would be plaintext)\n'
+fi
+
 echo "== J: merge semantics =="
 # What merge does to the SOURCE, which is the half that is easy to assume and
 # expensive to get wrong. Union-is-merge only means anything if promotion

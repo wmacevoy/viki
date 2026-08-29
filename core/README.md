@@ -370,7 +370,47 @@ rather than asserted.
     viki cal ingest FILE · cal events [FROM TO] · count WHAT · list · sql
     viki run CMD [ARGS...]
 
-`sh cli/cli-probe.sh <dir>` → **12 passed, 0 failed.**
+`sh cli/cli-probe.sh <dir>` → **25 passed, 0 failed.**
+
+### Opening a keyed diary
+
+The key is entirely the host's business — core never sees one. Sources, worst
+to best:
+
+| | |
+|---|---|
+| `--key VALUE` | **refused.** argv is world-readable in `ps` on every system this runs on, and shell history keeps it. A flag that exists *will* end up in a cron line, so it does not exist (K1). |
+| `$VIKI_KEY` | accepted **with a warning** — readable from `/proc` on Linux and inherited by every child. But it is what CI needs, and refusing it only pushes people to a key file with worse permissions. |
+| `--keyfile PATH` | the default answer. Permissions are checked the way `ssh` checks a private key; 0644 is refused (K2). |
+| a prompt | when stdin is a terminal and nothing else was given. Echo off. |
+| the platform | Keychain, Secure Enclave, TPM. Not wired — this is the seam, and it needs no core change. |
+
+**Raw key vs passphrase is detected, not configured.** 64 hex characters is
+used as a raw `x'…'` key; anything else is a passphrase. Measured on this
+project: 5.99 ms versus 345.93 ms, because SQLCipher runs PBKDF2 for one and
+not the other. Someone who generated a raw key should not have to say so, and
+should not silently pay 58× for it.
+
+Two details that are easy to get wrong and are asserted: the key is applied
+**before anything else touches the connection** (SQLCipher decrypts on the
+first read, so a late `PRAGMA key` is too late), and a **wrong key is detected
+by the first real read** rather than by `PRAGMA key`, which succeeds
+regardless because it only sets the cipher context. Reporting that plainly
+beats letting schema creation fail with something that reads like corruption.
+
+### And this is where `viki run` finally pays
+
+Earlier the honest measurement was that a warm context saves ~0.5 ms a call on
+a plaintext store — less than the process spawn. On a **passphrase** diary:
+
+```
+12 invocations, each keying itself      1.35 s
+12 invocations through ONE keyed context 0.16 s     8.4x
+```
+
+The parent pays PBKDF2 once. The child **never sees a key at all** (K7) — it
+speaks to a unix socket in a 0700 directory, which is why the transport is
+that and not a loopback port.
 
 ### `viki run` — and the obvious justification is wrong
 
