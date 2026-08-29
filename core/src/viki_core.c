@@ -126,6 +126,14 @@ static const char zSchema[] =
   ");"
   "CREATE INDEX IF NOT EXISTS viki_chunk_id ON viki_chunk(id);"
 
+  /* The payload of a blob assertion, kept OUT of viki_assert so that a 23 MB
+  ** model does not sit in the row every resolve, count and merge scans. The
+  ** assertion carries the description; this carries the bytes. */
+  "CREATE TABLE IF NOT EXISTS viki_blob("
+  "  id    TEXT PRIMARY KEY REFERENCES viki_assert(id),"
+  "  bytes BLOB NOT NULL"
+  ") WITHOUT ROWID;"
+
   /* The text of a chunk is COMPUTED, never stored. FTS5 accepts a view as its
   ** external content (verified), so the index is built over ranges and
   ** `INSERT INTO viki_fts(viki_fts) VALUES('rebuild')` regenerates it from
@@ -147,6 +155,93 @@ VikiStatus viki_attach(sqlite3 *db){
         VikiStatus rc = fail(VIKI_ESQL, "viki_attach: %s", zErr);
         sqlite3_free(zErr); return rc;
     }
+    return VIKI_OK;
+}
+
+/* ---- blobs ------------------------------------------------------------ */
+static const VikiType vikiBlobType = { "blob", 0, 0 };
+typedef struct {
+    const struct VikiAssertVftbl *vftbl;
+    char        zId[VIKI_ID_HEX+1];
+    const char *zTs;
+    const char *zSupersedes;
+    const char *zDesc;
+    const char *zCanon;
+} BlobAssert;
+static const char *blKey  (const VikiAssert *p){ return ((const BlobAssert*)p)->zCanon; }
+static const char *blRank (const VikiAssert *p){ return p->zTs ? p->zTs : ""; }
+/* THE DESCRIPTION IS WHAT GETS EMBEDDED. Chunking the coefficients would
+** produce ranges of noise; chunking the description produces the one range
+** that can answer "which model do I have?". */
+static const char *blText (const VikiAssert *p){ return ((const BlobAssert*)p)->zDesc; }
+static const char *blCanon(const VikiAssert *p){ return ((const BlobAssert*)p)->zCanon; }
+static const struct VikiAssertVftbl vikiBlobVftbl = {
+    &vikiBlobType, blKey, blRank, blText, blCanon
+};
+
+VikiStatus viki_blob_put(const char *zDesc, const char *zContentHash,
+                         const void *pBytes, sqlite3_int64 nBytes,
+                         char *zIdOut){
+    sqlite3 *db = db_or_null();
+    BlobAssert b;
+    sqlite3_stmt *st = 0;
+    char *zCanon;
+    VikiStatus rc;
+    if( !db ) return VIKI_ENOCTX;
+    if( !zDesc || !zContentHash || !*zContentHash )
+        return fail(VIKI_EINVAL, "viki_blob_put: description and content hash are required%s","");
+    if( nBytes<0 || (nBytes>0 && !pBytes) )
+        return fail(VIKI_EINVAL, "viki_blob_put: bad payload%s","");
+    memset(&b, 0, sizeof b);
+    b.vftbl = &vikiBlobVftbl;
+    b.zDesc = zDesc;
+    /* Identity is the CALLER'S hash plus the description: two peers holding
+    ** the same model under different descriptions are two assertions about
+    ** one payload, which is correct -- the description is the claim. */
+    zCanon = sqlite3_mprintf("%s\x1f%s", zContentHash, zDesc);
+    if( !zCanon ) return fail(VIKI_ENOMEM, "viki_blob_put: out of memory%s","");
+    b.zCanon = zCanon;
+    rc = viki_put((VikiAssert*)&b);
+    sqlite3_free(zCanon);
+    if( rc!=VIKI_OK ) return rc;
+    if( zIdOut ) memcpy(zIdOut, b.zId, VIKI_ID_HEX+1);
+    if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO viki_blob(id,bytes) VALUES(?1,?2)",
+                           -1, &st, 0)!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_blob_put: %s", sqlite3_errmsg(db));
+    sqlite3_bind_text(st, 1, b.zId, -1, SQLITE_STATIC);
+    sqlite3_bind_blob64(st, 2, pBytes, (sqlite3_uint64)nBytes, SQLITE_STATIC);
+    if( sqlite3_step(st)!=SQLITE_DONE ){
+        sqlite3_finalize(st);
+        return fail(VIKI_ESQL, "viki_blob_put: %s", sqlite3_errmsg(db));
+    }
+    sqlite3_finalize(st);
+    return VIKI_OK;
+}
+
+/* The statement is held so the pointer stays valid: sqlite3_column_blob()
+** owns the memory until the statement is stepped or finalized, so handing it
+** back requires keeping exactly one alive. That is why the contract says
+** "until the next core call on this store". */
+static VIKI_TLS sqlite3_stmt *g_pBlobHold = 0;
+
+VikiStatus viki_blob_get(const char *zId, const void **ppBytes, sqlite3_int64 *pnBytes){
+    sqlite3 *db = db_or_null();
+    int rc;
+    if( ppBytes ) *ppBytes = 0;
+    if( pnBytes ) *pnBytes = 0;
+    if( !db ) return VIKI_ENOCTX;
+    if( g_pBlobHold ){ sqlite3_finalize(g_pBlobHold); g_pBlobHold = 0; }
+    if( sqlite3_prepare_v2(db, "SELECT bytes FROM viki_blob WHERE id=?1",
+                           -1, &g_pBlobHold, 0)!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_blob_get: %s", sqlite3_errmsg(db));
+    sqlite3_bind_text(g_pBlobHold, 1, zId, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(g_pBlobHold);
+    if( rc!=SQLITE_ROW ){
+        sqlite3_finalize(g_pBlobHold); g_pBlobHold = 0;
+        return VIKI_ENOTFOUND;
+    }
+    if( ppBytes ) *ppBytes = sqlite3_column_blob(g_pBlobHold, 0);
+    if( pnBytes ) *pnBytes = sqlite3_column_bytes(g_pBlobHold, 0);
     return VIKI_OK;
 }
 

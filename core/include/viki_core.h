@@ -179,6 +179,37 @@ void       viki_hits_free(VikiHits*);
 VikiStatus viki_note(const char *zText);
 VikiStatus viki_noteid(const char *zText, char *zIdOut);   /* >= 65 bytes */
 
+/* ---- blobs: an assertion whose TEXT is not its BYTES -----------------
+**
+** THE TWO VTABLE SLOTS WERE ALWAYS DIFFERENT THINGS, and a blob is what makes
+** the difference load-bearing:
+**
+**     canon()   the bytes identity is computed over
+**     text()    what gets chunked and embedded
+**
+** For a note they are the same string. For 23 MB of int8 ONNX coefficients
+** they cannot be: the bytes have no semantic content, so embedding them
+** yields a vector of noise, and no chunking of them means anything. What is
+** worth embedding is a DESCRIPTION -- "all-MiniLM-L6-v2, int8, 384-dim
+** sentence embeddings" -- so the blob's single range covers the description
+** and its vector is the description's.
+**
+** That is the general shape, not a special case for models: a PDF's text is
+** its extracted text, an image's is its caption or OCR, a recording's is its
+** transcript. THE PAYLOAD IS ADDRESSED; THE DESCRIPTION IS SEARCHED.
+**
+** Identity is the caller's content hash, not a rehash here: the host already
+** has it (D-12 pins the model's checksum), and re-hashing 23 MB inside a put
+** would be paying twice for a number that must match the pin anyway. */
+VikiStatus viki_blob_put(const char *zDesc, const char *zContentHash,
+                         const void *pBytes, sqlite3_int64 nBytes,
+                         char *zIdOut);
+
+/* Borrowed, valid until the next core call on this store. NULL *ppBytes with
+** VIKI_OK means the assertion exists but carries no payload. */
+VikiStatus viki_blob_get(const char *zId, const void **ppBytes,
+                         sqlite3_int64 *pnBytes);
+
 /* ---- observability ---------------------------------------------------
 **
 ** A HOST MUST NOT HAVE TO POLL, AND MUST NOT HAVE TO READ THE TABLES.

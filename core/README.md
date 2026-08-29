@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **84 passed, 0 failed** (11 constraint + 73 behaviour).
+`sh core/test/core-probe.sh` → **94 passed, 0 failed** (11 constraint + 83 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -501,6 +501,59 @@ The tribe's store stops being self-contained: a store copied to another machine
 needs the model database too. That is already the shape D-12 chose — the model
 distributes separately, checksummed against a pinned manifest — so this changes
 the container, not the contract.
+
+---
+
+## Blobs: the vector is of a DESCRIPTION, not of the payload
+
+> *"blobs can have custom chunking — this one is a vector of a description
+> that the blob of onnx coefficients."* — Warren, 2026-08-29
+
+`VikiAssert` has always had two slots that a note makes look redundant:
+
+    canon()   the bytes identity is computed over
+    text()    what gets chunked and embedded
+
+A blob is what makes the difference load-bearing. Chunking 23 MB of int8 ONNX
+coefficients would produce ranges of noise and a vector that means nothing —
+the bytes have no semantic content. What is worth embedding is a
+**description**, so the blob's single range covers the description and its
+vector is the description's.
+
+That is the general shape, not a special case for models: a PDF's text is its
+extracted text, an image's is its caption or OCR, a recording's is its
+transcript. **The payload is addressed; the description is searched.**
+
+Measured on the real pinned model:
+
+```
+model on disk    23,026,053 bytes
+stored                    52 ms
+ranges over it             1        <- over the DESCRIPTION
+ask "which embedding model do I have"
+                 -> all-MiniLM-L6-v2 sentence embedding model, ONNX, int8...
+read back        23,026,053 bytes in 14.8 ms, byte-identical
+diary on disk    23,097,344 bytes   (100.3% of the model)
+```
+
+Three decisions inside it, each with an assertion:
+
+- **Identity is the caller's content hash**, not a rehash. The host already has
+  it — D-12 pins the model's checksum — and rehashing 23 MB inside a put pays
+  twice for a number that must match the pin anyway. Identity is
+  `(content hash, description)`, so the same bytes described differently are
+  **two claims about one payload**, which is right: the description is the
+  claim (B6).
+- **The payload lives outside `viki_assert`** (B5), so a 23 MB model does not
+  sit in the row that every resolve, count and merge scans.
+- **`viki_blob_get()` returns a borrowed pointer** valid until the next core
+  call, because `sqlite3_column_blob()` owns that memory until its statement is
+  stepped — so exactly one statement is held alive. That is stated in the
+  header rather than left for a caller to discover.
+
+B4b is the control worth naming: the indexed range must hold the description
+and **not** the coefficients. Without it, B4 would pass just as happily over a
+range full of binary that happened to contain the query's letters.
 
 ---
 

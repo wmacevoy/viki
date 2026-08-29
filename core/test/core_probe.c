@@ -411,6 +411,66 @@ int main(void){
         sqlite3_close(dbG);
     }
 
+    printf("\n== B: blobs -- the text is not the bytes ==\n");
+    {
+        sqlite3 *dbB2=0; VikiStore sB2;
+        unsigned char aPayload[8192];
+        char idB[VIKI_ID_HEX+1];
+        const void *pOut=0; sqlite3_int64 nOut=0;
+        int i2, nRange=0;
+        for(i2=0;i2<8192;i2++) aPayload[i2] = (unsigned char)(i2*167 + (i2>>3));
+        sqlite3_open(":memory:",&dbB2); sB2.db=dbB2; viki_attach(dbB2);
+        {
+            RETAIN_BEGIN(VikiStore, &sB2, g);
+            check(viki_blob_put(
+                    "all-MiniLM-L6-v2 sentence embedding model, ONNX, int8 "
+                    "quantised for arm64, 384 dimensions",
+                    "e3b0c44298fc1c149afbf4c8996fb924", aPayload, sizeof aPayload,
+                    idB)==VIKI_OK,
+                  "B1 a blob stores with a description and a content hash", viki_errmsg());
+            check(viki_blob_get(idB, &pOut, &nOut)==VIKI_OK
+                  && nOut==(sqlite3_int64)sizeof aPayload
+                  && memcmp(pOut, aPayload, sizeof aPayload)==0,
+                  "B2 the payload reads back BYTE-IDENTICAL", "the bytes changed");
+
+            viki_reindex(0, &n);
+            viki_count(VIKI_N_RANGE, 0, &nRange);
+            check(nRange==1, "B3 ONE range over the blob, not many", "wrong range count");
+
+            /* THE POINT. Chunking 23 MB of int8 coefficients would produce
+            ** ranges of noise and a vector that means nothing. What is worth
+            ** embedding is the DESCRIPTION -- so text() and canon() are
+            ** different slots, and a blob is what makes that load-bearing. */
+            check(viki_ask("which embedding model do I have", 3, &h)==VIKI_OK
+                  && h && h->n>0 && strstr(h->a[0].zText, "MiniLM"),
+                  "B4 the blob is found by its DESCRIPTION",
+                  (h&&h->n)?h->a[0].zText:"nothing");
+            check(h && h->n>0 && !strstr(h->a[0].zText, "\xa7"),
+                  "B4b CONTROL: the range holds the description, not the coefficients",
+                  "binary leaked into the indexed text");
+            viki_hits_free(h); h=0;
+
+            /* The payload lives OUT of viki_assert, so a 23 MB model does not
+            ** sit in the row that every resolve, count and merge scans. */
+            check(sqlN("SELECT max(length(body)) FROM viki_assert") < 512,
+                  "B5 the payload is NOT in the assertion row", "the bytes are in viki_assert");
+
+            /* Identity is (content hash, description): the same bytes
+            ** described differently are two claims about one payload. */
+            {
+                char id2[VIKI_ID_HEX+1];
+                viki_blob_put("a different description of the same file",
+                              "e3b0c44298fc1c149afbf4c8996fb924",
+                              aPayload, sizeof aPayload, id2);
+                check(strcmp(id2, idB)!=0 && nOf(VIKI_N_ASSERT,"blob")==2,
+                      "B6 the same bytes under a different description are a second assertion",
+                      "they collided");
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbB2);
+    }
+
     printf("\n== N: ONE model, its own database, MANY tribes ==\n");
     {
         /* THE MODEL IS NOT PART OF A STORE. D-11 pins one model universal
