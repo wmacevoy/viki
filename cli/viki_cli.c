@@ -49,7 +49,9 @@
 #include <termios.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <time.h>
 #include "viki_core.h"
+#include "viki_task.h"
 #include "viki_cal.h"
 #include "sha256.h"
 #include <dlfcn.h>
@@ -422,16 +424,116 @@ static char *slurp(const char *zPath, size_t *pn){
     return z;
 }
 
+
+/* ---- the HOST owns the clock ------------------------------------------
+** core calls time() exactly zero times, and that is deliberate: it has no
+** filesystem, no network and no clock, so everything it stores is something
+** it was TOLD. That makes a store reproducible from its inputs, and it makes
+** the caller responsible for saying when. Nothing else in this CLI stamped
+** anything, which is why every note written so far carries an empty ts. */
+static const char *isoNow(void){
+    static char z[32];
+    time_t t = time(0);
+    struct tm g;
+#ifdef _WIN32
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    strftime(z, sizeof(z), "%Y-%m-%dT%H:%M:%SZ", &g);
+    return z;
+}
+static const char *isoToday(void){
+    static char z[16];
+    memcpy(z, isoNow(), 10); z[10] = 0;
+    return z;
+}
+
+/* ---- printing the ledger ---------------------------------------------
+** Facts only. Whether an overdue promise is worth waking someone about is
+** the assistant's call, not this program's -- so the row says the date and
+** the marker, and stops there. */
+struct ledPr { FILE *out; int nMine, nTheirs, nOver, nToday, nUndated; };
+static int ledRow(void *pApp, const VikiTaskRow *r){
+    struct ledPr *c = (struct ledPr*)pApp;
+    const char *zT = isoToday();
+    const char *zMark = "";
+    if( !r->zDue[0] )                       { c->nUndated++; }
+    else if( strcmp(r->zDue, zT) < 0 )      { zMark = "OVERDUE"; c->nOver++; }
+    else if( strncmp(r->zDue, zT, 10)==0 )  { zMark = "TODAY";   c->nToday++; }
+    if( r->bMine ) c->nMine++; else c->nTheirs++;
+    fprintf(c->out, "%-8s %-12s %-12s %s\n",
+            zMark,
+            r->zDue[0] ? r->zDue : "(no due)",
+            r->bMine ? "mine" : r->zWho,
+            r->zText);
+    fprintf(c->out, "         %.12s%s%s\n", r->zId,
+            r->zPlace[0] ? "  @" : "", r->zPlace);
+    return 0;
+}
+
 /* ---- the verbs, executed against a retained store --------------------- */
 static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
     int n = 0;
     if( argc<1 ) return usage();
 
     if( !strcmp(argv[0],"note") && argc>=2 ){
-        char zId[VIKI_ID_HEX+1];
-        if( viki_noteid(argv[1], zId)!=VIKI_OK ){
+        /* A NOTE IS HOW A TASK CLOSES, which is why --supersedes belongs here
+        ** and not only on `task`. When Sue's report finally arrives it is a
+        ** RECORD, not a new obligation: filing it as a task would retire the
+        ** old row and immediately add a fresh one to the ledger, so the list
+        ** never shrinks and stops meaning anything. As a note it removes the
+        ** task and adds nothing, because the ledger reads kind='task' only.
+        ** This is what the predecessor spelled `--closes`. */
+        VikiNote nt; char zId[VIKI_ID_HEX+1]; int i;
+        memset(&nt, 0, sizeof(nt));
+        nt.vftbl = &vikiNoteVftbl;
+        nt.zText = argv[1];
+        nt.zTs   = isoNow();
+        for(i=2;i+1<argc;i++){
+            if(!strcmp(argv[i],"--supersedes")) nt.zSupersedes = argv[++i];
+            else if(!strcmp(argv[i],"--key"))   nt.zKey        = argv[++i];
+        }
+        if( viki_put((VikiAssert*)&nt)!=VIKI_OK ){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        memcpy(zId, nt.zId, sizeof(zId));
         fprintf(out, "%s\n", zId);
+        return 0;
+    }
+    if( !strcmp(argv[0],"task") && argc>=2 ){
+        VikiTask t; char zId[VIKI_ID_HEX+1]; int i;
+        memset(&t, 0, sizeof(t));
+        t.zText = argv[1];
+        t.zTs   = isoNow();
+        for(i=2;i+1<argc;i++){
+            if(!strcmp(argv[i],"--who"))        t.zWho=argv[++i];
+            else if(!strcmp(argv[i],"--due"))   t.zDue=argv[++i];
+            else if(!strcmp(argv[i],"--place")) t.zPlace=argv[++i];
+            else if(!strcmp(argv[i],"--state")) t.zState=argv[++i];
+            else if(!strcmp(argv[i],"--channel")) t.zChannel=argv[++i];
+            else if(!strcmp(argv[i],"--supersedes")) t.zSupersedes=argv[++i];
+        }
+        if( viki_task(&t, zId)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg());
+            fprintf(stderr,"%s: a --due must be YYYY-MM-DD or YYYY-MM-DDThh:mm:ssZ\n",zProg);
+            return 1; }
+        fprintf(out, "%s\n", zId);
+        return 0;
+    }
+    if( !strcmp(argv[0],"ledger") ){
+        struct ledPr c; const char *zMe = 0; int i;
+        for(i=1;i+1<argc;i++) if(!strcmp(argv[i],"--me")) zMe = argv[++i];
+        memset(&c, 0, sizeof(c)); c.out = out;
+        fprintf(out, "%-8s %-12s %-12s %s\n", "RISK", "DUE", "WHO", "WHAT");
+        if( viki_ledger(zMe, ledRow, &c)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        /* THE LEDGER STATES ITS OWN COVERAGE, every run. A ledger that prints
+        ** nothing and says nothing about why is indistinguishable from one
+        ** that could not read its store. */
+        fprintf(out, "\n%d overdue, %d due today, %d undated"
+                     "  (%d mine, %d held by someone else)\n",
+                c.nOver, c.nToday, c.nUndated, c.nMine, c.nTheirs);
+        fprintf(out, "       live tasks only -- anything superseded has left.\n");
         return 0;
     }
     if( !strcmp(argv[0],"ask") && argc>=2 ){

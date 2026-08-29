@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include "viki_core.h"
 #include "viki_cal.h"
+#include "viki_task.h"
 
 static int nPass = 0, nFail = 0;
 static void ok(const char *z){ nPass++; printf("  ok    %s\n", z); }
@@ -20,6 +21,33 @@ static void bad(const char *z, const char *why){
     nFail++; printf("  FAIL  %s\n        %s\n", z, why?why:"");
 }
 static void check(int c, const char *z, const char *why){ if(c) ok(z); else bad(z,why); }
+
+/* ---- T-series helpers ------------------------------------------------ */
+typedef struct { int n, nMine, nTheirs; const char *az[8]; char zBuf[8][160]; } Led;
+static int ledCb(void *pApp, const VikiTaskRow *r){
+    Led *L = (Led*)pApp;
+    if( L->n < 8 ){
+        snprintf(L->zBuf[L->n], sizeof(L->zBuf[0]), "%s", r->zText);
+        L->az[L->n] = L->zBuf[L->n];
+    }
+    if( r->bMine ) L->nMine++; else L->nTheirs++;
+    L->n++;
+    return 0;
+}
+/* Reads atext THROUGH the API (viki_sql), which C8 allows and a hand-rolled
+** sqlite3_prepare on core's tables would not. */
+static int thFound;
+static int thRow(void *pApp, int nCol, const char *const *az){
+    const char *zNeedle = (const char*)pApp;
+    if( nCol>0 && az[0] && strstr(az[0], zNeedle) ) thFound = 1;
+    return 0;
+}
+static int taskTextHas(const char *zId, const char *zNeedle){
+    char *zSql = sqlite3_mprintf("SELECT atext FROM viki_assert WHERE id=%Q", zId);
+    thFound = 0;
+    if( zSql ){ viki_sql(zSql, thRow, (void*)zNeedle); sqlite3_free(zSql); }
+    return thFound;
+}
 
 /* ---- a stub embedder ------------------------------------------------
 ** TOPIC vectors, deliberately built so a query can hit a chunk it shares NO
@@ -1223,6 +1251,93 @@ int main(void){
             RETAIN_END(g);
         }
         sqlite3_close(dbK);
+    }
+
+    /* ---- T: TASKS AND THE LEDGER --------------------------------------
+    **
+    ** The property that matters is T5: a task another assertion supersedes
+    ** must LEAVE. Everything else here is scaffolding for that one. A promise
+    ** retired last month still reading as owed makes a brief wrong in the
+    ** direction of anxiety, which is the thing the ledger exists to remove --
+    ** the predecessor guarded the same property as promise-probe P4 and it is
+    ** the assertion that caught real regressions.
+    */
+    {
+        sqlite3 *dbT = 0; VikiDiaries sT; VikiDiary _dsT;
+        sqlite3_open(":memory:", &dbT); _dsT.zName="sT"; _dsT.db=dbT; _dsT.mFlags=0;
+        viki_diaries_one(&sT,&_dsT);
+        viki_attach(dbT);
+        {
+            VikiTask t; char idA[VIKI_ID_HEX+1], idB[VIKI_ID_HEX+1], idC[VIKI_ID_HEX+1];
+            Led L;
+            RETAIN_BEGIN(VikiDiaries, &sT, g);
+
+            memset(&t,0,sizeof t);
+            t.zText="mine, later"; t.zDue="2026-09-05"; t.zTs="2026-08-29T00:00:00Z";
+            check(viki_task(&t,idA)==VIKI_OK, "T1 a task with a valid due is stored", viki_errmsg());
+
+            memset(&t,0,sizeof t);
+            t.zText="theirs, sooner"; t.zWho="renee"; t.zDue="2026-09-01";
+            t.zTs="2026-08-29T00:00:01Z"; t.zPlace="monument rocks";
+            check(viki_task(&t,idB)==VIKI_OK, "T2 a task can be owed BY someone else", viki_errmsg());
+
+            /* T3 IS THE ONE THE PREDECESSOR PAID FOR. "@due next Tuesday" was
+            ** accepted, sorted lexically below every digit, and printed a
+            ** phantom OVERDUE in the brief every morning with no way to see
+            ** why (FINDINGS.md). Refusing the write is the only fix that
+            ** cannot rot. */
+            memset(&t,0,sizeof t);
+            t.zText="vague"; t.zDue="next Tuesday"; t.zTs="2026-08-29T00:00:02Z";
+            check(viki_task(&t,idC)==VIKI_EINVAL,
+                  "T3 a due date that is not a date is REFUSED", "it was stored");
+
+            memset(&L,0,sizeof L);
+            viki_ledger("warren", ledCb, &L);
+            check(L.n==2, "T3b CONTROL: the refused task is not in the store", "it got in");
+
+            /* ORDER IS BY DUE, NOT BY WRITE TIME -- idB was written second and
+            ** is due first, so it must come first. */
+            check(L.n==2 && !strcmp(L.az[0],"theirs, sooner"),
+                  "T4 the ledger is ordered by due date, not by write order",
+                  L.n ? L.az[0] : "empty");
+            check(L.nMine==1 && L.nTheirs==1,
+                  "T4b unowned is mine, and a named owner is theirs", "split wrong");
+
+            {   /* THE ASSERTION THIS FILE EXISTS FOR. */
+                VikiNote nt; memset(&nt,0,sizeof nt);
+                nt.vftbl=&vikiNoteVftbl; nt.zText="renee's list arrived";
+                nt.zTs="2026-08-30T00:00:00Z"; nt.zSupersedes=idB;
+                check(viki_put((VikiAssert*)&nt)==VIKI_OK, "T5a the arrival is stored", viki_errmsg());
+                memset(&L,0,sizeof L);
+                viki_ledger("warren", ledCb, &L);
+                check(L.n==1 && !strcmp(L.az[0],"mine, later"),
+                      "T5 a superseded task LEAVES the ledger", "it is still owed");
+                check(L.nTheirs==0, "T5b ...and the theirs count drops with it", "still counted");
+            }
+
+            /* GROW-ONLY: leaving the ledger is not being deleted. If the row
+            ** were gone, merge would stop being union and history would be
+            ** rewritten by an arrival. */
+            {   int n=0;
+                viki_count(VIKI_N_ASSERT, "task", &n);
+                check(n==2, "T6 the superseded task is STILL STORED (grow-only)", "it was deleted");
+            }
+
+            /* An arrival is a RECORD, not a new obligation: filing it as a
+            ** note rather than a task is what lets the list actually shrink. */
+            {   int n=0;
+                viki_count(VIKI_N_ASSERT, "note", &n);
+                check(n==1, "T6b the arrival is a note, so it adds no ledger row", "wrong kind");
+            }
+
+            /* The fields are IN the embedded text, or a ledger row is
+            ** something retrieval cannot find. */
+            check(taskTextHas(idB, "renee") && taskTextHas(idB, "2026-09-01"),
+                  "T7 owner and due date are in the text that gets chunked", "not composed in");
+
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbT);
     }
 
     printf("\n%d passed, %d failed\n", nPass, nFail);

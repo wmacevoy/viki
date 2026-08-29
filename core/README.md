@@ -941,3 +941,50 @@ The merge properties it exercised are kept in `cli/cli-probe.sh` under their own
 name, because they are true of `merge` whether or not anyone ever calls a store
 "scratch": promotion copies rather than links, so deleting the source afterwards
 does not un-promote, and a store that was never merged leaves no trace.
+
+## The ledger (2026-08-29)
+
+`viki_task.c` adds the one thing a personal memory cannot do without: **a note
+that someone owes, to someone, by a date.**
+
+It is a SUBTYPE, not new columns. `viki_assert` has eight columns and none of
+them is `due` -- that is what lets notes, calendar events and provenance share
+one type, and adding task columns is how that stops being true. So a task is
+`kind='task'` with its fields in `body` as JSON, reached with `json_extract()`
+exactly as jsCalendar is. SQLite is the parser here too (core-probe C7), and
+the body is built by `json_object()` rather than by any escaper of ours.
+
+**Structuring is a new assertion, not an edit.** The predecessor rewrote
+`captures/*.md` in place and once deleted user text doing it. Here the raw
+capture stays and the task is a second assertion whose `supersedes` names it.
+The act of structuring is itself in the record, and union is still merge.
+
+**Which makes arrival free.** `viki note "..." --supersedes <task-id>` retires
+a task. That is what the predecessor spelled `--closes`, except nothing is
+deleted for it to happen -- the ledger reads only what nothing supersedes
+(T5, T6). An arrival is filed as a NOTE rather than a task on purpose: as a
+task it would retire one row and add another, so the list would never shrink
+(T6b).
+
+**A malformed due date is refused at write time** (T3). The predecessor
+accepted `@due next Tuesday`, sorted it lexically below every digit, and
+printed a phantom OVERDUE in the morning brief every day with no way to see
+why. A ledger wrong in the direction of anxiety is worse than one that
+rejects a line.
+
+**Ordered by due, not by write time** (T4), and **unowned counts as mine**
+(T4b) -- a commitment nobody claimed is one the reader is still carrying.
+
+**The host owns the clock.** core calls `time()` zero times; it has no
+filesystem, no network and no clock, so everything it stores is something it
+was told. `isoNow()` lives in the CLI. That is what makes a store reproducible
+from its inputs.
+
+### Direction, settled 2026-08-29
+
+> "core is the derivable set --- fossil-see is a dead end." -- Warren
+
+`core/` is the successor to `src/`, not a second thing to maintain beside it.
+The Fossil-backed implementation is no longer the target; what `src/` still
+has and `core/` does not is now a MIGRATION LIST, not a parallel product. The
+ledger was the first item on it and is done.
