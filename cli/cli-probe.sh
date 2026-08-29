@@ -221,6 +221,32 @@ else
   printf '  --   (sh cli/build-embedder.sh, and build/build.sh once for the model)\n'
 fi
 
+echo "== C: core + private =="
+# The model belongs in CORE -- it is the tribe's, not yours -- and putting it
+# beside your notes was only ever an accident of having one store.
+if [ -n "$EMB" ] && [ -f "$MD/model.onnx" ]; then
+  "$V" --store "$D/core.db" model import "$MD" >/dev/null 2>&1
+  "$V" --store "$D/priv.db" --core "$D/core.db" \
+       note "the quarterly invoice has not been paid" >/dev/null 2>&1
+  # the private diary must NOT be carrying a 23 MB model
+  SZ=$(wc -c < "$D/priv.db" 2>/dev/null || echo 999999999)
+  [ "$SZ" -lt 5000000 ] && ok "C1 the private diary does not carry the model" \
+                        || bad "C1 the model leaked into the private diary" "$SZ bytes"
+  env -u VIKI_MODEL_DIR "$V" --store "$D/priv.db" --core "$D/core.db" \
+      --embedder "$EMB" reindex >/dev/null 2>&1
+  env -u VIKI_MODEL_DIR "$V" --store "$D/priv.db" --core "$D/core.db" \
+      --embedder "$EMB" ask "money owed for services rendered" 2>/dev/null \
+    | grep -q invoice \
+    && ok "C2 model from CORE, notes from PRIVATE, one semantic answer" \
+    || bad "C2 cross-diary retrieval failed" ""
+  env -u VIKI_MODEL_DIR "$V" --store "$D/priv.db" --embedder "$EMB" \
+      ask "money owed for services rendered" >/dev/null 2>&1 \
+    && bad "C3 CONTROL: it found a model with no --core" "the set is not doing the work" \
+    || ok "C3 CONTROL: without --core the model is not found"
+else
+  printf '  --   C1-C3 skipped: no embedder .so or no model\n'
+fi
+
 echo "== J: merge semantics =="
 # What merge does to the SOURCE, which is the half that is easy to assume and
 # expensive to get wrong. Union-is-merge only means anything if promotion

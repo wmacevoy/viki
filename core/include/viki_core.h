@@ -49,7 +49,42 @@ int viki_isa(const VikiType *pMe, const VikiType *pOf);
 **
 ** DEGRADED MODE IS THE ABSENCE OF A TYPE, not a NULL to remember: with no
 ** VikiEmbed retained, viki_ask() runs keyword + literal and says so. */
-typedef struct { sqlite3 *db; } VikiStore;
+/* A DIARY is one store. A CONTEXT is a SET of them, retained as one thing --
+** not a stack of separate retains, because an agent uses all of them at once
+** rather than having the inner shadow the outer.
+**
+**   core      the shared substrate: the model, the vocabulary, whatever the
+**             tribe agrees on. Usually read-only to this peer.
+**   private   yours. WRITES GO HERE unless a diary is named.
+**   opened    every diary in play, INCLUDING core and private.
+**
+** ASK IS PER DIARY, and that is a decision rather than a limitation. Fusing
+** results across diaries would blend a private answer into a tribe answer and
+** lose which said it -- and "which diary told me this" is exactly what a
+** memory must not lose. It also lets the rules differ per diary: a different
+** chunking, a different model, a different policy, all of which stop making
+** sense the moment one pool is ranked. */
+typedef struct {
+    const char *zName;
+    sqlite3    *db;
+    unsigned    mFlags;         /* VIKI_D_RDONLY */
+} VikiDiary;
+#define VIKI_D_RDONLY 0x01
+
+#define VIKI_MAX_DIARIES 8
+typedef struct {
+    VikiDiary *pCore;                       /* may be the same as pPrivate  */
+    VikiDiary *pPrivate;                    /* the write target             */
+    VikiDiary *apOpen[VIKI_MAX_DIARIES];    /* includes core and private    */
+    int        nOpen;
+} VikiDiaries;
+
+/* The common case: one diary, which is both core and private. */
+void viki_diaries_one(VikiDiaries *pOut, VikiDiary *pOne);
+/* Adds a diary to `opened`. Returns VIKI_EINVAL past VIKI_MAX_DIARIES. */
+VikiStatus viki_diaries_add(VikiDiaries *p, VikiDiary *pD);
+/* The open diary of that name, or NULL. NULL name means the private one. */
+VikiDiary *viki_diary(const char *zName);
 
 /* THE EMBEDDER IS A HOST CALLBACK, and that follows from "no filesystem":
 ** a model is a file, and loading it is the host's business. wasm supplies
@@ -86,7 +121,7 @@ typedef struct {
 ** chunks for nothing). */
 extern const VikiChunking vikiChunkDefault;
 
-RETAIN_DECLARE(VikiStore);
+RETAIN_DECLARE(VikiDiaries);
 RETAIN_DECLARE(VikiEmbed);
 
 /* Creates the schema if absent and registers viki_cos() on this connection.
@@ -172,7 +207,11 @@ typedef struct VikiHits {
     VikiHit *a;
 } VikiHits;
 
-VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut);
+/* Asks ONE diary. zDiary NULL means the private one. To search several, ask
+** several times -- the caller then knows which diary answered, which is the
+** point. */
+VikiStatus viki_ask_in(const char *zDiary, const char *zQuery, int k, VikiHits**);
+#define viki_ask(q,k,pp) viki_ask_in(0,(q),(k),(pp))
 void       viki_hits_free(VikiHits*);
 
 /* ---- the convenience that is the whole point ------------------------- */
@@ -304,6 +343,13 @@ VikiStatus viki_blob_put(const char *zDesc, const char *zContentHash,
 ** VIKI_OK means the assertion exists but carries no payload. */
 VikiStatus viki_blob_get(const char *zId, const void **ppBytes,
                          sqlite3_int64 *pnBytes);
+
+/* Finds a blob by DESCRIPTION PREFIX across EVERY OPEN DIARY, newest first.
+** This is the one read that deliberately spans the set rather than naming a
+** diary: the model lives in `core` while notes live in `private`, and a
+** caller asking for "model.onnx" should not have to know which. */
+VikiStatus viki_blob_find(const char *zPrefix, const void **ppBytes,
+                          sqlite3_int64 *pnBytes, const char **pzDiary);
 
 /* ---- observability ---------------------------------------------------
 **

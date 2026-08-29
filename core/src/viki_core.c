@@ -12,7 +12,7 @@
 #include "viki_core.h"
 #include "sha256.h"
 
-RETAIN_DEFINE(VikiStore);
+RETAIN_DEFINE(VikiDiaries);
 RETAIN_DEFINE(VikiEmbed);
 RETAIN_DEFINE(VikiIdentity);
 
@@ -36,23 +36,72 @@ int viki_isa(const VikiType *pMe, const VikiType *pOf){
     return 0;
 }
 
-/* ---- the retained store, or a clear refusal ------------------------- */
-static sqlite3 *db_or_null(void){
-    const VikiStore *p;
-    if( !RETAINED(VikiStore) ){
+/* ---- the retained diary SET ------------------------------------------ */
+void viki_diaries_one(VikiDiaries *pOut, VikiDiary *pOne){
+    memset(pOut, 0, sizeof *pOut);
+    pOut->pCore = pOut->pPrivate = pOne;
+    pOut->apOpen[0] = pOne;
+    pOut->nOpen = 1;
+}
+VikiStatus viki_diaries_add(VikiDiaries *p, VikiDiary *pD){
+    int i;
+    if( !p || !pD ) return VIKI_EINVAL;
+    for(i=0;i<p->nOpen;i++) if( p->apOpen[i]==pD ) return VIKI_OK;
+    if( p->nOpen>=VIKI_MAX_DIARIES ) return VIKI_EINVAL;
+    p->apOpen[p->nOpen++] = pD;
+    return VIKI_OK;
+}
+
+static const VikiDiaries *diaries(void){
+    const VikiDiaries *p;
+    if( !RETAINED(VikiDiaries) ){
         snprintf(g_err, sizeof(g_err),
-                 "no VikiStore retained -- RETAIN_BEGIN(VikiStore, &s, g)");
+                 "no VikiDiaries retained -- RETAIN_BEGIN(VikiDiaries, &d, g)");
         return 0;
     }
     /* RETAINED() only says something was pushed, not that it was non-NULL or
-    ** carried a connection. Both are reachable from a caller doing the
-    ** obvious thing with an uninitialised struct. */
-    p = RECALL(VikiStore);
-    if( !p || !p->db ){
-        snprintf(g_err, sizeof(g_err), "retained VikiStore has no connection");
+    ** carried anything. Both are reachable from a caller doing the obvious
+    ** thing with an uninitialised struct. */
+    p = RECALL(VikiDiaries);
+    if( !p || !p->pPrivate || !p->pPrivate->db ){
+        snprintf(g_err, sizeof(g_err), "retained VikiDiaries has no private diary");
         return 0;
     }
-    return p->db;
+    return p;
+}
+
+VikiDiary *viki_diary(const char *zName){
+    const VikiDiaries *p = diaries();
+    int i;
+    if( !p ) return 0;
+    if( !zName ) return p->pPrivate;
+    for(i=0;i<p->nOpen;i++)
+        if( p->apOpen[i] && p->apOpen[i]->zName
+         && strcmp(p->apOpen[i]->zName, zName)==0 ) return p->apOpen[i];
+    return 0;
+}
+
+/* WRITES GO TO THE PRIVATE DIARY. Every mutating verb funnels through here,
+** so "where does a note land" has exactly one answer and it is not a flag on
+** each call. */
+static sqlite3 *db_or_null(void){
+    const VikiDiaries *p = diaries();
+    if( !p ) return 0;
+    if( p->pPrivate->mFlags & VIKI_D_RDONLY ){
+        snprintf(g_err, sizeof(g_err), "the private diary '%s' is read-only",
+                 p->pPrivate->zName ? p->pPrivate->zName : "?");
+        return 0;
+    }
+    return p->pPrivate->db;
+}
+/* Reads that name a diary. NULL is the private one. */
+static sqlite3 *db_named(const char *zName){
+    VikiDiary *d = viki_diary(zName);
+    if( !d || !d->db ){
+        snprintf(g_err, sizeof(g_err), "no open diary named '%s'", zName?zName:"(private)");
+        return 0;
+    }
+    return d->db;
 }
 
 /* ---- viki_cos(): cosine over two float32 BLOBs ----------------------
@@ -399,6 +448,40 @@ VikiStatus viki_blob_get(const char *zId, const void **ppBytes, sqlite3_int64 *p
     if( ppBytes ) *ppBytes = sqlite3_column_blob(g_pBlobHold, 0);
     if( pnBytes ) *pnBytes = sqlite3_column_bytes(g_pBlobHold, 0);
     return VIKI_OK;
+}
+
+/* ACROSS EVERY OPEN DIARY, newest first. The one read that deliberately spans
+** the set: the model lives in `core` while notes live in `private`, and a
+** caller asking for "model.onnx" should not have to know which holds it. */
+VikiStatus viki_blob_find(const char *zPrefix, const void **ppBytes,
+                          sqlite3_int64 *pnBytes, const char **pzDiary){
+    const VikiDiaries *p = diaries();
+    char zLike[256];
+    int i;
+    if( ppBytes ) *ppBytes = 0;
+    if( pnBytes ) *pnBytes = 0;
+    if( pzDiary ) *pzDiary = 0;
+    if( !p ) return VIKI_ENOCTX;
+    if( !zPrefix ) return VIKI_EINVAL;
+    snprintf(zLike, sizeof zLike, "%s%%", zPrefix);
+    if( g_pBlobHold ){ sqlite3_finalize(g_pBlobHold); g_pBlobHold = 0; }
+    for(i=0;i<p->nOpen;i++){
+        VikiDiary *d = p->apOpen[i];
+        if( !d || !d->db ) continue;
+        if( sqlite3_prepare_v2(d->db,
+            "SELECT b.bytes FROM viki_blob b JOIN viki_assert a ON a.id=b.id"
+            " WHERE a.kind='blob' AND a.atext LIKE ?1 ORDER BY a.ts DESC LIMIT 1",
+            -1, &g_pBlobHold, 0)!=SQLITE_OK ){ g_pBlobHold = 0; continue; }
+        sqlite3_bind_text(g_pBlobHold, 1, zLike, -1, SQLITE_TRANSIENT);
+        if( sqlite3_step(g_pBlobHold)==SQLITE_ROW ){
+            if( ppBytes ) *ppBytes = sqlite3_column_blob(g_pBlobHold, 0);
+            if( pnBytes ) *pnBytes = sqlite3_column_bytes(g_pBlobHold, 0);
+            if( pzDiary ) *pzDiary = d->zName;
+            return VIKI_OK;
+        }
+        sqlite3_finalize(g_pBlobHold); g_pBlobHold = 0;
+    }
+    return VIKI_ENOTFOUND;
 }
 
 /* ---- observability ---------------------------------------------------
@@ -1055,8 +1138,8 @@ static int split_terms(const char *zQ, char **az, int nMax){
     return n;
 }
 
-VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
-    sqlite3 *db = db_or_null();
+VikiStatus viki_ask_in(const char *zDiary, const char *zQuery, int k, VikiHits **ppOut){
+    sqlite3 *db = db_named(zDiary);
     const VikiEmbed *pe = RETAINED(VikiEmbed) ? RECALL(VikiEmbed) : 0;
     const char *zModel = pe ? pe->zModel : "";
     Cand pool[VIKI_POOL];

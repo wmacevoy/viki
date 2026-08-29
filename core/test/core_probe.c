@@ -207,7 +207,7 @@ static int keyVerify(void *pApp, const char *zPubKey, const char *zId,
 
 int main(void){
     sqlite3 *dbA = 0, *dbB = 0;
-    VikiStore sA, sB;
+    VikiDiaries sA, sB; VikiDiary _dsA; VikiDiary _dsB;
     VikiEmbed emb;
     VikiHits *h = 0;
     char id1[VIKI_ID_HEX+1], id2[VIKI_ID_HEX+1];
@@ -215,7 +215,7 @@ int main(void){
 
     sqlite3_open(":memory:", &dbA);
     sqlite3_open(":memory:", &dbB);
-    sA.db = dbA; sB.db = dbB;
+    _dsA.zName="sA"; _dsA.db=dbA; _dsA.mFlags=0; viki_diaries_one(&sA,&_dsA); _dsB.zName="sB"; _dsB.db=dbB; _dsB.mFlags=0; viki_diaries_one(&sB,&_dsB);
     check(viki_attach(dbA)==VIKI_OK, "A0 viki_attach creates the schema", viki_errmsg());
     viki_attach(dbB);
 
@@ -224,7 +224,7 @@ int main(void){
           "A1 CONTROL: with NO store retained, viki_note FAILS", "it returned OK");
 
     {
-        RETAIN_BEGIN(VikiStore, &sA, gA);
+        RETAIN_BEGIN(VikiDiaries, &sA, gA);
         check(viki_note("the gate latch sticks below freezing")==VIKI_OK,
               "A2 viki_note() takes one argument", viki_errmsg());
         via_callback(0);
@@ -242,7 +242,7 @@ int main(void){
             ** about A. That the counts cannot be taken from the wrong place
             ** is the property, not an inconvenience. */
             int nB;
-            RETAIN_BEGIN(VikiStore, &sB, gB);
+            RETAIN_BEGIN(VikiDiaries, &sB, gB);
             viki_note("this belongs to store B");
             nB = nOf(VIKI_N_ASSERT,0);
             RETAIN_END(gB);
@@ -256,7 +256,7 @@ int main(void){
 
     printf("\n== M: merge is union ==\n");
     {
-        RETAIN_BEGIN(VikiStore, &sA, g);
+        RETAIN_BEGIN(VikiDiaries, &sA, g);
         check(viki_merge(dbB, &n)==VIKI_OK && n==1,
               "M1 merging another store adds its assertions", "n != 1");
         check(viki_merge(dbB, &n)==VIKI_OK && n==0,
@@ -267,7 +267,7 @@ int main(void){
     printf("\n== S: resolution at read time ==\n");
     {
         VikiNote a, b; char idA[65];
-        RETAIN_BEGIN(VikiStore, &sA, g);
+        RETAIN_BEGIN(VikiDiaries, &sA, g);
         memset(&a,0,sizeof a); a.vftbl=&vikiNoteVftbl;
         a.zText="draft one"; a.zKey="plan"; a.zTs="2026-08-01T00:00:00Z";
         viki_put((VikiAssert*)&a); memcpy(idA, a.zId, 65);
@@ -299,7 +299,7 @@ int main(void){
 
     printf("\n== R: retrieval ==\n");
     {
-        RETAIN_BEGIN(VikiStore, &sA, g);
+        RETAIN_BEGIN(VikiDiaries, &sA, g);
         viki_note("the veterinary appointment for the puppy is on Tuesday");
         viki_note("kernel pointer arithmetic in the linker is subtle");
         viki_reindex(0, &n);
@@ -320,7 +320,7 @@ int main(void){
 
     printf("\n== Q: the vector leg ==\n");
     {
-        RETAIN_BEGIN(VikiStore, &sA, g);
+        RETAIN_BEGIN(VikiDiaries, &sA, g);
         emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
         /* CONTROL FIRST: with no embedder, a query sharing no word with the
         ** target cannot find it. If this passes, E2 below proves nothing. */
@@ -357,11 +357,11 @@ int main(void){
         ** found in code the 20 above were already green against. They are
         ** written to fail on the ORIGINAL bug, not merely to exercise the
         ** fixed line. */
-        sqlite3 *dbG = 0; VikiStore sG;
-        sqlite3_open(":memory:", &dbG); sG.db = dbG; viki_attach(dbG);
+        sqlite3 *dbG = 0; VikiDiaries sG; VikiDiary _dsG;
+        sqlite3_open(":memory:", &dbG); _dsG.zName="sG"; _dsG.db=dbG; _dsG.mFlags=0; viki_diaries_one(&sG,&_dsG); viki_attach(dbG);
         emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
         {
-            RETAIN_BEGIN(VikiStore, &sG, g);
+            RETAIN_BEGIN(VikiDiaries, &sG, g);
             /* ORDER IS THE WHOLE POINT: index ONLY at the embed epoch. The
             ** original probe reindexed degraded first, so epoch '' chunks
             ** existed and hid this entirely. */
@@ -435,10 +435,10 @@ int main(void){
                 RETAIN_END(gb);
             }
             {   /* merging into a store that was never attached must fail */
-                sqlite3 *dbRaw = 0; VikiStore sRaw;
-                sqlite3_open(":memory:", &dbRaw); sRaw.db = dbRaw;
+                sqlite3 *dbRaw = 0; VikiDiaries sRaw; VikiDiary _dsRaw;
+                sqlite3_open(":memory:", &dbRaw); _dsRaw.zName="sRaw"; _dsRaw.db=dbRaw; _dsRaw.mFlags=0; viki_diaries_one(&sRaw,&_dsRaw);
                 {
-                    RETAIN_BEGIN(VikiStore, &sRaw, gr);
+                    RETAIN_BEGIN(VikiDiaries, &sRaw, gr);
                     check(viki_merge(dbG, &n)!=VIKI_OK,
                           "G8 a merge that cannot complete is NOT reported as success",
                           "returned OK with a truncated union");
@@ -459,7 +459,7 @@ int main(void){
         ** PRAGMA key and it returned OK" -- SQLCipher-less builds do that
         ** happily -- but that the bytes on disk are really ciphertext, proved
         ** against a plaintext control written by the SAME binary. */
-        sqlite3 *dbE=0; VikiStore sE;
+        sqlite3 *dbE=0; VikiDiaries sE; VikiDiary _dsE;
         int bCipher = 0;
         sqlite3_open(":memory:",&dbE);
         {   sqlite3_stmt *q=0;
@@ -479,12 +479,12 @@ int main(void){
             unlink(zEnc); unlink(zPln);
             sqlite3_open(zEnc,&dbE);
             check(sqlite3_exec(dbE,zKey,0,0,0)==SQLITE_OK, "E0 PRAGMA key is accepted", "rejected");
-            sE.db=dbE; viki_attach(dbE);
-            { RETAIN_BEGIN(VikiStore,&sE,g); viki_note("the gate latch sticks below freezing"); RETAIN_END(g); }
+            _dsE.zName="sE"; _dsE.db=dbE; _dsE.mFlags=0; viki_diaries_one(&sE,&_dsE); viki_attach(dbE);
+            { RETAIN_BEGIN(VikiDiaries,&sE,g); viki_note("the gate latch sticks below freezing"); RETAIN_END(g); }
             sqlite3_close(dbE);
             /* the SAME binary and the SAME content, unkeyed */
-            sqlite3_open(zPln,&dbE); sE.db=dbE; viki_attach(dbE);
-            { RETAIN_BEGIN(VikiStore,&sE,g); viki_note("the gate latch sticks below freezing"); RETAIN_END(g); }
+            sqlite3_open(zPln,&dbE); _dsE.zName="sE"; _dsE.db=dbE; _dsE.mFlags=0; viki_diaries_one(&sE,&_dsE); viki_attach(dbE);
+            { RETAIN_BEGIN(VikiDiaries,&sE,g); viki_note("the gate latch sticks below freezing"); RETAIN_END(g); }
             sqlite3_close(dbE);
 
             f=fopen(zEnc,"rb"); memset(aHdr,0,sizeof aHdr);
@@ -531,16 +531,16 @@ int main(void){
 
     printf("\n== I: identity and signing ==\n");
     {
-        sqlite3 *dbI=0, *dbP=0; VikiStore sI, sP;
+        sqlite3 *dbI=0, *dbP=0; VikiDiaries sI, sP; VikiDiary _dsI; VikiDiary _dsP;
         Key kMe   = { "esiwed", "dewise", 0, 0 };   /* pub is priv reversed */
         Key kAgent= { "tnega",  "agent",  0, 0 };
         VikiIdentity idMe, idAgent;
         char idMeAssert[VIKI_ID_HEX+1], idAgentAssert[VIKI_ID_HEX+1];
         char idNote[VIKI_ID_HEX+1], zWho[VIKI_ID_HEX+1];
         VikiSigState st2;
-        sqlite3_open(":memory:",&dbI); sI.db=dbI; viki_attach(dbI);
+        sqlite3_open(":memory:",&dbI); _dsI.zName="sI"; _dsI.db=dbI; _dsI.mFlags=0; viki_diaries_one(&sI,&_dsI); viki_attach(dbI);
         {
-            RETAIN_BEGIN(VikiStore, &sI, g);
+            RETAIN_BEGIN(VikiDiaries, &sI, g);
             /* AN IDENTITY IS AN ASSERTION IN YOUR OWN DIARY. The agent's is a
             ** row you wrote, so its authority traces to something you can
             ** read -- which is what makes an agent's actions attributable
@@ -609,12 +609,12 @@ int main(void){
         /* S3: VERIFICATION NEEDS NO SECRET. A fresh peer merges the diary and
         ** can establish who said what while holding no private material at
         ** all -- it never retains a signer, only a verifier. */
-        sqlite3_open(":memory:",&dbP); sP.db=dbP; viki_attach(dbP);
+        sqlite3_open(":memory:",&dbP); _dsP.zName="sP"; _dsP.db=dbP; _dsP.mFlags=0; viki_diaries_one(&sP,&_dsP); viki_attach(dbP);
         {
             VikiIdentity vOnly;
             memset(&vOnly, 0, sizeof vOnly);
             vOnly.xVerify = keyVerify;      /* no xSign, no zSigner, no key */
-            RETAIN_BEGIN(VikiStore, &sP, gp);
+            RETAIN_BEGIN(VikiDiaries, &sP, gp);
             viki_merge(dbI, &n);
             check(n>0, "I7 a peer merges the diary", "nothing merged");
             RETAIN_BEGIN(VikiIdentity, &vOnly, gv);
@@ -629,10 +629,10 @@ int main(void){
         ** must say UNKNOWN, not OK and not BAD -- that is a fact about its
         ** coverage, and it is what a peer sees before the identity reaches it. */
         {
-            sqlite3 *dbQ=0; VikiStore sQ; VikiIdentity vOnly;
+            sqlite3 *dbQ=0; VikiDiaries sQ; VikiDiary _dsQ; VikiIdentity vOnly;
             memset(&vOnly, 0, sizeof vOnly); vOnly.xVerify = keyVerify;
-            sqlite3_open(":memory:",&dbQ); sQ.db=dbQ; viki_attach(dbQ);
-            RETAIN_BEGIN(VikiStore, &sQ, gq);
+            sqlite3_open(":memory:",&dbQ); _dsQ.zName="sQ"; _dsQ.db=dbQ; _dsQ.mFlags=0; viki_diaries_one(&sQ,&_dsQ); viki_attach(dbQ);
+            RETAIN_BEGIN(VikiDiaries, &sQ, gq);
             viki_sql("SELECT 1", 0, 0);
             { sqlite3_stmt *w=0;
               viki_sql("INSERT INTO viki_assert(id,kind,akey,arank,ts,body,atext)"
@@ -653,15 +653,15 @@ int main(void){
 
     printf("\n== B: blobs -- the text is not the bytes ==\n");
     {
-        sqlite3 *dbB2=0; VikiStore sB2;
+        sqlite3 *dbB2=0; VikiDiaries sB2; VikiDiary _dsB2;
         unsigned char aPayload[8192];
         char idB[VIKI_ID_HEX+1];
         const void *pOut=0; sqlite3_int64 nOut=0;
         int i2, nRange=0;
         for(i2=0;i2<8192;i2++) aPayload[i2] = (unsigned char)(i2*167 + (i2>>3));
-        sqlite3_open(":memory:",&dbB2); sB2.db=dbB2; viki_attach(dbB2);
+        sqlite3_open(":memory:",&dbB2); _dsB2.zName="sB2"; _dsB2.db=dbB2; _dsB2.mFlags=0; viki_diaries_one(&sB2,&_dsB2); viki_attach(dbB2);
         {
-            RETAIN_BEGIN(VikiStore, &sB2, g);
+            RETAIN_BEGIN(VikiDiaries, &sB2, g);
             check(viki_blob_put(
                     "all-MiniLM-L6-v2 sentence embedding model, ONNX, int8 "
                     "quantised for arm64, 384 dimensions",
@@ -754,22 +754,22 @@ int main(void){
         ** across peers, so a copy per tribe is N copies of a byte-identical
         ** artifact. Keeping it in its own database and retaining the embedder
         ** OUTSIDE the stores is the shape that follows -- and it needs no
-        ** change to core, because VikiEmbed and VikiStore are separate retain
+        ** change to core, because VikiEmbed and VikiDiaries are separate retain
         ** stacks with independent lifetimes. */
         sqlite3 *dbM=0, *dbX=0, *dbY=0;
-        VikiStore sM, sX, sY;
+        VikiDiaries sM, sX, sY; VikiDiary _dsM; VikiDiary _dsX; VikiDiary _dsY;
         int a=0, b=0;
-        sqlite3_open(":memory:",&dbM); sM.db=dbM;
-        sqlite3_open(":memory:",&dbX); sX.db=dbX; viki_attach(dbX);
-        sqlite3_open(":memory:",&dbY); sY.db=dbY; viki_attach(dbY);
+        sqlite3_open(":memory:",&dbM); _dsM.zName="sM"; _dsM.db=dbM; _dsM.mFlags=0; viki_diaries_one(&sM,&_dsM);
+        sqlite3_open(":memory:",&dbX); _dsX.zName="sX"; _dsX.db=dbX; _dsX.mFlags=0; viki_diaries_one(&sX,&_dsX); viki_attach(dbX);
+        sqlite3_open(":memory:",&dbY); _dsY.zName="sY"; _dsY.db=dbY; _dsY.mFlags=0; viki_diaries_one(&sY,&_dsY); viki_attach(dbY);
         emb.xEmbed=stubEmbed; emb.pApp=0; emb.nDim=DIM; emb.zModel="shared-v1";
         {
             RETAIN_BEGIN(VikiEmbed, &emb, ge);      /* ONE model, outermost */
-            { RETAIN_BEGIN(VikiStore, &sX, g1);
+            { RETAIN_BEGIN(VikiDiaries, &sX, g1);
               viki_note("the gate latch sticks below freezing");
               viki_reindex(0,&n); viki_count(VIKI_N_VECTOR,0,&a);
               RETAIN_END(g1); }
-            { RETAIN_BEGIN(VikiStore, &sY, g2);
+            { RETAIN_BEGIN(VikiDiaries, &sY, g2);
               viki_note("the invoice payment is late");
               viki_reindex(0,&n); viki_count(VIKI_N_VECTOR,0,&b);
               RETAIN_END(g2); }
@@ -780,7 +780,7 @@ int main(void){
         }
         /* CONTROL: outside that scope the same stores degrade, which is what
         ** proves M1 was the retained embedder and not something ambient. */
-        { RETAIN_BEGIN(VikiStore, &sX, g3);
+        { RETAIN_BEGIN(VikiDiaries, &sX, g3);
           viki_note("a second note, with no model retained");
           viki_reindex(0,&n);
           check(nOf(VIKI_N_MODEL,0)==1,
@@ -798,7 +798,7 @@ int main(void){
             const void *pOut=0; sqlite3_int64 nOut=0;
             for(i2=0;i2<1024;i2++) aIn[i2] = (unsigned char)(i2*31);
             viki_attach(dbM);
-            { RETAIN_BEGIN(VikiStore, &sM, gm);
+            { RETAIN_BEGIN(VikiDiaries, &sM, gm);
               check(viki_blob_put("the pinned embedding model, as a blob",
                                   "deadbeef", aIn, sizeof aIn, idM)==VIKI_OK
                  && viki_blob_get(idM,&pOut,&nOut)==VIKI_OK
@@ -810,16 +810,92 @@ int main(void){
         sqlite3_close(dbM); sqlite3_close(dbX); sqlite3_close(dbY);
     }
 
+    printf("\n== D: core + private + opened ==\n");
+    {
+        /* A CONTEXT IS A SET, NOT A STACK. An agent uses all three at once,
+        ** so the inner must not shadow the outer -- which a stack of separate
+        ** retains would do. One retained VikiDiaries holds them. */
+        sqlite3 *dbCore=0, *dbPriv=0;
+        VikiDiary dCore, dPriv;
+        VikiDiaries set;
+        const void *pB=0; sqlite3_int64 nB=0; const char *zWhich=0;
+        char idC[VIKI_ID_HEX+1];
+        sqlite3_open(":memory:",&dbCore); sqlite3_open(":memory:",&dbPriv);
+        viki_attach(dbCore); viki_attach(dbPriv);
+        dCore.zName="core"; dCore.db=dbCore; dCore.mFlags=VIKI_D_RDONLY;
+        dPriv.zName="private"; dPriv.db=dbPriv; dPriv.mFlags=0;
+
+        /* seed core while it is writable -- this stands in for whoever
+        ** publishes the tribe's model */
+        { VikiDiary w = dCore; VikiDiaries one; w.mFlags=0;
+          viki_diaries_one(&one,&w);
+          RETAIN_BEGIN(VikiDiaries,&one,gw);
+          viki_blob_put("model.onnx -- the tribe's pinned model","hh",
+                        "GRAPHBYTES", 10, idC);
+          viki_note("a shared fact everyone in the tribe has");
+          RETAIN_END(gw); }
+
+        viki_diaries_one(&set, &dPriv);
+        set.pCore = &dCore;
+        viki_diaries_add(&set, &dCore);
+        {
+            RETAIN_BEGIN(VikiDiaries, &set, g);
+            check(viki_diary("core")==&dCore && viki_diary("private")==&dPriv
+                  && viki_diary(0)==&dPriv,
+                  "D1 core, private and (default = private) all resolve by name",
+                  "lookup failed");
+            /* WRITES GO TO PRIVATE, always, and not by a flag on each call. */
+            viki_note("something only I know");
+            check(nOf(VIKI_N_ASSERT,0)==1,
+                  "D2 a write lands in PRIVATE, not in core", "wrong diary");
+            /* THE MODEL LIVES IN CORE and is found without naming a diary --
+            ** the one read that spans the set on purpose. */
+            check(viki_blob_find("model.onnx",&pB,&nB,&zWhich)==VIKI_OK
+                  && nB==10 && zWhich && strcmp(zWhich,"core")==0,
+                  "D3 a blob is found ACROSS the set, and says which diary held it",
+                  zWhich?zWhich:"not found");
+            /* ASK IS PER DIARY. Fusing would blend a private answer into a
+            ** tribe answer and lose which said it, and "which diary told me
+            ** this" is what a memory must not lose. */
+            viki_reindex(0,&n);
+            check(viki_ask_in("private","something only I know",3,&h)==VIKI_OK
+                  && h && h->n>0, "D4 ask names a diary and searches THAT one",
+                  "no hit in private");
+            viki_hits_free(h); h=0;
+            check(viki_ask_in("core","something only I know",3,&h)==VIKI_OK
+                  && h && h->n==0,
+                  "D4b CONTROL: the same query against core finds nothing",
+                  "private content leaked into a core answer");
+            viki_hits_free(h); h=0;
+            check(viki_ask_in("nosuch","x",3,&h)!=VIKI_OK,
+                  "D5 CONTROL: asking an unopened diary is an error, not empty",
+                  "a typo would read as 'nothing known'");
+            viki_hits_free(h); h=0;
+            RETAIN_END(g);
+        }
+        {   /* core is READ-ONLY: a shared diary any peer writes to on a whim
+            ** is not shared, it is contended -- and the write would succeed
+            ** locally, so the failure would be silent. */
+            VikiDiaries ro;
+            viki_diaries_one(&ro,&dCore);
+            RETAIN_BEGIN(VikiDiaries,&ro,g2);
+            check(viki_note("trying to write to core")!=VIKI_OK,
+                  "D6 CONTROL: a read-only diary refuses a write", "it accepted one");
+            RETAIN_END(g2);
+        }
+        sqlite3_close(dbCore); sqlite3_close(dbPriv);
+    }
+
     printf("\n== O: observability -- writes only, on commit ==\n");
     {
-        sqlite3 *dbO = 0; VikiStore sO; Seen seen; int tok = 0;
+        sqlite3 *dbO = 0; VikiDiaries sO; VikiDiary _dsO; Seen seen; int tok = 0;
         char idO[VIKI_ID_HEX+1];
         memset(&seen, 0, sizeof seen);
-        sqlite3_open(":memory:", &dbO); sO.db = dbO; viki_attach(dbO);
+        sqlite3_open(":memory:", &dbO); _dsO.zName="sO"; _dsO.db=dbO; _dsO.mFlags=0; viki_diaries_one(&sO,&_dsO); viki_attach(dbO);
         check(viki_watch(dbO, onEvent, &seen, &tok)==VIKI_OK && tok>0,
               "O1 a listener can be registered", viki_errmsg());
         {
-            RETAIN_BEGIN(VikiStore, &sO, g);
+            RETAIN_BEGIN(VikiDiaries, &sO, g);
             viki_noteid("the first thing worth remembering", idO);
             check(seen.nPut==1 && strcmp(seen.zLastId, idO)==0,
                   "O2 a write notifies, and names the assertion", "no event");
@@ -893,14 +969,14 @@ int main(void){
 
     printf("\n== V: ranges, and two chunkings over one blob ==\n");
     {
-        sqlite3 *dbV = 0; VikiStore sV;
+        sqlite3 *dbV = 0; VikiDiaries sV; VikiDiary _dsV;
         VikiChunking fine  = { "l2o0",  2, 0 };
         VikiChunking coarse= { "l8o2",  8, 2 };
         char idV[VIKI_ID_HEX+1];
-        sqlite3_open(":memory:", &dbV); sV.db = dbV; viki_attach(dbV);
+        sqlite3_open(":memory:", &dbV); _dsV.zName="sV"; _dsV.db=dbV; _dsV.mFlags=0; viki_diaries_one(&sV,&_dsV); viki_attach(dbV);
         emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
         {
-            RETAIN_BEGIN(VikiStore, &sV, g);
+            RETAIN_BEGIN(VikiDiaries, &sV, g);
             /* the gate topic and the invoice topic are SIX LINES APART, so a
             ** 2-line chunking can never put them in one range and an 8-line
             ** one always does */
@@ -986,10 +1062,10 @@ int main(void){
 
     printf("\n== W: withdrawal, and the delete ORDER ==\n");
     {
-        sqlite3 *dbW = 0; VikiStore sW; char idW[VIKI_ID_HEX+1];
-        sqlite3_open(":memory:", &dbW); sW.db = dbW; viki_attach(dbW);
+        sqlite3 *dbW = 0; VikiDiaries sW; VikiDiary _dsW; char idW[VIKI_ID_HEX+1];
+        sqlite3_open(":memory:", &dbW); _dsW.zName="sW"; _dsW.db=dbW; _dsW.mFlags=0; viki_diaries_one(&sW,&_dsW); viki_attach(dbW);
         {
-            RETAIN_BEGIN(VikiStore, &sW, g);
+            RETAIN_BEGIN(VikiDiaries, &sW, g);
             viki_noteid("the passphrase is hunter2 and should never have been typed", idW);
             viki_note("an unrelated note about fence posts");
             viki_reindex(0, &n);
@@ -1050,11 +1126,11 @@ int main(void){
 
     printf("\n== K: calendar assertions, with SQLite as the parser ==\n");
     {
-        sqlite3 *dbK = 0; VikiStore sK; int nAdd = 0;
-        sqlite3_open(":memory:", &dbK); sK.db = dbK;
+        sqlite3 *dbK = 0; VikiDiaries sK; VikiDiary _dsK; int nAdd = 0;
+        sqlite3_open(":memory:", &dbK); _dsK.zName="sK"; _dsK.db=dbK; _dsK.mFlags=0; viki_diaries_one(&sK,&_dsK);
         viki_attach(dbK); viki_cal_attach(dbK);
         {
-            RETAIN_BEGIN(VikiStore, &sK, g);
+            RETAIN_BEGIN(VikiDiaries, &sK, g);
             check(viki_cal_ingest("this is not json at all", "probe", &nAdd)==VIKI_EINVAL,
                   "K1 CONTROL: invalid JSON is REFUSED, not read as an empty calendar",
                   "an HTML error page would read as a quiet day");

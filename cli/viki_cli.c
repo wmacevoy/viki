@@ -87,7 +87,10 @@ static int usage(void){
 "                          model from THIS DIARY -- import it once first.\n"
 "  --source-keyfile PATH   key for `merge`'s source, if it differs\n"
 "  --plaintext             open an UNENCRYPTED diary, deliberately\n"
-"  --store PATH            default $VIKI_STORE, else ./viki.db\n"
+"  --store PATH            the PRIVATE diary; writes land here.\n"
+"                          default $VIKI_STORE, else ./viki.db\n"
+"  --core PATH             a shared diary, opened READ-ONLY. Where a model\n"
+"                          belongs -- it is the tribe's, not yours.\n"
 "\n"
 "  `run` retains BOTH for the whole command, so children get signed writes\n"
 "  and hybrid retrieval while never holding a key or a model.\n",
@@ -261,7 +264,7 @@ typedef int  (*fnEmbOpen )(viki_blob_fn, void*, int*, void**);
 typedef int  (*fnEmbEmbed)(void*, const char*, float*, int);
 typedef void (*fnEmbClose)(void*);
 typedef struct {
-    void *hLib; void *pApp; sqlite3 *pDb;
+    void *hLib; void *pApp;
     fnEmbEmbed xEmbed; fnEmbClose xClose;
 } Embedder;
 
@@ -283,45 +286,32 @@ static int embed_thunk(void *pApp, const char *zText, float *aOut, int nDim){
 static char *g_aHeld[4];
 static int   g_nHeld = 0;
 
+/* ACROSS EVERY OPEN DIARY, via core. The model belongs in `core` and the
+** notes in `private`, so a resolver that knew one connection could only ever
+** find a model sitting beside the notes -- which is not where it goes. */
 static const void *cli_blob(void *pApp, const char *zName, size_t *pn){
-    char zLike[128];
-    sqlite3_stmt *q = 0;
-    sqlite3 *db = (sqlite3*)pApp;
-    const void *pRet = 0;
+    const void *p = 0; sqlite3_int64 n = 0; const char *zWhich = 0;
+    (void)pApp;
     *pn = 0;
-    if( !db ) return 0;
-    snprintf(zLike, sizeof zLike, "%s%%", zName);
-    if( sqlite3_prepare_v2(db,
-        "SELECT b.bytes FROM viki_blob b JOIN viki_assert a ON a.id=b.id"
-        " WHERE a.kind='blob' AND a.atext LIKE ?1 ORDER BY a.ts DESC LIMIT 1",
-        -1, &q, 0)==SQLITE_OK ){
-        sqlite3_bind_text(q, 1, zLike, -1, SQLITE_TRANSIENT);
-        if( sqlite3_step(q)==SQLITE_ROW ){
-            int n = sqlite3_column_bytes(q, 0);
-            const void *p = sqlite3_column_blob(q, 0);
-            /* COPIED, because the pointer dies with the statement and ORT
-            ** keeps the graph bytes for the life of the session. */
-            if( p && n>0 && g_nHeld < 4 ){
-                char *z = (char*)malloc((size_t)n+1);
-                if( z ){ memcpy(z, p, (size_t)n); z[n]=0;
-                         g_aHeld[g_nHeld++] = z; pRet = z; *pn = (size_t)n; }
-            }
-        }
-        sqlite3_finalize(q);
+    if( viki_blob_find(zName, &p, &n, &zWhich)!=VIKI_OK || !p || n<=0 ){
+        fprintf(stderr,"%s: no '%s' in any open diary -- viki model import DIR\n",
+                zProg, zName);
+        return 0;
     }
-    if( !pRet )
-        fprintf(stderr,"%s: no '%s' in this diary -- viki model import DIR\n", zProg, zName);
-    return pRet;
+    /* COPIED: the pointer dies with core's held statement, and ORT keeps the
+    ** graph for the life of the session. */
+    if( g_nHeld >= 4 ) return 0;
+    { char *z = (char*)malloc((size_t)n+1);
+      if( !z ) return 0;
+      memcpy(z, p, (size_t)n); z[n] = 0;
+      g_aHeld[g_nHeld++] = z; *pn = (size_t)n;
+      return z; }
 }
 
 static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
-                         const char *zModelId, sqlite3 *pDb){
+                         const char *zModelId){
     fnEmbOpen xOpen;
     memset(e, 0, sizeof *e);
-    /* AFTER the memset. Setting it in the caller was silently undone here,
-    ** and the only symptom was "no model.onnx" from a diary that plainly had
-    ** one -- the resolver was being handed a NULL connection. */
-    e->pDb = pDb;
     e->hLib = dlopen(zPath, RTLD_NOW);
     if( !e->hLib ){ fprintf(stderr,"%s: %s\n", zProg, dlerror()); return -1; }
     xOpen     = (fnEmbOpen )dlsym(e->hLib, "viki_embedder_open");
@@ -332,7 +322,7 @@ static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
         dlclose(e->hLib); e->hLib = 0; return -1;
     }
     pOut->nDim = 0;
-    if( xOpen(cli_blob, e->pDb, &pOut->nDim, &e->pApp)!=0 || pOut->nDim<=0 ){
+    if( xOpen(cli_blob, 0, &pOut->nDim, &e->pApp)!=0 || pOut->nDim<=0 ){
         fprintf(stderr,"%s: %s failed to open its model\n", zProg, zPath);
         dlclose(e->hLib); e->hLib = 0; return -1;
     }
@@ -349,6 +339,7 @@ static void embedder_close(Embedder *e){
     g_nHeld = 0;
 }
 
+static sqlite3 *open_store_named(const char *zPath);
 static sqlite3 *open_store(const char *zPath){
     sqlite3 *db = 0;
     if( sqlite3_open(zPath, &db)!=SQLITE_OK ){
@@ -621,6 +612,36 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
     return usage();
 }
 
+/* ---- the diary SET ---------------------------------------------------
+**
+** core + private + opened, where `opened` INCLUDES the other two. One
+** retained thing rather than a stack of them, because an agent uses all of
+** them at once and the inner must not shadow the outer.
+**
+** The common case is one diary that is both. --core names a second, which is
+** where a shared model belongs: it is the tribe's, not yours, and putting it
+** beside your notes was only ever an accident of having a single store. */
+static const char *zCoreStore = 0;
+static sqlite3    *g_dbCore   = 0;
+
+static int build_diaries(VikiDiaries *pd, VikiDiary *pPriv, VikiDiary *pCore,
+                         sqlite3 *dbPriv){
+    pPriv->zName = "private"; pPriv->db = dbPriv; pPriv->mFlags = 0;
+    viki_diaries_one(pd, pPriv);
+    if( zCoreStore ){
+        g_dbCore = open_store_named(zCoreStore);
+        if( !g_dbCore ) return -1;
+        pCore->zName = "core"; pCore->db = g_dbCore;
+        /* READ-ONLY BY DEFAULT. A shared diary that any peer writes to on a
+        ** whim is not shared, it is contended -- and the failure would be
+        ** silent, since a write succeeds locally either way. */
+        pCore->mFlags = VIKI_D_RDONLY;
+        pd->pCore = pCore;
+        viki_diaries_add(pd, pCore);
+    }
+    return 0;
+}
+
 /* ---- what the parent retains -----------------------------------------
 **
 ** THIS IS THE API GUARANTEE MADE CONCRETE. Without a held context every
@@ -667,8 +688,7 @@ static int held_open(Held *h){
         h->bId = 1;
     }
     if( zEmbedLib ){
-        if( embedder_open(zEmbedLib, &h->emb, &h->embed, zEmbedLib,
-                          RETAINED(VikiStore) ? RECALL(VikiStore)->db : 0)!=0 ) return -1;
+        if( embedder_open(zEmbedLib, &h->emb, &h->embed, zEmbedLib)!=0 ) return -1;
         h->bEmbed = 1;
     }
     return 0;
@@ -781,7 +801,8 @@ static int run_cmd(const char *zStore, int argc, char **argv,
     int srv, rcChild = 1;
     pid_t pid;
     sqlite3 *db;
-    VikiStore st;
+    VikiDiary  dPriv, dCore;
+    VikiDiaries ds;
 
     if( argc<1 ) return usage();
     /* A 0700 DIRECTORY IS THE WHOLE GUARD. The parent holds a decrypted store,
@@ -813,6 +834,8 @@ static int run_cmd(const char *zStore, int argc, char **argv,
     ** the socket and touches no sqlite3*. */
     db = open_store(zStore);
     if( !db ){ close(srv); unlink(zSock); rmdir(zDir); return 1; }
+    if( build_diaries(&ds, &dPriv, &dCore, db)!=0 ){
+        sqlite3_close(db); close(srv); unlink(zSock); rmdir(zDir); return 1; }
 
     signal(SIGCHLD, on_sigchld);
     pid = fork();
@@ -828,10 +851,9 @@ static int run_cmd(const char *zStore, int argc, char **argv,
         _exit(127);
     }
 
-    {   RETAIN_BEGIN(VikiStore, &st, g);
+    {   RETAIN_BEGIN(VikiDiaries, &ds, g);
         Held held;
         int bDrain = 0;
-        st.db = db;
         if( held_open(&held)!=0 ){
             kill(pid, SIGTERM); waitpid(pid, 0, 0);
             sqlite3_close(db); close(srv); unlink(zSock); rmdir(zDir);
@@ -898,7 +920,8 @@ int main(int argc, char **argv){
     int nLines = 40, nOverlap = 10;
     int i, rc;
     sqlite3 *db;
-    VikiStore st;
+    VikiDiary  dPriv, dCore;
+    VikiDiaries ds;
 
     if( argc>0 ) zProg = argv[0];
     if( !zStore ) zStore = "viki.db";
@@ -919,6 +942,7 @@ int main(int argc, char **argv){
         else if( !strcmp(argv[i],"--keyfile") && i+1<argc ){ zKeyFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--source-keyfile") && i+1<argc ){ zSrcKeyFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--plaintext") ){ bPlaintext=1; memmove(argv+i,argv+i+1,(size_t)(argc-i-1)*sizeof(char*)); argc-=1; }
+        else if( !strcmp(argv[i],"--core") && i+1<argc ){ zCoreStore=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--store") && i+1<argc ){ zStore=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--lines") && i+1<argc ){ nLines=atoi(argv[i+1]); memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--overlap") && i+1<argc ){ nOverlap=atoi(argv[i+1]); memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
@@ -939,9 +963,9 @@ int main(int argc, char **argv){
     }
     db = open_store(zStore);
     if( !db ) return 1;
+    if( build_diaries(&ds, &dPriv, &dCore, db)!=0 ){ sqlite3_close(db); return 1; }
     {   Held held;
-        RETAIN_BEGIN(VikiStore, &st, g);
-        st.db = db;
+        RETAIN_BEGIN(VikiDiaries, &ds, g);
         if( held_open(&held)!=0 ){ sqlite3_close(db); return 1; }
         /* CONDITIONAL, and D4 is why. Retaining a ZEROED VikiEmbed is not the
         ** same as retaining none: viki_reindex sees one, finds zModel NULL,
@@ -964,3 +988,7 @@ int main(int argc, char **argv){
     sqlite3_close(db);
     return rc;
 }
+
+/* open_store() with the same keying, for a diary that is not the private one.
+** Named separately so the read-only intent is visible at the call site. */
+static sqlite3 *open_store_named(const char *zPath){ return open_store(zPath); }

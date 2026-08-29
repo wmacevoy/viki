@@ -129,11 +129,14 @@ static const char *cal_form(const char *zTz, int bNoTime){
     return "zoned";
 }
 
+/* The PRIVATE diary: calendar ingest is a write, and writes have exactly one
+** destination. Reading events could span the set, but does not yet -- and
+** saying so here beats leaving a reader to infer it. */
 static sqlite3 *cal_db(void){
-    const VikiStore *p;
-    if( !RETAINED(VikiStore) ) return 0;
-    p = RECALL(VikiStore);
-    return (p && p->db) ? p->db : 0;
+    const VikiDiaries *p;
+    if( !RETAINED(VikiDiaries) ) return 0;
+    p = RECALL(VikiDiaries);
+    return (p && p->pPrivate && p->pPrivate->db) ? p->pPrivate->db : 0;
 }
 static char *dupz(const char *z){ char *r; if(!z) return 0; r=(char*)malloc(strlen(z)+1); if(r) strcpy(r,z); return r; }
 

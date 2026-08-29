@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **113 passed, 0 failed** (11 constraint + 102 behaviour).
+`sh core/test/core-probe.sh` → **120 passed, 0 failed** (11 constraint + 109 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -370,7 +370,7 @@ rather than asserted.
     viki cal ingest FILE · cal events [FROM TO] · count WHAT · list · sql
     viki run CMD [ARGS...]
 
-`sh cli/cli-probe.sh <dir>` → **36 passed, 0 failed**, on an encrypted diary.
+`sh cli/cli-probe.sh <dir>` → **44 passed, 0 failed**, on an encrypted diary.
 
 ### Opening a keyed diary
 
