@@ -82,8 +82,32 @@ if printf '%s' "$RISK" | grep -qE '^(OVERDUE|TODAY|         [0-9])'; then
   # first version of this code did exactly that and got it backwards: it
   # compared WHO against "warren" while viki was printing "mine", so every row
   # landed in THEIRS including the ones that were yours.
+  # FILTER BY STRUCTURE, NOT BY INDENTATION -- the second attempt at this.
+  #
+  # The previous filter dropped "an indented line holding ONE token", because
+  # the continuation line was believed to be just the note id. It is not:
+  # viki_note.c:437 appends "  @<place>" when the note has one, so a note
+  # carrying --place produces a TWO-token continuation line that sails through
+  # and is then column-split like a real row. Every one of them landed in
+  # THEIRS, because characters 21-32 of a note id are not the word "mine".
+  #
+  # The summary line leaked the same way: it starts at column 0, so no
+  # indentation filter ever saw it, and "day, 5 later" is not "mine" either.
+  #
+  # Measured 2026-08-29 on a store of five real notes, all with places: the
+  # brief showed THREE phantom rows and a summary line under "an agent is
+  # carrying these", while the three tasks they belonged to sat in YOURS. The
+  # repo's own dev notes never caught it because none of them set a place.
+  #
+  # This is the failure direction the ledger exists to prevent. A brief that
+  # invents obligations held by other people is worse than one that omits
+  # them: P4 in build/promise-probe.sh guards the same property from the other
+  # side. So match what viki actually prints -- a note id is
+  # YYYYMMDD-HHMMSS-NNNNNN and nothing else in this output looks like it.
   ROWS=$(printf '%s\n' "$RISK" | sed -n '3,$p' \
-    | grep -vE '^[[:space:]]*$|^[[:space:]]+[^[:space:]]+$' \
+    | grep -vE '^[[:space:]]*$' \
+    | grep -vE '^[[:space:]]+[0-9]{8}-[0-9]{6}-[0-9]+([[:space:]]|$)' \
+    | grep -vE '^[[:space:]]*[0-9]+ overdue,' \
     | grep -vE '^[[:space:]]+(undated promises|this ledger sees)')
   YOURS=$(printf '%s\n' "$ROWS" | awk \
     '{ who = substr($0, 21, 12); gsub(/^ +| +$/, "", who); if (who == "" || who == "mine") print }')
@@ -231,12 +255,32 @@ printf '  Anything not opened in this browser is not seen at all.\n'
 # the first version grepped a leading number and picked up a note ID instead.
 PENDING=$("$V" structure --pending 2>/dev/null | sed -n '1s/.*: *\([0-9][0-9]*\).*/\1/p' || true)
 UNDATED=$("$V" promises --me "$ME" --all 2>/dev/null | grep -c '(no due)' || true)
+# NO BARE `test && printf` AS THE LAST STATEMENT, EVER -- `set -e` IS ON.
+#
+# This block used to end with `[ "${PENDING:-0}" -gt 0 ] && printf ...`. On any
+# morning with nothing pending that is `[ 0 -gt 0 ] && ...`, which short-
+# circuits to exit status 1, and `set -e` then makes 1 the exit status of the
+# whole script -- AFTER every line has already printed correctly.
+#
+# schedule-brief.sh reads that status and stamps
+# "*** THE BRIEF FAILED (exit 1). The lines above are all there is."
+# onto the bottom of a brief that is completely fine. Measured on Warren's own
+# machine 2026-08-29: ~/.viki/brief/2026-08-29.txt, written by launchd at
+# 06:30, carries that banner under a correct brief.
+#
+# That is worse than a plain crash. This file's whole argument is that silence
+# and failure must never be confusable, and a false failure banner every single
+# morning teaches the reader to skip the banner -- which is exactly how a real
+# failed run gets ignored. Use `if`, so the status of a test is never the
+# status of the script.
 if [ "${PENDING:-0}" -gt 0 ] || [ "${UNDATED:-0}" -gt 0 ]; then
   printf '\nQUESTIONS\n'
-  [ "${UNDATED:-0}" -gt 0 ] && \
+  if [ "${UNDATED:-0}" -gt 0 ]; then
     printf '  %s promise(s) have no due date. Are they promises, or notes?\n' "$UNDATED"
-  [ "${PENDING:-0}" -gt 0 ] && \
+  fi
+  if [ "${PENDING:-0}" -gt 0 ]; then
     printf '  %s capture(s) not yet structured:  viki structure --pending\n' "$PENDING"
+  fi
 else
   printf '\nNo questions.\n'
 fi
