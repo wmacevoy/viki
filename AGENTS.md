@@ -7,101 +7,153 @@ code change that makes it stale (KICKOFF.md's process rule).
 
 ## What exists right now
 
-A real, working `viki` CLI with **both** retrieval rungs implemented:
-FTS5 BM25 (rung 0) and ONNX sentence embeddings + `sqlite-ndvss` cosine
-search (rung 2), fused by reciprocal rank fusion when a model is present,
-degrading honestly to BM25-only when it isn't (VIKI_DESIGN.md's required
-standalone path). `viki index` covers **nine** Fossil-native content
-types: checkout files, wiki pages, tickets, forum posts, **check-in
-comments, tech notes, ticket changes, attachments and unversioned
-files**. The last five landed together as the "cover all of fossil
-state" round; check-in comments are the important one, because the
-timeline is where a project records what was done and why. There are
-**three** query verbs now, not one: **`viki ask`** (hybrid ranked
-search), **`viki muse`** -- undirected recall with no query at all, for
-the thing you do not know exists and therefore cannot ask for -- and
-**`viki grep`**, exact unranked POSIX-ERE regex over every indexed
-artifact, for when you know the literal string rather than the idea.
-Which verb to reach for, and how to phrase an `ask` query so it actually
-finds things, is **"Querying viki"** below -- read it before you use this
-tool, not after. See `FINDINGS.md` for what was actually verified and how --
-forum extraction has now been round-tripped against real, live forum
-posts, which uncovered three real defects in it (escaped thread titles,
-superseded post versions indexed as current, and card lookup running off
-into the post body). All three are fixed in `src/viki_index.c` **and are
-now in `build/dist/viki`** -- the shipped binary is the 2026-08-20
-**01:22:39** build (`stat -f '%Sm %N' -t '%Y-%m-%d %H:%M:%S'
-build/dist/viki`), newer than every file in `src/` (newest is
-`src/viki_grep.c` at 01:22:14), and `sh build/forum-e2e-probe.sh <empty-dir>`
-is `PASS=26 FAIL=0` against it. Forum posts are nonetheless the **least**
-verified of the four types -- four artifact shapes exercised, not in CI,
-and not touched by `test/m1.sh`. See the forum bullet under "Verified
-working end to end" for exactly what is and is not proven before you
-trust that leg.
+### The direction, settled 2026-08-29
 
-**The Milestone 1 definition-of-done test is `test/m1.sh`** -- 90
-assertions, `90 passed, 0 failed, 0 skipped`, exit 0, re-measured
-first-hand 2026-08-20 against that same 01:22:39 binary. Run it first
-when you want to know whether this tree still works. It grew from 54 to
-90 when the three fixes below landed: sections 6/7/8 cover the citable
-`content_hash`, stale-content invalidation, and mixed-epoch scoring, and
-section 5 gained the D-12 model round trip (`M1`-`M9`).
+> *"core is the derivable set --- fossil-see is a dead end."* -- Warren
 
-Non-vacuity is not assumed: a binary compiled from **all of git `HEAD`'s
-`src/`** (say it that way -- the bare phrase "a pre-fix binary" is
-ambiguous here and has already misled once, see the forum bullet) scores
-`54 passed, 36 failed, 0 skipped` on the current file.
-**Do not read those two 36s as the same 36** -- the added assertions and
-the failing assertions are different sets, measured by `comm` over the
-two id lists, not inferred:
-- 26 of the 36 *added* assertions fail against the pre-fix binary
-  (`D6 D7 G1 G4 G5 G6 H1-H11 J1 J2 J3 M1 M2 M4 M5 M6 M7`);
-- 10 of the 36 *added* assertions **pass** against it
-  (`G2 G3 G4b G5b H11b J4 M1b M3 M8 M9`) -- mostly controls, which are
-  supposed to come out the same either way;
-- the remaining 10 failures are *pre-existing* assertions
-  (`A9 A10 B4 B5 B6 C12 C13 C14 C16 C17`) that go red only because the
-  fixes changed `viki ask`'s hit-line format.
+**`core/` is the successor to `src/`.** Not a parallel implementation to keep
+in step: new work goes to core, and what `src/` still has is a migration list.
+`CLAUDE.md`'s DIRECTION section has that list. Everything below in this file
+that describes Fossil ingest, `uv` distribution, `*.efossil` repos or the
+epoch-pin signature chain is **accurate history and terminal**.
 
-Most new positive assertions are paired with a control that must come out
-the other way, but not all: `J2`/`J3` have none (`J1` is a setup
-precondition and `J4` an independent property, neither is a control for
-them).
+### viki-core
 
-It is now wired into CI (`.github/workflows/build.yml`, job `m1`) on
-linux-x86_64 and macos-arm64; the other two platforms get a matrix leg
-whose only purpose is to announce, loudly and by name, that they are not
-covered. That job was reproduced green end to end in a local
-`debian:bookworm` (linux/amd64) container **on 2026-08-13, in the round
-that wrote it, against the 54-assertion `test/m1.sh` of that moment** --
-it has not been re-run since (it needs Docker plus network), so nothing
-here says the 90-assertion file has ever run in a container. The workflow
-itself has still never executed on GitHub's runners.
+One SQLite contract: the caller supplies an open `sqlite3*`, core supplies
+meaning. **No filesystem, no network, no subprocess, no fossil, no threading,
+no hand-written parser** -- asserted as C1-C8 in `core/test/core-probe.sh`,
+each with a control, because a constraint with no test is a comment.
 
-There's now also a `viki serve` local HTTP server: an HTML search page
-for humans at `/`, plus a JSON API (`/api/ask`, `/api/chunk`,
-`/api/health`, and the capture loop: `/api/notes`, `/api/pending`,
-`/api/capture`, `/api/structure`, `/api/reindex`), with a second page at
-`/capture` that drives the whole capture loop in a browser explicitly meant for agents/scripts to call directly,
-sharing the exact same `viki_ask_query()` retrieval the CLI uses.
-**Mutating routes are POST-only AND require an `X-Viki-Local` header.** That
-is not authentication and does not pretend to be -- any local process can
-still call them, exactly as it can already read every route. It exists
-because capture and structure WRITE, and a page open on any other origin can
-make the browser issue a cross-origin request to 127.0.0.1 without the user
-acting. POST alone does not stop that (an HTML form posts cross-origin
-freely); a custom header does, because setting one cross-origin requires a
-CORS preflight this server never answers. `viki_serve.c` otherwise stays
-loopback-only with no auth by design; for
-internet exposure, `server/setup-viki-serve.sh` puts it behind the same
-Caddy (TLS + Basic Auth) instance `server/SERVER_SETUP.md` already runs
-for the Fossil hub, rather than hand-rolling TLS/auth in C -- see
-FINDINGS.md.
+    sh core/build.sh            -> core/build/{viki, libvikicore.a, core-probe}
+    ./core/build/core-probe     121 passed, 0 failed
+    sh core/test/core-probe.sh  11 passed, 0 failed
+
+One assertion type carries everything: `viki_assert(id, kind, akey, arank, ts,
+supersedes, body, atext)`, where `id` is `sha256` of the framed content **in
+its position**. Rows are immutable and grow-only, so **union IS merge** and
+`viki merge` needs no conflict rule. Chunks are **ranges** over an assertion
+and store no text; the FTS5 index is external-content over a view.
+
+Encryption at rest is bedrock: `core/build.sh` **fails rather than falling
+back to stock SQLite**, and the CLI refuses to open a diary without a key
+unless you say `--plaintext`. 64 hex characters is a RAW key with no KDF --
+5.99 ms to open versus 345.93 ms for a passphrase, measured.
+
+**The ledger** (`core/src/viki_task.c`, added 2026-08-29) is the newest piece
+and the reason the rest exists: what is owed, to whom, by when.
+
+    viki task "..." --who sue --due 2026-09-02 --place "monument rocks"
+    viki ledger --me warren [--json]
+    viki note "it arrived" --supersedes <task-id>      # the task LEAVES
+    viki coverage        which channels fed this diary, and when last
+    viki pending         a note nothing supersedes, that supersedes nothing
+
+A task is a **subtype**, not new columns -- fields live in `body` as JSON,
+read with `json_extract` and built with `json_object`, so SQLite is the parser
+here exactly as it is for jsCalendar (C7). Structuring is a new assertion
+rather than an edit; an arrival is a **note**, not a task, or the list would
+retire one row and add another and never shrink; a malformed `--due` is
+refused at write time; ordering is by due, not by write time; and **unowned
+counts as mine**, because a commitment nobody claimed is one you are still
+carrying. T1-T7 in `core_probe.c` pin all of that, and **T5 is the one that
+matters** -- a superseded task must LEAVE the ledger. Non-vacuity checked:
+dropping the supersession clause turns T5 and T5b red and nothing else.
+
+**The host owns the clock.** core calls `time()` zero times. `isoNow()` lives
+in `cli/viki_cli.c`, and until it was added on 2026-08-29 nothing stamped
+anything -- every note written before then carries an empty `ts`.
+
+`assistant/brief.sh` was ported to core the same day. It reads
+`ledger --json` and **never a display format**; the `--horizon` is applied in
+the brief, because "the next seven days" is a judgment about the day being
+planned and core holds no opinion about it (SCOPES 3).
+
+### What core does NOT have yet
+
+`viki why` (the supersession chain both ways -- `supersedes` is indexed and
+nothing walks it), `viki grep`, `viki muse`, `viki serve` and its browser
+page. Deliberately never: Fossil ingest of the nine content types, and
+`cache push/pull` -- ingest was never viki's problem (SCOPES 6b), and `merge`
+replaces `uv` distribution precisely because rows are content-addressed.
+
+### src/ -- the legacy tree
+
+A real, working `viki` CLI with **both** retrieval rungs: FTS5 BM25 (rung 0),
+an exact-substring literal leg (rung 1) and ONNX sentence embeddings +
+`sqlite-ndvss` cosine (rung 2), fused by reciprocal rank fusion when a model
+is present and degrading honestly to BM25-only when it is not. `viki index`
+covers **nine** Fossil-native content types: checkout files, wiki pages,
+tickets, forum posts, check-in comments, tech notes, ticket changes,
+attachments and unversioned files. Three query verbs: **`viki ask`** (hybrid
+ranked search), **`viki muse`** (undirected recall, no query -- for the thing
+you do not know exists and therefore cannot ask for) and **`viki grep`**
+(exact unranked POSIX-ERE over every indexed artifact).
+
+**"Querying viki" below is still the authoritative copy of the calling
+convention** and applies to core's `ask` as well -- it is about how to phrase
+a query, not about which tree implements it.
+
+**A green run says nothing about `src/`.** `test/m1.sh` rebuilds nothing; it
+tests whatever `build/dist/viki` happens to be, and that file is gitignored
+and can lag `src/` arbitrarily. It has already scored a full green against a
+binary missing three fixes sitting in `src/` at the time. Check the binary is
+current before believing a run.
 
 ## Layout
 
 ```
-src/            viki CLI source (C)
+core/           VIKI-CORE -- the successor tree.  SQLite and nothing else.
+  include/viki_core.h   the whole public surface: assertions, diaries, retrieval,
+                  blobs, identity, watch. ONE assertion type carries notes,
+                  calendar events and provenance -- `viki_assert(id, kind, akey,
+                  arank, ts, supersedes, body, atext)`, id = sha256 of the framed
+                  content IN ITS POSITION. Hashing canon() alone made two
+                  assertions with the same text but a different key or
+                  supersedes-link collide into one row, so grow-only quietly
+                  lost a write
+  include/viki_task.h   TASKS AND THE LEDGER. A subtype, not new columns:
+                  viki_assert has eight and none is `due`, which is exactly what
+                  lets one type carry everything. Fields live in `body` as JSON
+  include/viki_cal.h    jsCalendar (RFC 8984), NOT ICS -- so every field is
+                  reached with json_extract() and SQLite is the parser (C7)
+  src/viki_core.c       assertions, merge, ranges, retrieval, blobs, watch,
+                  identity, withdrawal. tx via SAVEPOINT, never bare
+                  BEGIN/COMMIT -- core does not own the connection
+  src/viki_task.c       the ledger. Writes through viki_put(), reads through
+                  viki_sql(), names viki_assert and nothing else. Canonical body
+                  built by json_object(); the due date is VALIDATED by SQLite
+                  GLOB and a malformed one is REFUSED rather than stored
+  src/viki_ed25519.c    signing, via LibreSSL EVP_PKEY_ED25519
+  test/core_probe.c     121 behaviour assertions. T1-T7 are the ledger; T5 is
+                  the one that matters (a superseded task LEAVES). Non-vacuity
+                  checked by dropping the supersession clause -- T5/T5b go red
+                  and nothing else does
+  test/core-probe.sh    11 CONSTRAINT assertions, C1-C8, each with a control:
+                  no filesystem, no network, no subprocess, no fossil, no
+                  threading, no hand-written parser, and the probe never names a
+                  core table outside the API. C6 and C7b are the positive
+                  controls that stop the greps passing vacuously
+  build.sh              REQUIRES SQLCipher-LibreSSL and exits 2 with
+                  instructions rather than falling back to stock SQLite. There
+                  is no unencrypted default, because a default nobody chose is
+                  the one everybody gets
+cli/viki_cli.c  THE HOST -- and the split is the point. It owns the argv, the
+                keys (--keyfile is mode-checked the way ssh checks a private
+                key; 64 hex is a RAW key with no KDF, 5.99 ms vs 345.93 ms for
+                a passphrase), the embedder .so, and THE CLOCK. core calls
+                time() zero times; isoNow() lives here. Until it was added
+                2026-08-29 nothing stamped anything and every note carries an
+                empty ts. Verbs: note / task / ledger / coverage / pending /
+                ask / forget / merge / reindex / cal / model / count / sql / run
+assistant/      L3, NOT viki (SCOPES). brief.sh was ported to core 2026-08-29:
+                it reads `ledger --json` and NEVER a display format, and applies
+                the --horizon itself because "the next seven days" is a
+                judgment about the day being planned
+
+src/            LEGACY viki CLI source (C) -- Fossil-backed, terminal. See
+                CLAUDE.md DIRECTION. Still builds; still what test/m1.sh,
+                edge/ and every build/*-probe.sh exercise
+  viki.c          subcommand dispatch (index / ask / muse / grep / capture / structure / notes / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki.c          subcommand dispatch (index / ask / muse / grep / capture / structure / notes / serve / cache push|pull / version / ndvss-selftest / embed-selftest)
   viki_db.c/.h    local cache db: schema, ndvss static registration
   viki_ask.c/.h `viki ask`: THREE legs into one RRF pool (k=60) -- BM25 over `chunk_fts`, a LITERAL substring leg over `chunk_text` scored by rarity-weighted term overlap (`1/df`, one extra scan; no model needed), and the ndvss cosine leg (model only). The literal leg landed 2026-08-21 (QUEUE 42) because the other two are density-biased and bury a fact stated once in passing; it also makes `ask` subsume a literal lookup. Measured on corpus fp `c7e52620ae430794`, n=43: recall@1 0.302 -> 0.372, MRR 0.418 -> 0.465, `identifier` class MRR 0.667 -> 0.700, held-out identifier recall@1 0.500 -> 1.000; recall@5 unchanged because it reorders rather than recalls. The RARITY WEIGHTING is the load-bearing part -- an unweighted count ties a unique identifier against the common words beside it and volume wins. `build/literal-probe.sh` is the proof and it must be run UNDER CONTEST; its first draft scored 7/7 against a binary with no leg at all, because a corpus smaller than VIKI_CANDIDATE_POOL never excludes anything
@@ -630,6 +682,34 @@ this file -- against a binary missing three fixes that were sitting in
 `src/` at the time. See FINDINGS.md.
 
 ## Verified working end to end (not just "should work")
+
+- **The ledger, on viki-core, against Warren's own obligations**
+  (2026-08-29). `core-probe` `121 passed, 0 failed`; `core-probe.sh`
+  `11 passed, 0 failed`. T5 -- a superseded task LEAVES the ledger -- is the
+  assertion the rest exists to protect, and it is not vacuous: removing the
+  `NOT EXISTS (... supersedes=a.id)` clause from `viki_ledger()`'s SQL turns
+  T5 and T5b red and nothing else. T6 pins the other half, that leaving the
+  ledger is NOT being deleted, or merge would stop being union.
+  The full arc was then run by hand on an encrypted store: six real tasks in,
+  ordered by due, `(4 mine, 2 held by someone else)`; an arrival filed as
+  `note --supersedes <id>` retired its task and added no row.
+  `~/.viki/personal/viki.db` is real ciphertext -- a stock `sqlite3` reports
+  `file is not a database`.
+
+- **The morning brief, ported to core and run the way launchd runs it**
+  (2026-08-29): `env -i HOME=... PATH=... sh assistant/brief-run.sh`, exit 0,
+  correct YOURS/THEIRS split, no false failure banner. Controls: missing
+  binary and missing store both exit 2; a WRONG KEY prints
+  `CANNOT READ THE LEDGER -- This is NOT the same as having nothing due`
+  rather than an empty day, which is the one failure mode a brief must never
+  have.
+  Two live bugs were fixed getting there, both found by pointing it at real
+  obligations rather than the repo's own dev notes: every good run exited 1
+  (a bare `test && printf` as the last statement under `set -e`, which
+  schedule-brief.sh then stamped as `*** THE BRIEF FAILED`), and notes
+  carrying an `@place` put PHANTOM ROWS under "THEIRS" (the continuation line
+  is two tokens, not one, so it survived the row filter and got column-split
+  like a real row).
 
 - **The whole Milestone 1 definition of done, on an ENCRYPTED repo:
   `test/m1.sh`, `90 passed, 0 failed, 0 skipped`, exit 0** (re-run

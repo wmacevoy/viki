@@ -2,12 +2,91 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## DIRECTION -- read this before anything below (settled 2026-08-29)
+
+> *"core is the derivable set --- fossil-see is a dead end."* -- Warren
+>
+> *"i meant rewrite = fix it --- viki-core is the sqlite contracts as a nice
+> api library. no more fossil compatibility more than ancestory. retain/recall,
+> oopc patterns. no filesystem - that's someone else's problem."*
+
+**`core/` is the successor to `src/`.** It is not a second implementation to
+keep in step. New work goes there; what `src/` still has and `core/` does not
+is a **migration list**, not a parallel product.
+
+**Everything in this file below this section describes `src/`**, the
+Fossil-backed implementation. Most of it is still true *about `src/`*, and the
+hard-won parts -- the FINDINGS-backed traps -- mostly transfer, because they
+are lessons about retrieval, staleness, ledgers and shell scripts rather than
+about Fossil. Read it that way: **accurate history, not current direction.**
+
+### What core is
+
+One SQLite contract and nothing else: **no filesystem, no network, no
+subprocess, no fossil, no threading, no hand-written parser.** Those are not
+aspirations, they are assertions -- `core/test/core-probe.sh` C1-C8, each with
+a control. The caller supplies an open `sqlite3*`; core supplies meaning.
+
+    core/include/viki_core.h    the whole public surface
+    core/include/viki_task.h    tasks and the ledger
+    core/include/viki_cal.h     jsCalendar (RFC 8984), not ICS
+    core/src/                   the implementation
+    core/test/core_probe.c      121 behaviour assertions
+    core/test/core-probe.sh     11 constraint assertions, C1-C8
+    cli/viki_cli.c              the host: keys, clock, embedder, argv
+    sh core/build.sh            builds all of it; requires SQLCipher-LibreSSL
+
+One assertion type carries everything -- `viki_assert(id, kind, akey, arank,
+ts, supersedes, body, atext)`. Notes, tasks, calendar events and provenance
+are the same shape. `id` is `sha256` of the framed content **in its position**,
+so rows are immutable and grow-only, and **union IS merge**.
+
+### What is already ported
+
+| `src/` | `core/` | note |
+|---|---|---|
+| `viki promises` | `viki ledger [--me] [--json]` | live tasks, ordered by due |
+| `viki coverage` | `viki coverage` | JSON only; no thresholds, same as before |
+| `viki structure --pending` | `viki pending` | a note nothing supersedes, that supersedes nothing |
+| `viki capture` | `viki note` | `--supersedes` is how a task closes |
+| `viki structure ... --who --due` | `viki task` | a NEW assertion superseding the capture |
+| `viki ask`, `viki sql` | same names | |
+| `assistant/brief.sh` | ported 2026-08-29 | reads `ledger --json`, never a display format |
+
+### The migration list -- in `src/`, not yet in `core/`
+
+- **`viki why`** -- the supersession chain both ways. `supersedes` is already
+  in the schema and indexed; nothing walks it yet.
+- **`viki grep`** -- exact POSIX-ERE over every chunk.
+- **`viki muse`** -- undirected recall.
+- **`viki serve`** -- the HTTP face and the browser page.
+- **`viki calendar shred`** -- ICS in. core deliberately takes **jsCalendar**
+  instead, so SQLite is the parser (C7). An ICS adapter is a connector's job
+  under SCOPES L3, not core's.
+- **`viki index`'s nine content types** -- wiki, ticket, forum, check-in
+  comment, tech note, ticket change, attachment, unversioned file. **These die
+  with fossil-see and are not to be ported.** Ingest was never viki's problem
+  (SCOPES 6b): a robot scrapes, an agent judges, viki stores what survived.
+- **`viki cache push/pull`** -- `fossil uv`. Dies with fossil-see. What
+  replaces it is `viki merge`, which is trivial *because* rows are immutable
+  and content-addressed.
+- **The `edge/` wasm tier** still compiles `src/`.
+
+### What this means for `vendor/fossil-see`
+
+It stays vendored and it still builds, because `src/` and `test/m1.sh` need
+it. **Do not start new work there.** The in-process `libfossilsee` track, the
+`uv` distribution path, the epoch-pin signature chain and the `*.efossil`
+story are all history now -- accurate, and terminal.
+
+
 ## Orientation
 
 **Read `SCOPES.md` when you are about to add something and are not sure where
 it goes.** It is the four-level split -- state, projections, interfaces,
 connectors -- and the one-line test that decides: *can viki compute this without
-an opinion?* If not, it is a connector and does not belong in `src/`. That
+an opinion?* If not, it is a connector and belongs in neither `core/` nor
+`src/`. That
 boundary got crossed twice in a single day before it had a name, and both times
 the code was reasonable and the placement was not.
 
@@ -37,24 +116,86 @@ them. The ones that constrain code most:
 
 ## Capturing and structuring notes
 
-There is a browser UI for the whole loop at `http://127.0.0.1:8080/capture`
-once `viki serve` is running, and a JSON API behind it (`/api/pending`,
-`/api/notes`, `/api/capture`, `/api/structure`, `/api/reindex`). Mutating
-routes are POST-only and need an `X-Viki-Local` header -- a cross-origin
-guard, not authentication.
+**On core, this is two verbs and no files.** `viki note` remembers something;
+`viki task` says someone owes it, to someone, by a date. Structuring a capture
+is a `task` whose `--supersedes` names the note -- the note stays, the ledger
+shows the task. An arrival is a `note --supersedes <task-id>`, and the task
+leaves. Nothing is edited and nothing is deleted, which is what keeps union a
+valid merge.
 
-`viki capture "..."` records raw text with no model, network or fossil
-needed. `viki structure --pending` is the work queue for adding judgement,
-and `viki structure <id> --type ... --place ...` writes it back.
+`viki pending` is the work queue: a note nothing supersedes, that supersedes
+nothing itself. The second half is what excludes an arrival.
 
-The `@type` vocabulary and the rules for applying it live in **AGENTS.md,
+**The `@type` vocabulary and the rules for applying it live in AGENTS.md,
 "Structuring captures"** -- primary copy there, deliberately not duplicated
 here, because this repo has had the same claim rot in one of two files three
-times. Read it before draining `--pending`; the short version is that only
-`task` belongs in "what needs to be done", abbreviations get expanded into
-`--place` at structure time, and `--closes` is how one note retires another.
+times.
 
-## Build and run
+**Legacy (`src/`):** a browser UI at `http://127.0.0.1:8080/capture` behind
+`viki serve`, a JSON API (`/api/pending`, `/api/notes`, `/api/capture`,
+`/api/structure`, `/api/reindex`), and `captures/*.md` as the hand-editable
+source of truth. Two traps recorded there are worth carrying forward even
+though the code is not: **captured text is UNTRUSTED and must never become note
+syntax** (a Facebook message forged a promise and silently retired a real one
+via `@closes`), and **column 0 of an fgets CHUNK is not column 0 of a LINE**
+(a body padded to 2047 bytes injected a field through the writer-side guard).
+core has neither bug because it has no note syntax and no line reader -- the
+fields are columns and JSON, not text in a file.
+
+## Build and run -- core (the current tree)
+
+```sh
+sh core/build.sh                 # -> core/build/{viki, libvikicore.a, core-probe}
+./core/build/core-probe          # 121 behaviour assertions
+sh core/test/core-probe.sh       # 11 constraint assertions, C1-C8
+```
+
+Requires SQLCipher-LibreSSL and **fails rather than falling back to stock
+SQLite**: there is no unencrypted default, because a default nobody chose is
+the one everybody gets. A diary opens with `--keyfile PATH` (mode-checked the
+way ssh checks a private key), `$VIKI_KEY`, a terminal prompt, or an explicit
+`--plaintext`. **64 hex characters is used as a RAW key with no KDF** -- 5.99 ms
+to open versus 345.93 ms for a passphrase, measured (FINDINGS.md).
+
+```sh
+V=core/build/viki; K=~/.viki/personal.key; S=~/.viki/personal/viki.db
+$V --keyfile $K --store $S note "..."                      # remember
+$V --keyfile $K --store $S task "..." --who sue --due 2026-09-02 --place mr
+$V --keyfile $K --store $S ledger --me warren [--json]     # what is owed
+$V --keyfile $K --store $S note "it arrived" --supersedes <task-id>
+$V --keyfile $K --store $S coverage                        # channels, last seen
+$V --keyfile $K --store $S pending                         # never structured
+$V --keyfile $K --store $S ask "..." -k 5                  # hybrid retrieval
+sh assistant/brief.sh --me warren                          # the morning brief
+```
+
+**THE LEDGER IS THE PART TO UNDERSTAND** (`core/src/viki_task.c`, and
+`core/README.md` has the full rationale):
+
+- A task is a **subtype**, not new columns. `viki_assert` has eight and none is
+  `due` -- that is precisely what lets notes, calendar events and provenance
+  share one type. Fields live in `body` as JSON, read with `json_extract` and
+  **built with `json_object`**, so no escaper of ours exists to get wrong.
+- **Structuring is a new assertion, not an edit.** The raw capture stays; the
+  task supersedes it. `src/` rewrote `captures/*.md` in place and once DELETED
+  user text doing that.
+- **An arrival is a NOTE, not a task.** `note --supersedes <id>` retires a
+  task and adds no row -- filed as a task it would retire one and add another,
+  so the list would never shrink. This is what `src/` spelled `--closes`.
+- **A malformed `--due` is refused at write time.** `@due next Tuesday` sorted
+  lexically below every digit and printed a phantom OVERDUE in the brief every
+  morning with no way to see why.
+- **Ordered by due, not by write time**, and **unowned counts as mine** -- a
+  commitment nobody claimed is one the reader is still carrying.
+- **The host owns the clock.** core calls `time()` zero times; `isoNow()` is in
+  the CLI. That is what makes a store reproducible from its inputs.
+
+`assistant/brief.sh` consumes `ledger --json` and **never a display format** --
+it parsed the table by column offset and the format moved under it twice in one
+day. The `--horizon` is applied in the brief, not in core: "the next seven
+days" is a judgment about the day being planned (SCOPES 3).
+
+## Build and run -- src/ (legacy; see DIRECTION)
 
 There is no Makefile. `build/build.sh` is the whole build — self-contained, no
 other project needs to be built first. It downloads and SHA256-verifies the
@@ -456,7 +597,12 @@ path is not evidence, and neither is one successful round-trip: it took four
 artifact shapes (thread-start, reply, card-shaped reply, edit) to exercise the
 path. `build/forum-e2e-probe.sh` is the standing proof.
 
-## Architecture
+## Architecture -- src/ (legacy; core's is in core/README.md)
+
+**Everything in this section describes the Fossil-backed implementation.** It
+is accurate about `src/` and terminal -- see DIRECTION. core's architecture is
+one SQLite contract, documented in `core/README.md` and asserted by C1-C8.
+
 
 `viki` is a C CLI over an unencrypted, local, **derived** SQLite cache at
 `.viki/cache.db`, relative to cwd — deliberately *not* inside the Fossil repo
@@ -648,6 +794,14 @@ more cleanly than a capability token inside viki, which would be a second
 identity system to keep in step with Fossil's.
 
 ## Conventions and traps
+
+**Most of these are about `src/` and several are already answered by core's
+design rather than by care.** The C style, the "never mirror src/ in a test
+harness" rule, the HyDE calling convention and the chunking measurements all
+still apply. The Fossil-specific ones -- `fossil ticket` needing a resolvable
+user, `strtok_r` on Fossil's TSV, the `uv` compression path, `sweep_sources()`
+scoping -- are history.
+
 
 - **C style follows SQLite/Fossil**, since that is what this ecosystem is:
   `zPath`/`nItems`/`pDb` naming, `/* ... */` comments with `**` continuation,

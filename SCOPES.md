@@ -10,6 +10,21 @@ problem.
 > or whatever resources they have (openclaw, nanoclaw, claude cowork)."*
 > — Warren, 2026-08-25
 
+
+> **Direction note, 2026-08-29.** *"core is the derivable set --- fossil-see is
+> a dead end."* The four-level split below is unchanged and is the reason core
+> looks the way it does -- but read `src/` in it as `core/`. L0 is no longer
+> "encrypted Fossil repos and their unversioned blobs"; it is **an encrypted
+> SQLite diary of immutable, content-addressed assertions**, which merges by
+> union instead of by sync protocol. L1 is unchanged: chunk ranges, vectors and
+> the FTS index are still derived, disposable and rebuildable. The placement
+> test in section 3 is untouched and still the thing to apply.
+>
+> Two of section 6's misplacements are now moot rather than fixed: key custody
+> and `viki-cache-encrypt` were `edge/tools/` concerns of the Fossil tree.
+> core's answer is that a diary IS the encrypted container, so there is no
+> separate cache to convert.
+
 ---
 
 ## 0. The problem, concretely
