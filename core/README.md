@@ -502,6 +502,33 @@ needs the model database too. That is already the shape D-12 chose — the model
 distributes separately, checksummed against a pinned manifest — so this changes
 the container, not the contract.
 
+
+### Two different lifetimes, and one correction
+
+There are **two** things here and they were briefly conflated, so it is worth
+separating them permanently.
+
+| | durable | session |
+|---|---|---|
+| what | a signed **assertion** in the diary | a **token** issued by a running core |
+| lifetime | forever; read by peers years later | at most as long as the core that issued it |
+| "now" | there isn't one — verification happens whenever | the API's own clock |
+| trust from | the signer's recorded public key | the deployment: a service enforcing it, or a trusted executable on a phone |
+
+An earlier draft argued that expiry does little work because `ts` is
+self-reported and verification happens later. **That is true of durable
+assertions and wrong about tokens** (Warren, 2026-08-29): *"the now is the
+api."* A token bounded by the issuing process's lifetime has a trustworthy
+clock and a verifier that is the issuer — expiry there means exactly what JWT
+means by it, and a REST face needs the machinery regardless. The key map is a
+local table under a random key, so it dies with the process by construction.
+
+So: **expiry is meaningless for stored assertions and correct for session
+tokens.** Do not import either conclusion into the other half.
+
+**Not built, deliberately** (Warren: *"don't do this yet"*): token issuance,
+the key map, and cross-instance token migration.
+
 ---
 
 ## Identity: what signing adds, and what it must not decide
