@@ -618,13 +618,42 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
         ** it is MARKED instead, so a reader can tell what viki knows from what
         ** viki inferred. Marking rather than hiding is the same rule as the
         ** fragment markers and as `viki coverage`'s refusal to threshold. */
+        /* NOTES AND CALENDAR FEEDS IN ONE LIST, WITH A KIND -- decided rather
+        ** than defaulted. Coverage answers one question ("what can I see, and
+        ** when did I last see it"), and that question is the same for a channel
+        ** a reader posts and a feed a connector shreds; two lists would make a
+        ** consumer join them to ask it. But a reader must be able to tell an
+        ** ingested feed from a captured channel, so `kind` is explicit rather
+        ** than inferred from the name.
+        **
+        ** Without this, `viki coverage` printed "(nothing captured or
+        ** ingested)" on a cache holding a shredded calendar -- the command
+        ** whose whole job is saying what viki can see, blind to a class of
+        ** thing it can see. The shredder records a per-row `source` for
+        ** exactly this. */
         "SELECT CASE WHEN channel IS NOT NULL AND channel <> '' THEN channel"
         "            WHEN text LIKE '[%]%'"
         "            THEN substr(text, 2, instr(text, ']') - 2)"
         "            ELSE 'captured here' END AS src,"
         "       max(ts), count(*),"
-        "       max(CASE WHEN channel IS NOT NULL AND channel <> '' THEN 1 ELSE 0 END) AS declared"
-        "  FROM viki_note GROUP BY src ORDER BY max(ts) DESC", -1, &st, NULL) != SQLITE_OK ){
+        "       (channel IS NOT NULL AND channel <> '') AS declared,"
+        "       'channel' AS kind"
+        /* GROUPED BY THE PER-ROW DISCRIMINATOR, not by an aggregate over it.
+        ** This was max(CASE ...) AS declared with GROUP BY src, declared --
+        ** which SQLite rejects, and which was the wrong shape anyway: a max
+        ** over the group is exactly the laundering this split exists to stop.
+        ** One note declaring --channel todo would have promoted every
+        ** bracket-guessed [todo] note in the same group to declared. Grouping
+        ** on the row-level test keeps a mixed name as TWO rows, so a reader
+        ** sees that some of it was guessed. */
+        "  FROM viki_note GROUP BY src, (channel IS NOT NULL AND channel <> '')"
+        " UNION ALL "
+        /* A calendar source is always DECLARED: a connector named it when it
+        ** handed the bytes over, so there is no bracket-guessing here and no
+        ** inferred case to mark. */
+        "SELECT source, max(ingested), count(*), 1, 'calendar'"
+        "  FROM cal_event WHERE source IS NOT NULL AND source <> '' GROUP BY source"
+        " ORDER BY 2 DESC", -1, &st, NULL) != SQLITE_OK ){
         fprintf(stderr, "viki coverage: %s\n", sqlite3_errmsg(db));
         return 1;
     }
@@ -634,6 +663,8 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
         const char *ts  = (const char*)sqlite3_column_text(st, 1);
         int cnt = sqlite3_column_int(st, 2);
         int bDeclared = sqlite3_column_int(st, 3);
+        const char *zKind = (const char*)sqlite3_column_text(st, 4);
+        int bCal = zKind && strcmp(zKind, "calendar") == 0;
         int bHere = src && strcmp(src, "captured here") == 0;
         if( bJson ){
             /* `declared` is a FIELD rather than a decorated string: a client
@@ -650,10 +681,14 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
             viki_json_escape(src ? src : "?");
             printf("\",\"last_seen\":\"");
             viki_json_escape(ts ? ts : "");
-            printf("\",\"notes\":%d,\"declared\":%s}",
-                   cnt, (bDeclared || bHere) ? "true" : "false");
+            printf("\",\"notes\":%d,\"declared\":%s,\"kind\":\"%s\"}",
+                   cnt, (bDeclared || bHere) ? "true" : "false",
+                   bCal ? "calendar" : "channel");
         }else{
-            printf("%-18s %-28s %d note(s)%s\n", src ? src : "?", ts ? ts : "never", cnt,
+            /* "assertion(s)" for a calendar, because they are not notes and
+            ** calling them notes makes the ledger look larger than it is. */
+            printf("%-18s %-28s %d %s%s\n", src ? src : "?", ts ? ts : "never", cnt,
+                   bCal ? "calendar assertion(s)" : "note(s)",
                    (bDeclared || bHere) ? "" : "   (inferred from text)");
         }
         n++;

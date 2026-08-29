@@ -524,5 +524,69 @@ fi
 rm -f .viki/last-pull
 
 
+echo "== coverage sees calendars, and the brief separates yours from theirs =="
+# 2.5: `viki coverage` queried viki_note ONLY, so it printed "(nothing captured
+# or ingested)" on a cache holding a shredded calendar -- the command whose
+# whole job is saying what viki can see, blind to a class of thing it can see.
+printf 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:cov-1\r\nDTSTAMP:20260820T100000Z\r\nDTSTART:20260901T150000Z\r\nSUMMARY:covmarker hay delivery\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n' > cov.ics
+"$V" calendar shred cov.ics --source covfeed >/dev/null 2>&1
+COV2=$("$V" coverage 2>/dev/null)
+chk "I1 a shredded calendar appears as a coverage source" \
+    "$(printf '%s' "$COV2" | grep -c '^covfeed ')" "1"
+chk "I2 ...counted as assertions, not as notes" \
+    "$(printf '%s' "$COV2" | grep 'covfeed' | grep -c 'calendar assertion')" "1"
+chk "I3 --json marks its kind so a consumer need not guess from the name" \
+    "$("$V" coverage --json 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print(1 if any(r.get("source")=="covfeed" and r.get("kind")=="calendar" for r in d) else 0)')" "1"
+# CONTROL: note channels are still there and still marked channel -- the union
+# must not have replaced one list with the other.
+chk "I3b CONTROL: note channels survive alongside, marked channel" \
+    "$("$V" coverage --json 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print(1 if any(r.get("kind")=="channel" for r in d) else 0)')" "1"
+
+# THE LAUNDERING FIX: coverage grouped by NAME with max(declared), so one note
+# declaring --channel todo promoted every bracket-guessed [todo] note in the
+# group to declared and merged them into a single row -- the guess vanished.
+"$V" capture "[laundry] typed by a person" >/dev/null 2>&1
+"$V" capture "from a real connector" --channel laundry >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+chk "I4 a name that is BOTH declared and inferred stays TWO rows" \
+    "$("$V" coverage 2>/dev/null | grep -c '^laundry ')" "2"
+chk "I4b CONTROL: ...and exactly one of them is marked inferred" \
+    "$("$V" coverage 2>/dev/null | grep '^laundry ' | grep -c 'inferred')" "1"
+
+# 2.2's second acceptance clause: the brief separates yours from theirs.
+# ITS OWN FIXTURE, deliberately. The first version reused "call the vet", which
+# an earlier assertion in this same file RETIRES on purpose (F5 checks it is
+# gone) -- so I8 was asserting on a promise that no longer existed, and failed
+# for a reason that had nothing to do with the split.
+IY=$(cap "yoursmarker fix the north gate latch")
+"$V" structure "$IY" --type task --due "$SOON" >/dev/null 2>&1
+IT=$(cap "theirsmarker watch for the feed store invoice")
+"$V" structure "$IT" --type task --due "$SOON" --who claude >/dev/null 2>&1
+"$V" index . >/dev/null 2>&1
+if [ -f "$ROOT/assistant/brief.sh" ]; then
+    IB=$(VIKI_BIN="$V" sh "$ROOT/assistant/brief.sh" --me mine --horizon 7d 2>/dev/null \
+         | sed -n '/AT RISK/,/WHAT I CAN SEE/p')
+    chk "I5 the brief has a YOURS section" \
+        "$(printf '%s' "$IB" | grep -c 'YOURS -- what you owe')" "1"
+    chk "I6 ...and a THEIRS section when an agent holds something" \
+        "$(printf '%s' "$IB" | grep -c 'THEIRS -- an agent is carrying')" "1"
+    chk "I6b CONTROL: the agent-held row really is present somewhere" \
+        "$(printf '%s' "$IB" | grep -c 'theirsmarker')" "1"
+    # THE CONTROL THAT MATTERS: an agent-held promise must be under THEIRS and
+    # NOT under YOURS. A split that puts everything in one section passes I5
+    # and I6 and tells the reader nothing.
+    chk "I7 CONTROL: the agent-held row is under THEIRS, not YOURS" \
+        "$(printf '%s' "$IB" | sed -n '/YOURS/,/THEIRS/p' | grep -c 'theirsmarker')" "0"
+    chk "I8 CONTROL: ...and a promise of yours is under YOURS" \
+        "$(printf '%s' "$IB" | sed -n '/YOURS/,/THEIRS/p' | grep -c 'yoursmarker')" "1"
+else
+    sk "I5 (no brief.sh)"; sk "I6 (no brief.sh)"; sk "I7 (no brief.sh)"; sk "I8 (no brief.sh)"
+fi
+
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]

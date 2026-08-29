@@ -57,9 +57,55 @@ if printf '%s' "$RISK" | grep -qE '^(OVERDUE|TODAY|         [0-9])'; then
   # fields, the continuation line is one indented token (the note id), and the
   # footer lines are the ledger describing its own coverage -- which the brief
   # states in its own words further down.
-  printf '%s\n' "$RISK" | sed -n '3,$p' \
+  # YOURS AND THEIRS ARE SEPARATED, which is 2.2's second acceptance clause and
+  # was the last one unmet. The ledger already distinguishes parties -- it
+  # prints a WHO column -- so this is presentation, not new data. But it is
+  # presentation that changes what the reader DOES: "call the vet" and "claude
+  # is watching for the invoice" are the same row shape and completely
+  # different obligations, and one list made you re-read the WHO column on
+  # every line to find the ones that are actually yours.
+  #
+  # SPLIT BY COLUMN OFFSET, which is stable here and only here. viki_note.c
+  # prints the ledger as `%-8s %-10s %-12s %s`, so WHO is always characters
+  # 21-32 whatever the risk marker says. This is the one place a display
+  # format may be parsed by position, and it is allowed because the same
+  # repository owns both ends -- m1 already parses the ask hit line this way.
+  # If that format ever changes, this breaks loudly rather than silently
+  # mis-attributing a promise.
+  #
+  # THE TEST IS THE LITERAL "mine", NOT A COMPARISON AGAINST --me.
+  #
+  # viki_note.c has already decided this: it renders the caller own rows -- and
+  # unowned ones, since a commitment nobody claimed is one you are still
+  # carrying -- as the word "mine", and everything else as the holder name. So
+  # re-deriving ownership here would be a second copy of that rule, and the
+  # first version of this code did exactly that and got it backwards: it
+  # compared WHO against "warren" while viki was printing "mine", so every row
+  # landed in THEIRS including the ones that were yours.
+  ROWS=$(printf '%s\n' "$RISK" | sed -n '3,$p' \
     | grep -vE '^[[:space:]]*$|^[[:space:]]+[^[:space:]]+$' \
-    | grep -vE '^[[:space:]]+(undated promises|this ledger sees)'
+    | grep -vE '^[[:space:]]+(undated promises|this ledger sees)')
+  YOURS=$(printf '%s\n' "$ROWS" | awk \
+    '{ who = substr($0, 21, 12); gsub(/^ +| +$/, "", who); if (who == "" || who == "mine") print }')
+  THEIRS=$(printf '%s\n' "$ROWS" | awk \
+    '{ who = substr($0, 21, 12); gsub(/^ +| +$/, "", who); if (who != "" && who != "mine") print }')
+
+  if [ -n "$YOURS" ]; then
+    printf '  YOURS -- what you owe\n'
+    printf '%s\n' "$YOURS" | sed 's/^/  /'
+  fi
+  if [ -n "$THEIRS" ]; then
+    [ -n "$YOURS" ] && printf '\n'
+    printf '  THEIRS -- an agent is carrying these. A broken agent promise\n'
+    printf '            costs you exactly what a broken one of your own does.\n'
+    printf '%s\n' "$THEIRS" | sed 's/^/  /'
+  fi
+  # Never silently print nothing: if the split matched no row at all, the
+  # format moved, and showing the raw rows beats showing an empty section.
+  if [ -z "$YOURS" ] && [ -z "$THEIRS" ]; then
+    printf '  (could not tell yours from theirs -- showing all)\n'
+    printf '%s\n' "$ROWS"
+  fi
 else
   # The good morning, stated. This branch is the one that earns trust.
   printf '  nothing due in the next %s.\n' "$HORIZON"

@@ -423,12 +423,12 @@ unreadable.
 | | requirement | state | what is missing |
 |---|---|---|---|
 | 2.1 | promise ledger | **PARTIAL** | ledger reads `captures/*.md` only -- a commitment in a check-in or a calendar never reaches it; no counterparty field |
-| 2.2 | assistant is a party | **PARTIAL** | ledger distinguishes holders; the brief does not separate yours from mine |
+| 2.2 | assistant is a party | **MET 2026-08-29** | ledger distinguishes holders; the brief now separates YOURS from THEIRS |
 | 2.2b | continuity | **PARTIAL** | supersession works; no agent identity, no "what did I already try" |
 | 2.2c | authority has degrees | **UNMET** | only `observe` exists; `draft`/`act` need Q2/Q3 |
 | 2.3 | calendar + notification ingest | **RESCOPED 2026-08-28 -- see below** | acquisition is L3 and NOT viki's; the viki-side half is largely met |
 | 2.4 | the clock, not the query | **MET 2026-08-29** | `assistant/schedule-brief.sh install` -- launchd daily, cron line printed elsewhere |
-| 2.5 | coverage | **PARTIAL** | calendar sources invisible to `viki coverage` |
+| 2.5 | coverage | **MET 2026-08-29** | channels, calendar feeds and sync recency, each marked by kind |
 | 2.6 | capture that cannot be lost | **PARTIAL** | PWA holds captures in IndexedDB with **no outbound path** |
 | 2.7 | cross-project recall | **MET** | 111 projects, one question |
 | 2.8 | provenance | **UNMET** | `viki when`/`since` exist on a branch, not merged |
@@ -436,7 +436,9 @@ unreadable.
 | 2.10 | encrypted at rest | **MET** | m1 E1-E4 |
 | 2.11 | one API, several consumers | **PARTIAL** | `/api/ask` + `/api/capture`; MCP designed, on a branch, not merged |
 
-**2 met, 8 partial, 3 unmet.**
+**Originally 2 met, 8 partial, 3 unmet. As of 2026-08-29: 6 met, 4 partial,
+3 unmet** -- 2.2, 2.4, 2.5 and 2.9 closed, and 2.3 rescoped out of the
+expensive band entirely.
 
 ### What it costs to finish, in the only units that matter
 
@@ -457,10 +459,16 @@ unreadable.
   synced cache would travel and answer "when did the PUSHER last pull" -- and
   `viki coverage` reports the instant while judging nothing. The brief calls
   seven days stale, which is where that judgment belongs.
-- **2.2's brief separation.** Presentation only; the ledger already
-  distinguishes parties.
-- **2.5 calendar coverage.** `viki coverage` queries `viki_note` only; the
-  shredder already records a per-row source for exactly this.
+- ~~**2.2's brief separation.**~~ **DONE 2026-08-29.** YOURS and THEIRS, split
+  on viki's own `mine` marker rather than by re-deriving ownership in the
+  assistant -- the first attempt compared the WHO column against `--me` while
+  viki was printing `mine`, and put every row in THEIRS including yours.
+- ~~**2.5 calendar coverage.**~~ **DONE 2026-08-29.** Channels and calendar
+  feeds are one list with an explicit `kind`, because coverage answers one
+  question and two lists would make a consumer join them to ask it. The same
+  change fixed the laundering defect: grouping by name with `max(declared)`
+  let one declared note promote every bracket-guessed note of that name, so a
+  mixed channel now stays TWO rows with the guessed half marked.
 
 **MEDIUM -- one to two weeks, work already half-done on branches.**
 - **2.8 provenance** (`wip/provenance`): 1032 lines written, 94 assertions, a
