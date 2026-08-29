@@ -482,8 +482,8 @@ if `(content_hash, model_id)` is absent. **Nine** content types share one
 | Source | How it is extracted | Virtual path |
 |---|---|---|
 | checkout files | directory walk | `./relative/path` |
-| wiki pages | `fossil wiki` subprocess | `wiki:Name` |
-| tickets | `fossil ticket` subprocess | `ticket:UUID` |
+| wiki pages | `fossil sql` against `tag`/`tagxref`/`blob` + `find_w_card()` | `wiki:Name` |
+| tickets | `fossil sql` against the `ticket` table (composed in SQL) | `ticket:UUID` |
 | forum posts | `fossil sql` against `event`/`blob` (no export subcommand exists) | `forum:UUID` |
 | check-in comments | `fossil sql`, `coalesce(ecomment, comment)` — Fossil's own timeline rule | `ckin:UUID` |
 | tech notes | `fossil sql`, `event.type='e'` (Fossil DELETEs superseded rows) | `note:ID` |
@@ -529,7 +529,33 @@ That is cache *fragmentation*, not corruption, and not an epoch bump — but the
 header formats are frozen, and changing one must be called out as
 cache-fragmenting.
 
-**Fossil is a subprocess by default**, resolved by `viki_fossil_binary()`
+**`viki index` NEVER FORKS.** It cannot on iOS, which is the platform the
+in-process path exists for, so a subprocess fallback that only runs elsewhere
+is not a fallback. As of 2026-08-29 every one of the nine content classes is
+read through `fossil_sql_framed()` — **zero** `fork()`/`execvp()` on the whole
+index path, measured with a counting wrapper as `$VIKI_FOSSIL_BIN`. The last
+two per-artifact shell-outs went in that round: `fossil wiki list` +
+`fossil wiki export` per page, and `fossil ticket show 0 --quote`. Both
+compositions are byte-identical to what they replaced — verified against an
+independent `shasum` — so no `content_hash` moved and the shared cache did not
+fragment. Dropping `fossil ticket` also retires its requirement for a
+resolvable user, since reading the table needs none.
+
+**One trap if you extend this: `pragma_table_info()` is NOT available
+in-process.** Fossil installs an SQLite authorizer, so it fails with "not
+authorized" through `libfossilsee` while the identical query succeeds through
+`fossil sql` — a difference that shows up as one transport silently indexing
+less than the other. `sqlite_master` is allowed on both, which is why
+`ticket_has_col()` parses DDL instead of asking SQLite directly.
+
+**What still forks, and it is not the index path:** `viki cache push/pull`
+(`fossil uv add/sync/export`) and the `viki-identity` signature verifier.
+Neither is reachable from `libfossilsee`'s v0 ABI, which is read-only SQL by
+design — `embed/fossilsee.h` puts `wiki/sync/clone` out of scope because they
+need an argv shim and output capture, and that work is open upstream in
+fossil-see, not here.
+
+**Fossil is otherwise a subprocess**, resolved by `viki_fossil_binary()`
 (`$VIKI_FOSSIL_BIN`, else `fossil-see` on PATH, else `fossil`). **Nothing is
 linked at build time and that is a hard constraint** — viki builds on four
 platforms with no fossil-see prerequisite.

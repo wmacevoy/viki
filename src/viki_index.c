@@ -1012,49 +1012,110 @@ static void unquote_fossil(char *s){
     *w = '\0';
 }
 
-/* `viki index`'s wiki extraction: `fossil wiki list` for page names, then
-** `fossil wiki export NAME -` per page. Always re-extracts (no mtime to
-** fast-skip on); content-hash dedup in index_text_blob still avoids
-** redundant chunking for unchanged pages.
+/* Defined below, next to the other manifest-card helpers; declared here
+** because the wiki extractor is the first caller in file order. */
+static const char *find_w_card(const char *manifest, size_t *outLen);
+
+/* `viki index`'s wiki extraction: ONE framed SQL call, no subprocess.
+**
+** It used to be `fossil wiki list` plus `fossil wiki export NAME -` PER
+** PAGE, which was O(pages) fork+exec plus a full repo open each. viki does
+** not fork at all any more -- it cannot on iOS, which is the platform the
+** in-process path exists for -- so the last per-artifact shell-out in this
+** file is gone with it.
+**
+** THE COMPOSITION IS UNCHANGED AND THAT IS DELIBERATE. `wiki export` emits
+** exactly the W card's counted payload and nothing else (verified: a page
+** whose body is 32 bytes exports 32 bytes, and `W 32` in the manifest is
+** followed by those same bytes). So find_w_card() reproduces it byte for
+** byte and every wiki page keeps its existing `content_hash`. Prepending
+** the page title -- which index_w_card_artifact() would do, and which is
+** probably better for retrieval -- would change every hash and fragment
+** the shared cache, so it is a separate decision and not taken here.
+**
+** THE QUERY IS FOSSIL'S OWN, and two details in it are load-bearing:
+**   - `tagxref.rid` is the artifact; `tagxref.value` is the page SIZE.
+**     Fossil's listAllWikiPages aliases `tagxref.value+0` as "wrid", which
+**     reads like a rid and is not one -- it is what `wiki list` tests to
+**     skip DELETED pages (size 0), and wiki_fetch_by_name() resolves the
+**     artifact from `tagxref.rid` instead.
+**   - The `GROUP BY 1` + `max(mtime)` pair picks the LATEST version of each
+**     page via SQLite's bare-column-with-max rule. This is Fossil's own
+**     idiom here. Getting it wrong indexes a superseded page as current,
+**     which is exactly the defect a forum round-trip already found once.
+** The four `checkin/`/`branch/`/`tag/`/`ticket/` prefixes are excluded
+** because plain `fossil wiki list` excludes them (they are association
+** pages, shown only under --show-associated), and this must keep listing
+** what it listed before.
 **
 ** Returns 1 only if this run is AUTHORITATIVE for the wiki: namespace --
-** i.e. `fossil wiki list` really ran and succeeded, and every page it
-** named was exported successfully. Anything less returns 0 and the sweep
-** leaves every wiki: row alone, because a failed extraction is
+** the `#viki-eof` sentinel really arrived. Anything less returns 0 and the
+** sweep leaves every wiki: row alone, because a failed extraction is
 ** indistinguishable, in the resulting empty output, from a repo whose
 ** wiki was genuinely emptied. */
 static int index_wiki(sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked){
-    const char *fossil = viki_fossil_binary();
-    char *argvList[] = { (char*)fossil, "wiki", "list", NULL };
-    char *listOut;
-    char *line, *saveptr;
-    int rcList = -1;
-    int authoritative = 1;
+    static const char *zSql =
+        "WITH w(wname, wrid, wmtime) AS ("
+        "  SELECT substr(tag.tagname,6), tagxref.rid, max(tagxref.mtime)"
+        "    FROM tag, tagxref"
+        "   WHERE tag.tagname GLOB 'wiki-*'"
+        "     AND tagxref.tagid = tag.tagid"
+        "     AND TYPEOF(tagxref.value+0) = 'integer'"
+        "     AND tagxref.value+0 <> 0"
+        "   GROUP BY 1"
+        "),"
+        "m(wname, body) AS ("
+        "  SELECT w.wname, content(b.uuid)"
+        "    FROM w JOIN blob b ON b.rid = w.wrid"
+        "   WHERE w.wname NOT GLOB 'checkin/*' AND w.wname NOT GLOB 'branch/*'"
+        "     AND w.wname NOT GLOB 'tag/*'     AND w.wname NOT GLOB 'ticket/*'"
+        ")"
+        "SELECT 'w ' || length(cast(wname || char(10) || body AS BLOB))"
+        "    || char(10) || wname || char(10) || body"
+        "  FROM m"
+        " WHERE instr(cast(body AS BLOB), x'00') = 0"
+        " ORDER BY wname;"
+        "SELECT '" VIKI_FRAME_EOF "';";
+    char *zOut;
+    size_t nOut = 0;
+    FramedIter it;
+    FramedRec rec;
 
-    listOut = run_capture(argvList, &rcList, NULL);
-    if( !listOut ) return 0;
-    if( rcList != 0 ){ free(listOut); return 0; }
+    zOut = fossil_sql_framed(zSql, &nOut);
+    if( !zOut ) return 0;
 
-    line = strtok_r(listOut, "\n", &saveptr);
-    while( line ){
-        while( *line == ' ' || *line == '\t' ) line++;
-        if( line[0] ){
-            char *argvExport[] = { (char*)fossil, "wiki", "export", line, "-", NULL };
-            int rcExport = -1;
-            char *content = run_capture(argvExport, &rcExport, NULL);
-            if( content ){
-                char virtualPath[512];
-                snprintf(virtualPath, sizeof(virtualPath), "wiki:%s", line);
-                (*nItems)++;
-                index_text_blob(db, virtualPath, content, strlen(content), 0, emb, modelId, nChunked);
-                free(content);
-            }
-            if( rcExport != 0 ) authoritative = 0;
+    framed_init(&it, zOut, nOut);
+    while( framed_next(&it, &rec) ){
+        char virtualPath[512];
+        char *zName = rec.zBody;
+        char *zNl;
+        const char *zManifest;
+        const char *body;
+        size_t bodyLen = 0;
+
+        /* Payload is `name \n manifest`. The name travels here rather than
+        ** in the framing key because a wiki page name may contain a SPACE
+        ** and the key is whitespace-delimited; it cannot contain a newline,
+        ** so splitting on the first one is safe. Same shape as uv:. */
+        zNl = memchr(rec.zBody, '\n', rec.nBody);
+        if( !zNl ) continue;
+        *zNl = 0;
+        zManifest = zNl + 1;
+
+        snprintf(virtualPath, sizeof(virtualPath), "wiki:%s", zName);
+        body = find_w_card(zManifest, &bodyLen);
+        /* Bound the W count against the bytes that actually follow the card
+        ** -- see index_w_card_artifact() for why the whole-manifest length
+        ** is the wrong bound. */
+        if( !(body && bodyLen > 0 && bodyLen <= strlen(body)) ){
+            mark_seen(db, virtualPath);
+            continue;
         }
-        line = strtok_r(NULL, "\n", &saveptr);
+        (*nItems)++;
+        index_text_blob(db, virtualPath, body, bodyLen, 0, emb, modelId, nChunked);
     }
-    free(listOut);
-    return authoritative;
+    free(zOut);
+    return it.seenEof;
 }
 
 /* Finds a "W <n>\n" card in a raw Fossil manifest and returns a pointer
@@ -1271,13 +1332,34 @@ static int index_forum(sqlite3 *db, viki_embedder *emb, const char *modelId, int
     return it.seenEof;
 }
 
-/* `viki index`'s ticket extraction: `fossil ticket show 0 --quote` dumps
-** every ticket as one TSV row (report 0 = all columns defined in the
-** TICKET table, so this doesn't depend on any project-specific saved
-** report existing). --quote is required for safe parsing -- see
-** unquote_fossil(). Columns are located by header name rather than
-** assumed fixed positions, since custom installations can add ticket
-** fields (per `fossil help ticket`). */
+/* `viki index`'s ticket extraction: framed SQL over the `ticket` table, no
+** subprocess.
+**
+** It used to be `fossil ticket show 0 --quote`, parsed as TSV. Two things
+** go away with the fork, and the second is the better reason:
+**
+**   - `fossil ticket` REFUSES TO RUN WITHOUT A RESOLVABLE USER, even
+**     read-only, which is why viki_fossil_user() exists ($VIKI_FOSSIL_USER,
+**     else $USER, else "viki"). Reading the table needs no user at all, so
+**     that whole requirement disappears from this path.
+**   - `--quote` escaping had to be undone field by field with
+**     unquote_fossil(). The table holds the REAL strings, so there is
+**     nothing to unescape and nothing to get wrong. The composed text is
+**     byte-identical either way, so no `content_hash` moves.
+**
+** COLUMNS ARE STILL LOCATED BY NAME, and that is not ceremony: the `ticket`
+** table is a materialized view whose columns a project may add to (see
+** `fossil help ticket`), and naming a column that does not exist fails the
+** whole PREPARE rather than one row. So this introspects
+** `pragma_table_info('ticket')` first and composes only over the columns
+** actually present. That is two SQL calls, still O(1) in the number of
+** tickets -- the property that mattered about the old TSV dump -- and zero
+** processes when libfossilsee is loaded.
+**
+** The composition is unchanged: `Ticket <uuid>`, then Status/Title lines
+** only when non-empty, then the comment. Reproduced here in SQL rather than
+** in C because the text never has to leave the database to be built. */
+
 /* Splits s in place on sep, writing up to maxOut field-start pointers to
 ** out[] (empty fields ARE preserved as zero-length strings) and returns
 ** the count. strtok_r is the wrong tool for this: it collapses runs of
@@ -1311,91 +1393,106 @@ static int split_preserve_empty(char *s, char sep, char **out, int maxOut){
 ** that also covers the cases that matter: no fossil binary on PATH, no
 ** resolvable user, or cwd outside a checkout, each of which yields the
 ** same empty output as "this repo has no tickets". */
-static int index_tickets(sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked){
-    const char *fossil = viki_fossil_binary();
-    const char *user = viki_fossil_user();
-    char *argv[] = { (char*)fossil, "ticket", "show", "0", "--quote", "--user", (char*)user, NULL };
-    char *out;
-    char *lineStart = NULL, *p;
-    int uuidCol = -1, titleCol = -1, commentCol = -1, statusCol = -1;
-    int isHeader = 1;
-    int rcShow = -1;
-
-    out = run_capture(argv, &rcShow, NULL);
-    if( !out ) return 0;
-
-    lineStart = out;
-    for( p = out; ; p++ ){
-        int atEnd = (*p == '\0');
-        if( *p == '\n' || atEnd ){
-            char *line = lineStart;
-            int lineLen = (int)(p - lineStart);
-            char *fields[32];
-            int nFields;
-
-            *p = '\0'; /* terminate this line (harmless no-op at atEnd) */
-            lineStart = p + 1;
-            if( lineLen == 0 ){ if( atEnd ) break; else continue; }
-
-            nFields = split_preserve_empty(line, '\t', fields, 32);
-
-            if( isHeader ){
-                int i;
-                for( i = 0; i < nFields; i++ ){
-                    if( strcmp(fields[i], "tkt_uuid") == 0 ) uuidCol = i;
-                    else if( strcmp(fields[i], "title") == 0 ) titleCol = i;
-                    else if( strcmp(fields[i], "comment") == 0 ) commentCol = i;
-                    else if( strcmp(fields[i], "status") == 0 ) statusCol = i;
-                }
-                isHeader = 0;
-            }else if( uuidCol >= 0 && uuidCol < nFields ){
-                /* SIZED FROM THE FIELDS, NOT A FIXED 8 KB STACK ARRAY.
-                **
-                ** This was `char buf[8192]` with `off += snprintf(buf + off,
-                ** sizeof(buf) - off, ...)`, and snprintf returns the length it
-                ** WOULD have written -- so a long ticket title drove off past
-                ** sizeof(buf), the next call wrote through an out-of-bounds
-                ** `buf + off`, and its size argument underflowed to ~SIZE_MAX.
-                ** Measured 2026-08-27: a ~9 KB title wrote 877 bytes past the
-                ** array and silently dropped the ticket comment from the
-                ** index; a 200 KB title killed `viki index` with SIGSEGV.
-                **
-                ** Clamping the offset would stop the overflow and keep the
-                ** silent 8 KB truncation, which index_ticket_changes()' own
-                ** comment calls "invisible and total". So: malloc from the
-                ** actual field lengths, the way that function already does. */
-                char *buf;
-                size_t nBuf = 64;
-                int off = 0;
-                int i;
-                char virtualPath[512];
-                for( i = 0; i < nFields; i++ ) unquote_fossil(fields[i]);
-                for( i = 0; i < nFields; i++ ) nBuf += strlen(fields[i]) + 16;
-                buf = malloc(nBuf);
-                if( !buf ){
-                    fprintf(stderr, "viki index: out of memory composing ticket %s -- skipped\n",
-                            fields[uuidCol]);
-                }else{
-                    off += snprintf(buf + off, nBuf - (size_t)off, "Ticket %s\n", fields[uuidCol]);
-                    if( statusCol >= 0 && statusCol < nFields && fields[statusCol][0] )
-                        off += snprintf(buf + off, nBuf - (size_t)off, "Status: %s\n", fields[statusCol]);
-                    if( titleCol >= 0 && titleCol < nFields && fields[titleCol][0] )
-                        off += snprintf(buf + off, nBuf - (size_t)off, "Title: %s\n", fields[titleCol]);
-                    if( commentCol >= 0 && commentCol < nFields && fields[commentCol][0] )
-                        snprintf(buf + off, nBuf - (size_t)off, "%s\n", fields[commentCol]);
-
-                    snprintf(virtualPath, sizeof(virtualPath), "ticket:%s", fields[uuidCol]);
-                    (*nItems)++;
-                    index_text_blob(db, virtualPath, buf, strlen(buf), 0, emb, modelId, nChunked);
-                    free(buf);
-                }
-            }
-
-            if( atEnd ) break;
+/* True if zName is declared as a column in zDdl, a CREATE TABLE statement.
+**
+** THE OBVIOUS TOOL FOR THIS IS pragma_table_info() AND IT CANNOT BE USED:
+** Fossil installs an SQLite authorizer, so in-process (libfossilsee) that
+** query fails with "not authorized" while the SAME query through `fossil
+** sql` succeeds. Introspecting via sqlite_master is allowed on both, which
+** is the only reason this parses DDL rather than asking SQLite directly.
+** Measured 2026-08-29 with a dlopen harness against libfossilsee.
+**
+** A column definition's name is always its FIRST token, so this walks the
+** top-level comma-separated segments between the outermost parentheses and
+** compares the leading identifier. Depth tracking matters for a type like
+** DECIMAL(10,2), whose comma is not a column separator. */
+static int ticket_has_col(const char *zDdl, const char *zName){
+    const char *p = strchr(zDdl, '(');
+    size_t nName = strlen(zName);
+    int depth;
+    if( !p ) return 0;
+    p++;
+    depth = 1;
+    while( *p ){
+        const char *id;
+        size_t nId = 0;
+        while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
+        id = p;
+        while( (*p>='a'&&*p<='z') || (*p>='A'&&*p<='Z') || (*p>='0'&&*p<='9') || *p=='_' ){ p++; nId++; }
+        if( nId==nName && strncmp(id, zName, nName)==0 ) return 1;
+        /* Skip to the next top-level comma. */
+        while( *p ){
+            if( *p=='(' ) depth++;
+            else if( *p==')' ){ depth--; if( depth==0 ) return 0; }
+            else if( *p==',' && depth==1 ){ p++; break; }
+            p++;
         }
     }
-    free(out);
-    return rcShow == 0;
+    return 0;
+}
+
+static int index_tickets(sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked){
+    static const char *zColSql =
+        "SELECT 'c ' || length(cast(coalesce(sql,'') AS BLOB))"
+        "    || char(10) || coalesce(sql,'')"
+        "  FROM sqlite_master WHERE type='table' AND name='ticket';"
+        "SELECT '" VIKI_FRAME_EOF "';";
+    char *zCols = NULL, *zOut;
+    char *zSql;
+    size_t nOut = 0;
+    FramedIter it;
+    FramedRec rec;
+
+    /* Step 1: which columns does this project's ticket table actually have?
+    ** Read the DDL rather than pragma_table_info() -- see ticket_has_col(). */
+    zOut = fossil_sql_framed(zColSql, &nOut);
+    if( !zOut ) return 0;
+    framed_init(&it, zOut, nOut);
+    /* Drain to the sentinel, do not stop at the first record: seenEof is set
+    ** when the iterator REACHES `#viki-eof`, so checking it after a single
+    ** framed_next() always reads 0 and threw every ticket away. */
+    while( framed_next(&it, &rec) ){
+        if( !zCols ) zCols = strdup(rec.zBody);
+    }
+    if( !it.seenEof ){ free(zOut); free(zCols); return 0; }
+    free(zOut);
+    if( !zCols ) return 0;
+
+    /* tkt_uuid is the identity of the row and the virtual path; without it
+    ** there is nothing to index and nothing to sweep against. */
+    if( !ticket_has_col(zCols, "tkt_uuid") ){ free(zCols); return 0; }
+
+    zSql = sqlite3_mprintf(
+        "SELECT tkt_uuid || ' ' || length(cast(body AS BLOB))"
+        "    || char(10) || body FROM ("
+        "  SELECT tkt_uuid, 'Ticket ' || tkt_uuid || char(10)"
+        "      %s %s %s AS body"
+        "    FROM ticket"
+        ") WHERE instr(cast(body AS BLOB), x'00') = 0"
+        " ORDER BY tkt_uuid;"
+        "SELECT '" VIKI_FRAME_EOF "';",
+        ticket_has_col(zCols, "status")
+          ? "|| CASE WHEN coalesce(status,'')  <> '' THEN 'Status: ' || status || char(10) ELSE '' END" : "",
+        ticket_has_col(zCols, "title")
+          ? "|| CASE WHEN coalesce(title,'')   <> '' THEN 'Title: '  || title  || char(10) ELSE '' END" : "",
+        ticket_has_col(zCols, "comment")
+          ? "|| CASE WHEN coalesce(comment,'') <> '' THEN comment || char(10) ELSE '' END" : "");
+    free(zCols);
+    if( !zSql ) return 0;
+
+    zOut = fossil_sql_framed(zSql, &nOut);
+    sqlite3_free(zSql);
+    if( !zOut ) return 0;
+
+    framed_init(&it, zOut, nOut);
+    while( framed_next(&it, &rec) ){
+        char virtualPath[512];
+        snprintf(virtualPath, sizeof(virtualPath), "ticket:%s", rec.zKey);
+        (*nItems)++;
+        index_text_blob(db, virtualPath, rec.zBody, rec.nBody, 0, emb, modelId, nChunked);
+    }
+    free(zOut);
+    return it.seenEof;
 }
 
 /* ---------------------------------------------------------------------
