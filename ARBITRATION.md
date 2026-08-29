@@ -100,11 +100,45 @@ that existed *only* on the subprocess path, because in-process `libfossilsee`
 passes an explicit length. **Two transports for the same reads, and the weaker
 one defines the wire format for both.**
 
-`fossil json` is built in and returns structured output. It answered
-`FOSSIL-1103` from the CLI in a first probe — an auth/user-context question, not
-absence — and **evaluating it is the highest-leverage thing available**, because
-if it works the entire hand-rolled framing goes away, and with it the file where
-seven of this session's defects lived.
+`fossil json` is built in and returns structured output.
+
+### MEASURED 2026-08-29, and it does NOT do what I hoped
+
+I wrote, an hour before testing it, that evaluating `fossil json` was "the
+highest-leverage thing available, because if it works the entire hand-rolled
+framing goes away". **That was wrong, and the measurement is the useful part.**
+
+What works, from the CLI, with `-R` and no checkout:
+
+| call | result |
+|---|---|
+| `json finfo --name P` | full history for one path: checkin, user, comment, state |
+| `json wiki list` | **bulk** — every page name in one call |
+| `json wiki get NAME` | one page **with content** |
+| `json artifact UUID` | one artifact |
+| `json timeline checkin` | paginated, `limit` defaults to 20 |
+| `json ticket` | **FOSSIL-1102, not implemented in Fossil** |
+
+**Three reasons it does not replace the framing protocol:**
+
+1. **Content is per-artifact.** `wiki list` is bulk but carries only names;
+   content comes from `wiki get`, one call per page. Wiki extraction would be
+   `1 + N` subprocesses where the framed SQL is **1**. That is precisely the
+   O(artifacts) cost the framing protocol exists to avoid, and on a repo with
+   500 wiki pages it is 501 process spawns against one.
+2. **Tickets are absent.** `json ticket` maps to `json_page_nyi`. So a
+   ticket-backed ledger cannot read through JSON at all.
+3. **`finfo` does not report deletions.** Measured: a file added, modified and
+   then `fossil rm`'d reports `added` and `modified` and **nothing for the
+   delete**. That is exactly the blind spot `viki when` was built to fix, and
+   the reason its probe mutates `AND ml.fid <> 0` — the mutation that makes
+   `when` behave like `finfo` and drops every deletion.
+
+**So the framing protocol stays.** It is solving bulk content read, which JSON
+does not solve. What was actually wrong with it was never SQL — it was having
+**two transports** and letting the weaker one define the wire format. The
+in-process path already carries lengths correctly; the subprocess path is where
+the NUL desync lived.
 
 ---
 
@@ -125,9 +159,24 @@ than "is provenance good":
 
 > How much of those 1,066 lines is the join, and how much is re-derived history?
 
-If it is mostly join, land it and thin it. If it is mostly history, the honest
-move is a much smaller command that shells to Fossil for the history and adds
-only the index column.
+**Partly answered by the JSON measurement above, and the answer is better for
+provenance than I expected.** Two things in it are genuinely viki's and are NOT
+available from Fossil's own surfaces:
+
+- **Deletions.** `fossil finfo` and `json finfo` both omit them. "This file was
+  removed" is the single most important thing a memory system can say about a
+  document it once indexed, and Fossil's file-history surface does not say it.
+- **The index join.** "This artifact changed, and here is whether it is in your
+  cache" is viki's question by construction.
+
+So provenance is not merely re-derived history. What it should NOT do is
+re-derive the parts Fossil does give — and the thinning target is anything in
+those 1,066 lines that duplicates `finfo`'s per-checkin fields rather than
+adding the deletion row or the index column.
+
+**Sequence:** this thinning is a rewrite, and the branch has already failed
+three review rounds. Land nothing from it until 2b is settled, because
+notes-as-tickets changes what `viki why` and `viki when` even need to do.
 
 ---
 
@@ -147,8 +196,10 @@ only the index column.
 
 ## 5. Open
 
-1. Does `fossil json` work from the CLI against a local repo, and does it cover
-   the nine classes? **Answer this first** — it sizes everything else.
+1. ~~Does `fossil json` work from the CLI?~~ **ANSWERED 2026-08-29 — yes, and
+   it does not help enough.** Per-artifact content, no tickets, no deletions in
+   `finfo`. See §2c. The framing protocol stays; the two-transport problem is
+   the real defect and `libfossilsee` is already its fix.
 2. Does a ticket-backed note survive `fossil` being absent at *read* time? The
    projection must still answer from the cache when the repo cannot be opened.
 3. Does supersession-as-ticket-change preserve `viki why`'s both-directions
