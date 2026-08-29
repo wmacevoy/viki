@@ -283,6 +283,41 @@ retrieval into BM25-only and took four m1 assertions to catch.
 `ports/c/retain.h` already exists and is CI-covered across three thread-local
 backends on four platforms. Nothing needs inventing.
 
+### 4a. The win, and it is a call site
+
+> *"`viki_note("message")` is the win — wherever you find it useful after
+> retaining a viki context."* — Warren
+
+One argument: the message. Compare today's entry point —
+
+    viki_cmd_capture(".", zText, zPlace, zType, zWho, zDue, zState, zChannel)
+
+— eight parameters, the first a *directory string*, every one of them plumbing
+the caller had to know about. That is why nothing but `viki.c` calls it.
+
+**`include/viki.h` is the proposed header** and it compiles clean against the
+real `../retain-recall/ports/c/retain.h`. The shape was then run rather than
+asserted — a stub `viki_note()` behind the real macros, exercising the four
+properties that matter:
+
+```
+1. no tribe retained -> status=1 errmsg="no tribe retained"   (loud, not dropped)
+2. viki_note() four frames down, through a callback, no parameter    [home]
+3. nested RETAIN_BEGIN on a SECOND tribe                             [work]
+4. outer tribe restored on scope exit                                [home]
+5. after scope -> status=1 again
+   home=3 notes, work=1 notes
+```
+
+Line 1 is the contract that matters: a memory system that quietly drops what it
+was told is worse than one that is absent, because the caller believes it was
+remembered. Line 3 is the one `getenv` cannot do **at all** — two tribes live in
+one process, which SCOPES §4 requires and iOS makes non-negotiable.
+
+This proves the *pattern*, not viki: the stub is ten lines and the real
+implementation is the work. What it settles is that the ergonomics claim is
+real and the macros behave under nesting and early scope exit.
+
 ---
 
 ## 5. What the correction deletes
