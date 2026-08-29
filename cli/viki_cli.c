@@ -472,6 +472,67 @@ static int ledRow(void *pApp, const VikiTaskRow *r){
     return 0;
 }
 
+
+/* ---- JSON out -------------------------------------------------------
+** ONE escaper, used by every JSON surface here. The predecessor grew a second
+** private copy and the two diverged: an unescaped quote in a note made
+** `coverage --json` invalid, which made the morning brief report "nothing at
+** all -- no captures, no channels" while three live channels sat in the
+** store. A total coverage blackout, exit 0, no warning. */
+static void jsonStr(FILE *out, const char *z){
+    fputc('"', out);
+    for(; z && *z; z++){
+        unsigned char c = (unsigned char)*z;
+        switch(c){
+            case '"':  fputs("\\\"", out); break;
+            case '\\': fputs("\\\\", out); break;
+            case '\n': fputs("\\n",  out); break;
+            case '\r': fputs("\\r",  out); break;
+            case '\t': fputs("\\t",  out); break;
+            default:
+                if( c < 0x20 ) fprintf(out, "\\u%04x", c);
+                else           fputc(c, out);
+        }
+    }
+    fputc('"', out);
+}
+
+/* THE BRIEF MUST NOT PARSE A DISPLAY FORMAT. It did, by column offset, and the
+** format moved under it twice in one day: a note carrying @place made the
+** continuation line two tokens instead of one, and every one of them was
+** filed under "an agent is carrying these". This is why --json exists. */
+struct ledJson { FILE *out; int n; };
+static int ledJsonRow(void *pApp, const VikiTaskRow *r){
+    struct ledJson *c = (struct ledJson*)pApp;
+    fprintf(c->out, "%s\n  {", c->n ? "," : "");
+    fputs("\"id\":", c->out);    jsonStr(c->out, r->zId);
+    fputs(",\"due\":", c->out);  jsonStr(c->out, r->zDue);
+    fputs(",\"who\":", c->out);  jsonStr(c->out, r->zWho);
+    fputs(",\"place\":", c->out);jsonStr(c->out, r->zPlace);
+    fputs(",\"state\":", c->out);jsonStr(c->out, r->zState);
+    fputs(",\"ts\":", c->out);   jsonStr(c->out, r->zTs);
+    fputs(",\"text\":", c->out); jsonStr(c->out, r->zText);
+    fprintf(c->out, ",\"mine\":%s}", r->bMine ? "true" : "false");
+    c->n++;
+    return 0;
+}
+
+/* ---- coverage: which channels fed this store, and when last -----------
+** A QUERY WITH NO JUDGMENT IN IT. No staleness threshold, no advice: the
+** moment it needs a number like "12 hours" it is policy, and policy lives in
+** assistant/. SCOPES 3. */
+struct covJson { FILE *out; int n; };
+static int covRow(void *pApp, int nCol, const char *const *az){
+    struct covJson *c = (struct covJson*)pApp;
+    if( nCol < 3 ) return 0;
+    fprintf(c->out, "%s\n  {", c->n ? "," : "");
+    fputs("\"channel\":", c->out); jsonStr(c->out, az[0] ? az[0] : "");
+    fputs(",\"last_seen\":", c->out); jsonStr(c->out, az[1] ? az[1] : "");
+    fprintf(c->out, ",\"n\":%s}", az[2] ? az[2] : "0");
+    c->n++;
+    return 0;
+}
+
 /* ---- the verbs, executed against a retained store --------------------- */
 static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
     int n = 0;
@@ -521,8 +582,19 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         return 0;
     }
     if( !strcmp(argv[0],"ledger") ){
-        struct ledPr c; const char *zMe = 0; int i;
-        for(i=1;i+1<argc;i++) if(!strcmp(argv[i],"--me")) zMe = argv[++i];
+        struct ledPr c; const char *zMe = 0; int i, bJson = 0;
+        for(i=1;i<argc;i++){
+            if(!strcmp(argv[i],"--json")) bJson = 1;
+            else if(!strcmp(argv[i],"--me") && i+1<argc) zMe = argv[++i];
+        }
+        if( bJson ){
+            struct ledJson j; memset(&j,0,sizeof j); j.out = out;
+            fputs("[", out);
+            if( viki_ledger(zMe, ledJsonRow, &j)!=VIKI_OK ){
+                fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+            fputs(j.n ? "\n]\n" : "]\n", out);
+            return 0;
+        }
         memset(&c, 0, sizeof(c)); c.out = out;
         fprintf(out, "%-8s %-12s %-12s %s\n", "RISK", "DUE", "WHO", "WHAT");
         if( viki_ledger(zMe, ledRow, &c)!=VIKI_OK ){
@@ -534,6 +606,33 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
                      "  (%d mine, %d held by someone else)\n",
                 c.nOver, c.nToday, c.nUndated, c.nMine, c.nTheirs);
         fprintf(out, "       live tasks only -- anything superseded has left.\n");
+        return 0;
+    }
+    if( !strcmp(argv[0],"coverage") ){
+        struct covJson j; memset(&j,0,sizeof j); j.out = out;
+        fputs("[", out);
+        if( viki_sql(
+              "SELECT coalesce(nullif(json_extract(body,'$.channel'),''),'(none)'),"
+              "       max(ts), count(*)"
+              "  FROM viki_assert WHERE kind='task'"
+              " GROUP BY 1 ORDER BY 1", covRow, &j)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        fputs(j.n ? "\n]\n" : "]\n", out);
+        return 0;
+    }
+    if( !strcmp(argv[0],"pending") ){
+        /* A RAW CAPTURE NEVER STRUCTURED: a note nothing supersedes, that
+        ** supersedes nothing itself. The second half is what excludes an
+        ** ARRIVAL -- those supersede a task and are already accounted for. */
+        struct covJson j; memset(&j,0,sizeof j); j.out = out;
+        fputs("[", out);
+        if( viki_sql(
+              "SELECT a.id, a.ts, 1 FROM viki_assert a"
+              " WHERE a.kind='note' AND a.supersedes IS NULL"
+              "   AND NOT EXISTS (SELECT 1 FROM viki_assert s WHERE s.supersedes=a.id)"
+              " ORDER BY a.ts", covRow, &j)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        fputs(j.n ? "\n]\n" : "]\n", out);
         return 0;
     }
     if( !strcmp(argv[0],"ask") && argc>=2 ){

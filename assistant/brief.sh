@@ -1,285 +1,184 @@
 #!/bin/sh
 # brief.sh -- the morning brief.  NOT VIKI.  See assistant/README.md.
 #
-# Composes viki's primitives into a decision. Everything judgmental lives here
-# and nowhere in src/: what counts as stale, what is worth waking someone about,
-# what to ask. viki supplies facts; this file has the opinions.
+# Composes viki-core's primitives into a decision. Everything judgmental lives
+# here and nowhere in core/: what counts as stale, what is worth waking someone
+# about, what to ask. core supplies facts; this file has the opinions.
+#
+# PORTED TO viki-core 2026-08-29. It used to call `viki promises`, `viki
+# coverage` and `viki structure --pending` on the Fossil-backed binary in src/.
+# Warren: "core is the derivable set --- fossil-see is a dead end." Now it
+# calls `viki ledger --json`, `viki coverage` and `viki pending` on
+# core/build/viki.
+#
+# IT CONSUMES JSON AND NEVER A DISPLAY FORMAT. The predecessor parsed the
+# ledger table by column offset and the format moved under it twice in one
+# day -- a note carrying @place made the continuation line two tokens instead
+# of one, and every one of them was filed under "an agent is carrying these",
+# inventing obligations held by other people. `--json` exists because of that.
 #
 # THE GOOD MORNING IS SAID OUT LOUD. A day with nothing at risk prints an
-# explicit "nothing due" -- silence is indistinguishable from a broken cron job,
-# and a brief that is sometimes absent is one nobody comes to rely on.
+# explicit "nothing due" -- silence is indistinguishable from a broken cron
+# job, and a brief that is sometimes absent is one nobody comes to rely on.
 #
 # QUESTIONS ARE BATCHED HERE AND NEVER PUSHED. An assistant that interrupts to
-# resolve its own uncertainty has taken the problem and handed it back
-# (VIKIVERSE_V1 Q6).
+# resolve its own uncertainty has taken the problem and handed it back.
 #
-# Usage: sh assistant/brief.sh [--me NAME] [--horizon 2d] [--stale-after 1]
+# NO BARE `test && printf` AS A LAST STATEMENT, EVER -- `set -e` is on, a
+# false test short-circuits to status 1, and the whole script then reports
+# itself FAILED after printing perfectly good output. That shipped, and
+# ~/.viki/brief/2026-08-29.txt carries the false banner.
+#
+# Usage: sh assistant/brief.sh [--me NAME] [--horizon 7] [--stale-after 1]
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-V="${VIKI_BIN:-$ROOT/build/dist/viki}"
+V="${VIKI_BIN:-$ROOT/core/build/viki}"
+STORE="${VIKI_STORE:-$HOME/.viki/personal/viki.db}"
+KEYFILE="${VIKI_KEYFILE:-$HOME/.viki/personal.key}"
 ME="${VIKI_ME:-$(id -un)}"
-HORIZON=2d
-STALE_DAYS=1          # POLICY, not a fact. A channel unread for this long is
-                      # worth a sign-in. Warren's day decides the number.
+HORIZON=7             # DAYS. Policy: how far ahead is worth worrying about.
+STALE_DAYS=2          # POLICY, not a fact. Warren's day decides the number.
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --me)          ME="$2"; shift 2 ;;
     --horizon)     HORIZON="$2"; shift 2 ;;
     --stale-after) STALE_DAYS="$2"; shift 2 ;;
+    --store)       STORE="$2"; shift 2 ;;
+    --keyfile)     KEYFILE="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
-[ -x "$V" ] || { echo "no viki at $V"; exit 2; }
+
+[ -x "$V" ]     || { echo "no viki-core at $V  (run: sh core/build.sh)"; exit 2; }
+[ -f "$STORE" ] || { echo "no diary at $STORE"; exit 2; }
+
+# THE KEY IS OPTIONAL AND ITS ABSENCE IS NOT SILENT. A plaintext diary is a
+# legitimate choice; guessing which one this is, is not.
+if [ -f "$KEYFILE" ]; then  set -- --keyfile "$KEYFILE" --store "$STORE"
+else                        set -- --plaintext --store "$STORE"
+fi
 
 TODAY=$(date -u +%Y-%m-%d)
 printf 'MORNING BRIEF  %s\n' "$TODAY"
 
 # ---- 1. what is at risk ------------------------------------------------
 printf '\nAT RISK\n'
-RISK=$("$V" promises --me "$ME" --horizon "$HORIZON" 2>/dev/null || true)
-if printf '%s' "$RISK" | grep -qE '^(OVERDUE|TODAY|         [0-9])'; then
-  # KEEP EVERY PROMISE ROW, DROP THE SCAFFOLDING.
-  #
-  # This used to be `grep -vE '^(       |$)'` -- drop lines starting with seven
-  # spaces -- which was written for the note-id continuation line and silently
-  # ate every promise that was NOT already overdue. viki_note.c:379 prints
-  # `%-8s %-10s %-12s %s`, so a row with no risk marker begins with NINE spaces
-  # and matched the filter. Measured 2026-08-26: a promise due in three days
-  # vanished from AT RISK entirely, leaving only "0 overdue, 0 due today,
-  # 1 later".
-  #
-  # That inverts what section 2.4 asks for. A brief that lists only what is
-  # ALREADY overdue warns after the miss; the whole point is the warning
-  # BEFORE it.
-  #
-  # So filter by STRUCTURE, not by indentation: a promise row has several
-  # fields, the continuation line is one indented token (the note id), and the
-  # footer lines are the ledger describing its own coverage -- which the brief
-  # states in its own words further down.
-  # YOURS AND THEIRS ARE SEPARATED, which is 2.2's second acceptance clause and
-  # was the last one unmet. The ledger already distinguishes parties -- it
-  # prints a WHO column -- so this is presentation, not new data. But it is
-  # presentation that changes what the reader DOES: "call the vet" and "claude
-  # is watching for the invoice" are the same row shape and completely
-  # different obligations, and one list made you re-read the WHO column on
-  # every line to find the ones that are actually yours.
-  #
-  # SPLIT BY COLUMN OFFSET, which is stable here and only here. viki_note.c
-  # prints the ledger as `%-8s %-10s %-12s %s`, so WHO is always characters
-  # 21-32 whatever the risk marker says. This is the one place a display
-  # format may be parsed by position, and it is allowed because the same
-  # repository owns both ends -- m1 already parses the ask hit line this way.
-  # If that format ever changes, this breaks loudly rather than silently
-  # mis-attributing a promise.
-  #
-  # THE TEST IS THE LITERAL "mine", NOT A COMPARISON AGAINST --me.
-  #
-  # viki_note.c has already decided this: it renders the caller own rows -- and
-  # unowned ones, since a commitment nobody claimed is one you are still
-  # carrying -- as the word "mine", and everything else as the holder name. So
-  # re-deriving ownership here would be a second copy of that rule, and the
-  # first version of this code did exactly that and got it backwards: it
-  # compared WHO against "warren" while viki was printing "mine", so every row
-  # landed in THEIRS including the ones that were yours.
-  # FILTER BY STRUCTURE, NOT BY INDENTATION -- the second attempt at this.
-  #
-  # The previous filter dropped "an indented line holding ONE token", because
-  # the continuation line was believed to be just the note id. It is not:
-  # viki_note.c:437 appends "  @<place>" when the note has one, so a note
-  # carrying --place produces a TWO-token continuation line that sails through
-  # and is then column-split like a real row. Every one of them landed in
-  # THEIRS, because characters 21-32 of a note id are not the word "mine".
-  #
-  # The summary line leaked the same way: it starts at column 0, so no
-  # indentation filter ever saw it, and "day, 5 later" is not "mine" either.
-  #
-  # Measured 2026-08-29 on a store of five real notes, all with places: the
-  # brief showed THREE phantom rows and a summary line under "an agent is
-  # carrying these", while the three tasks they belonged to sat in YOURS. The
-  # repo's own dev notes never caught it because none of them set a place.
-  #
-  # This is the failure direction the ledger exists to prevent. A brief that
-  # invents obligations held by other people is worse than one that omits
-  # them: P4 in build/promise-probe.sh guards the same property from the other
-  # side. So match what viki actually prints -- a note id is
-  # YYYYMMDD-HHMMSS-NNNNNN and nothing else in this output looks like it.
-  ROWS=$(printf '%s\n' "$RISK" | sed -n '3,$p' \
-    | grep -vE '^[[:space:]]*$' \
-    | grep -vE '^[[:space:]]+[0-9]{8}-[0-9]{6}-[0-9]+([[:space:]]|$)' \
-    | grep -vE '^[[:space:]]*[0-9]+ overdue,' \
-    | grep -vE '^[[:space:]]+(undated promises|this ledger sees)')
-  YOURS=$(printf '%s\n' "$ROWS" | awk \
-    '{ who = substr($0, 21, 12); gsub(/^ +| +$/, "", who); if (who == "" || who == "mine") print }')
-  THEIRS=$(printf '%s\n' "$ROWS" | awk \
-    '{ who = substr($0, 21, 12); gsub(/^ +| +$/, "", who); if (who != "" && who != "mine") print }')
-
-  if [ -n "$YOURS" ]; then
-    printf '  YOURS -- what you owe\n'
-    printf '%s\n' "$YOURS" | sed 's/^/  /'
-  fi
-  if [ -n "$THEIRS" ]; then
-    [ -n "$YOURS" ] && printf '\n'
-    printf '  THEIRS -- an agent is carrying these. A broken agent promise\n'
-    printf '            costs you exactly what a broken one of your own does.\n'
-    printf '%s\n' "$THEIRS" | sed 's/^/  /'
-  fi
-  # Never silently print nothing: if the split matched no row at all, the
-  # format moved, and showing the raw rows beats showing an empty section.
-  if [ -z "$YOURS" ] && [ -z "$THEIRS" ]; then
-    printf '  (could not tell yours from theirs -- showing all)\n'
-    printf '%s\n' "$ROWS"
-  fi
-else
-  # The good morning, stated. This branch is the one that earns trust.
-  printf '  nothing due in the next %s.\n' "$HORIZON"
-fi
-
-# ---- 2. what I can and cannot see --------------------------------------
-#
-# Consumes `viki coverage --json`, not the human table. The first version awk'd
-# the table and split "captured here" into two fields -- which is what --json is
-# for, and a good argument for never parsing a display format.
-printf '\nWHAT I CAN SEE\n'
-"$V" coverage --json 2>/dev/null | python3 -c '
+"$V" "$@" ledger --me "$ME" --json 2>/dev/null | python3 -c '
 import json, sys, datetime
-# STALENESS IS POLICY AND IT LIVES HERE. viki reports last-seen times and
-# deliberately no thresholds; how long is too long is a judgment about
-# the users day, not a fact about the corpus.
-stale_days = int(sys.argv[1])
+me, horizon = sys.argv[1], int(sys.argv[2])
 # "COULD NOT READ IT" AND "THERE IS NOTHING" MUST NOT PRINT THE SAME.
-#
-# This was `except Exception: rows = []`, so a malformed line from viki --
-# one ordinary capture containing a quote was enough -- reported as
-# "nothing at all, no captures, no channels" while three live channels
-# including a declared one sat in the cache. Exit 0, no warning, total
-# coverage blackout. That is the exact lie 2.5 exists to prevent, and the
-# brief is the surface where it does the most damage.
+# One ordinary note containing a quote was once enough to make this report
+# "nothing at all" while the store was full. Exit 0, no warning.
 try:
     rows = json.load(sys.stdin)
 except Exception as e:
-    print("  CANNOT READ COVERAGE -- output from viki did not parse: %s" % e)
-    print("  This is NOT the same as having no channels. Do not read the")
-    print("  absence of a channel below as evidence it is quiet.")
+    print("  CANNOT READ THE LEDGER -- core output did not parse: %s" % e)
+    print("  This is NOT the same as having nothing due.")
+    sys.exit(0)
+today = datetime.date.today().isoformat()
+cut   = (datetime.date.today() + datetime.timedelta(days=horizon)).isoformat()
+
+def risk(due):
+    if not due:  return ""
+    if due <  today: return "OVERDUE"
+    if due == today: return "TODAY"
+    return ""
+
+# THE HORIZON IS APPLIED HERE, not in core. core returns every live task and
+# holds no opinion about which ones matter this morning; "the next seven days"
+# is a judgment about the day being planned.
+soon = [r for r in rows if r["due"] and r["due"] <= cut]
+mine   = [r for r in soon if r["mine"]]
+theirs = [r for r in soon if not r["mine"]]
+
+def show(rs):
+    for r in rs:
+        print("    %-8s %-11s %s" % (risk(r["due"]), r["due"], r["text"]))
+        if r["place"]:
+            print("             %s" % ("@" + r["place"]))
+
+if mine:
+    print("  YOURS -- what you owe")
+    show(mine)
+if theirs:
+    if mine: print("")
+    print("  THEIRS -- someone else is carrying these. A broken promise of")
+    print("            theirs costs you exactly what one of your own does.")
+    show(theirs)
+if not mine and not theirs:
+    # The good morning, stated. This branch is the one that earns trust.
+    print("  nothing due in the next %d day(s)." % horizon)
+
+later   = len(rows) - len(soon)
+undated = len([r for r in rows if not r["due"]])
+print("\n  %d overdue, %d today, %d within %dd, %d beyond, %d undated"
+      % (len([r for r in soon if r["due"] < today]),
+         len([r for r in soon if r["due"] == today]),
+         len(soon), horizon, later - undated, undated))
+' "$ME" "$HORIZON"
+
+# ---- 2. what I can and cannot see --------------------------------------
+printf '\nWHAT I CAN SEE\n'
+"$V" "$@" coverage 2>/dev/null | python3 -c '
+import json, sys, datetime
+stale_days = int(sys.argv[1])
+try:
+    rows = json.load(sys.stdin)
+except Exception as e:
+    print("  CANNOT READ COVERAGE -- core output did not parse: %s" % e)
+    print("  Do not read the absence of a channel below as evidence it is quiet.")
     sys.exit(0)
 if not rows:
-    print("  nothing at all -- no captures, no channels.")
+    print("  nothing at all -- no channels have fed this diary.")
     sys.exit(0)
-now = datetime.datetime.now(datetime.timezone.utc)
-cut = (now - datetime.timedelta(days=stale_days)).strftime("%Y-%m-%d")
+now   = datetime.datetime.now(datetime.timezone.utc)
 today = now.strftime("%Y-%m-%d")
-stale = []
-any_stale = False
-# THE SYNC ROW IS A DIFFERENT KIND OF FACT and gets a different judgment.
-# viki reports WHEN this device last pulled and refuses to say whether that is
-# too long; SS 2.9 requires the message "sync is a week stale" to be sayable,
-# and this is where the week comes from. A number in src/ would be the scope
-# violation SCOPES SS 3 exists to prevent.
-sync_row = None
-keep = []
+cut   = (now - datetime.timedelta(days=stale_days)).strftime("%Y-%m-%d")
+stale, any_stale = [], False
 for r in rows:
-    if r.get("kind") == "sync":
-        sync_row = r
-    else:
-        keep.append(r)
-rows = keep
-
-for r in rows:
-    src, seen = r["source"], (r["last_seen"] or "")[:10]
-    # A CHANNEL viki INFERRED IS NOT A CHANNEL TO SIGN IN TO.
-    #
-    # `declared` false means the name was guessed from a "[name] " prefix in
-    # note text, which cannot be told from a bracket a person typed --
-    # `viki capture "[TODO] fix the gate latch"` invents one. viki reports the
-    # distinction and declines to judge it (coverage has no thresholds); the
-    # judgment is here, and it is: an inferred channel is shown, because
-    # hiding it would be its own coverage lie, but it is never put on the
-    # SIGN IN list. Sending someone to log in to "TODO" is how a brief stops
-    # being believed.
-    declared = r.get("declared", True)
+    src, seen = r["channel"], (r["last_seen"] or "")[:10]
     is_stale = bool(seen) and seen < cut
     when = ("today " + (r["last_seen"][11:16] if len(r["last_seen"]) > 16 else "")) \
            if seen == today else (seen or "never")
-    print("  %-16s %-14s %3d note(s)%s%s" % (
-        src, when, r["notes"],
-        "   STALE" if is_stale else "",
-        "" if declared else "   (inferred, not a real channel)"))
+    print("  %-16s %-14s %3d item(s)%s" % (src, when, r["n"], "   STALE" if is_stale else ""))
     if is_stale:
         any_stale = True
-    if is_stale and src != "captured here" and declared:
-        stale.append(src)
-# TWO DIFFERENT QUESTIONS, AND THEY WERE ANSWERED WITH ONE LINE.
-#
-# `stale` is the SIGN-IN list, and "captured here" is deliberately excluded
-# from it -- you cannot log in to your own captures. But the closing line was
-# chosen from that same list, so a run where the only stale row was
-# "captured here" printed "all channels read today." DIRECTLY UNDER a row
-# marked STALE. Measured 2026-08-29 on this repo.
-#
-# Contradicting yourself on screen is worse than either message alone: it
-# teaches the reader that the summary line is decoration.
-# SYNC_STALE_DAYS is a judgment about the week Warren keeps, not a fact about
-# a corpus. Seven, because that is the interval SS 2.9 acceptance text names.
-SYNC_STALE_DAYS = 7
-if sync_row is not None:
-    ls = (sync_row.get("last_seen") or "")[:10]
-    if not ls:
-        print("  (sync)           NEVER pulled from a hub -- if this tribe has one,")
-        print("                   everything above is only what THIS device wrote.")
-    else:
-        cutoff = (now - datetime.timedelta(days=SYNC_STALE_DAYS)).strftime("%Y-%m-%d")
-        if ls < cutoff:
-            print("  (sync)           last pull %s -- MORE THAN %d DAYS AGO." % (ls, SYNC_STALE_DAYS))
-            print("                   Peers may have written things this device cannot see:")
-            print("                   viki cache pull")
-        else:
-            print("  (sync)           last pull %s" % ls)
-
+        # "(none)" is not a channel you can log in to. Sending someone to sign
+        # in to a placeholder is how a brief stops being believed.
+        if src != "(none)":
+            stale.append(src)
 if stale:
-    # The sign-in round as a BOUNDED task -- a list that shrinks on a good day,
-    # rather than "go check everything".
     print("\n  SIGN IN: " + ", ".join(stale))
     print("  Five minutes now buys the rest of the day.")
 elif any_stale:
-    # Stale, but nothing you can DO about it by signing in. Name it rather than
-    # rounding it to "all read".
+    # Stale, but nothing to DO about it. Name that rather than rounding it to
+    # "all read" -- the predecessor printed "all channels read today" directly
+    # under a row marked STALE, which teaches the reader the summary is
+    # decoration.
     print("\n  Nothing to sign in to, but not everything is current --")
     print("  the rows marked STALE above have not been added to.")
 else:
-    print("\n  all channels read today.")
+    print("\n  all channels current.")
 ' "$STALE_DAYS"
-printf '  Anything not opened in this browser is not seen at all.\n'
 
 # ---- 3. what I am unsure about -----------------------------------------
-# `structure --pending` prints "viki structure: N capture(s) ..." on line 1;
-# the first version grepped a leading number and picked up a note ID instead.
-PENDING=$("$V" structure --pending 2>/dev/null | sed -n '1s/.*: *\([0-9][0-9]*\).*/\1/p' || true)
-UNDATED=$("$V" promises --me "$ME" --all 2>/dev/null | grep -c '(no due)' || true)
-# NO BARE `test && printf` AS THE LAST STATEMENT, EVER -- `set -e` IS ON.
-#
-# This block used to end with `[ "${PENDING:-0}" -gt 0 ] && printf ...`. On any
-# morning with nothing pending that is `[ 0 -gt 0 ] && ...`, which short-
-# circuits to exit status 1, and `set -e` then makes 1 the exit status of the
-# whole script -- AFTER every line has already printed correctly.
-#
-# schedule-brief.sh reads that status and stamps
-# "*** THE BRIEF FAILED (exit 1). The lines above are all there is."
-# onto the bottom of a brief that is completely fine. Measured on Warren's own
-# machine 2026-08-29: ~/.viki/brief/2026-08-29.txt, written by launchd at
-# 06:30, carries that banner under a correct brief.
-#
-# That is worse than a plain crash. This file's whole argument is that silence
-# and failure must never be confusable, and a false failure banner every single
-# morning teaches the reader to skip the banner -- which is exactly how a real
-# failed run gets ignored. Use `if`, so the status of a test is never the
-# status of the script.
+UNDATED=$("$V" "$@" ledger --me "$ME" --json 2>/dev/null \
+          | python3 -c 'import json,sys
+try: print(len([r for r in json.load(sys.stdin) if not r["due"]]))
+except Exception: print(0)')
+PENDING=$("$V" "$@" pending 2>/dev/null \
+          | python3 -c 'import json,sys
+try: print(len(json.load(sys.stdin)))
+except Exception: print(0)')
+
 if [ "${PENDING:-0}" -gt 0 ] || [ "${UNDATED:-0}" -gt 0 ]; then
   printf '\nQUESTIONS\n'
   if [ "${UNDATED:-0}" -gt 0 ]; then
-    printf '  %s promise(s) have no due date. Are they promises, or notes?\n' "$UNDATED"
+    printf '  %s task(s) have no due date. Are they promises, or notes?\n' "$UNDATED"
   fi
   if [ "${PENDING:-0}" -gt 0 ]; then
-    printf '  %s capture(s) not yet structured:  viki structure --pending\n' "$PENDING"
+    printf '  %s capture(s) never structured:  viki ledger, then viki task ...\n' "$PENDING"
   fi
 else
   printf '\nNo questions.\n'

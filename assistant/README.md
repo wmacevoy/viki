@@ -12,12 +12,23 @@ was `d2l.coloradomesa.edu` in viki's manifest (see `edge/chrome/sites/`).
 
 **viki answers questions. It does not decide anything.**
 
-| viki (a query) | the assistant (a decision) |
+| viki-core (a query) | the assistant (a decision) |
 |---|---|
-| `viki promises` — live tasks, ordered by due | *which* of those is worth waking someone about |
-| `viki coverage` — sources and last-seen times | what counts as **stale**, and whether to say so |
-| `viki why` — the supersession chain | whether the chain means the work is finished |
-| `viki ask` / `grep` / `muse` — retrieval | what the results mean |
+| `viki ledger --json` — live tasks, ordered by due | *which* of those is worth waking someone about, and **how far ahead counts** — the horizon lives here, not in core |
+| `viki coverage` — channels and last-seen times | what counts as **stale**, and whether to say so |
+| `viki pending` — captures never structured | whether that is a backlog or just noise |
+| `viki ask` — retrieval | what the results mean |
+
+**Ported to viki-core 2026-08-29.** It called `viki promises` / `viki coverage`
+/ `viki structure --pending` on the Fossil-backed binary in `src/` until
+Warren settled the direction: *"core is the derivable set --- fossil-see is a
+dead end."* Two properties came out of that port and both are load-bearing:
+
+- **It consumes JSON, never a display format.** The old one parsed the ledger
+  table by column offset, and the format moved under it twice in one day.
+- **`--horizon` is applied in this file.** `viki ledger` returns every live
+  task and holds no opinion about which matter this morning. That is the
+  clearest example of the line this document is about.
 
 The test that catches it: **can viki compute this without an opinion?**
 `coverage` prints last-seen times and no thresholds — deliberately. The moment
