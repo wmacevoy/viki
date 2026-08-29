@@ -398,19 +398,41 @@ by the first real read** rather than by `PRAGMA key`, which succeeds
 regardless because it only sets the cipher context. Reporting that plainly
 beats letting schema creation fail with something that reads like corruption.
 
-### And this is where `viki run` finally pays
+### What `viki run` is actually for — third answer, and this one is not speed
 
-Earlier the honest measurement was that a warm context saves ~0.5 ms a call on
-a plaintext store — less than the process spawn. On a **passphrase** diary:
+I have now argued the speed case twice and been wrong twice, in opposite
+directions. The measurements, all real:
 
 ```
-12 invocations, each keying itself      1.35 s
-12 invocations through ONE keyed context 0.16 s     8.4x
+plaintext store          0.16 s -> 0.13 s over 60 calls   (~0.5 ms/call)
+raw x'...' key           5.99 ms per open
+passphrase               345.93 ms per open   (12 calls: 1.35 s -> 0.16 s)
 ```
 
-The parent pays PBKDF2 once. The child **never sees a key at all** (K7) — it
-speaks to a unix socket in a 0700 directory, which is why the transport is
-that and not a loopback port.
+**A raw key is the normal case** (Warren, 2026-08-29): *"the kdf cost is not
+there usually — raw key — but the secret retention and api guarantee is."* So
+the 8.4× is real and atypical, and citing it as the justification is the same
+mistake as citing "fast fork" was. The two reasons that hold in **all three**
+rows:
+
+**Secret retention.** With per-invocation keying, the key file is read N times,
+the key material exists in N processes, and each of those is a place it can be
+read out of. With `viki run` it is read **once**, lives in **one** process, and
+a child has no path to it at all — K7 asserts the child sees no key and still
+writes. That reduction does not depend on the key being expensive.
+
+**API guarantee.** One context means one connection, one transaction domain,
+and **one set of retained things**. Without it every invocation starts with
+nothing retained: no embedder, no identity, no listeners — so a script cannot
+have hybrid retrieval, or signed writes, or observability, at all. With it the
+parent retains them once and every child inherits them through the socket.
+That is not an optimisation; it is the difference between a script being able
+to use those features and not.
+
+**Not yet wired:** the CLI retains only the store. Retaining a `VikiEmbed` and
+a `VikiIdentity` in the `viki run` parent — so children get hybrid retrieval
+and signed writes without ever holding a model or a key — is the concrete form
+of the API guarantee, and it is the next thing worth building here.
 
 ### `viki run` — and the obvious justification is wrong
 
