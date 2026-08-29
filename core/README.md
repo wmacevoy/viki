@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **94 passed, 0 failed** (11 constraint + 83 behaviour).
+`sh core/test/core-probe.sh` → **97 passed, 0 failed** (11 constraint + 86 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -554,6 +554,28 @@ Three decisions inside it, each with an assertion:
 B4b is the control worth naming: the indexed range must hold the description
 and **not** the coefficients. Without it, B4 would pass just as happily over a
 range full of binary that happened to contain the query's letters.
+
+### And this is how images arrive
+
+An image is the same thing: the payload is the PNG, the text is a caption or
+OCR. Nothing about it is a special case.
+
+**The consequence worth being explicit about** is why the description goes
+through the *ordinary* chunk path rather than a side table: it lands in
+`viki_chunk_text`, so `viki_fts` indexes it, so **the primitive legs find it**.
+A photograph is findable by a keyword query **with no embedder loaded at all**
+— which is the state a phone, a fresh clone, or any degraded run is actually
+in.
+
+```
+B7   an image blob is found by the KEYWORD leg, no embedder
+B7b  CONTROL: ...and that search really was degraded
+B7c  CONTROL: the PAYLOAD is not searchable, only the description
+```
+
+B7b matters because without it B7 would pass just as well with an embedder
+quietly retained, and would then be a claim about vectors rather than about
+keywords. B7c is the other edge: binary must never reach the index.
 
 ---
 

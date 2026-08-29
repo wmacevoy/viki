@@ -30,14 +30,19 @@ none "C5 no threading primitives of core's own"       'pthread_|thrd_|mtx_'
 #             VikiStore, and retain's stacks are thread-local, so a store is
 #             already per-thread; a shared registry would be the only piece
 #             disagreeing about that.
+#   g_pBlobHold  the one live statement whose blob pointer viki_blob_get()
+#             handed back. sqlite3_column_blob() owns that memory until its
+#             statement is stepped, so returning a BORROWED pointer -- which
+#             is the whole point, for a 23 MB model nobody wants to copy --
+#             requires keeping exactly one alive, per thread, like the store.
 #
 # Anything ELSE going thread-local is core rolling its own context mechanism
 # instead of using retain, which is what C5 exists to prevent. The list is
 # explicit rather than a pattern so adding a third requires saying why.
 tls=$(grep -nE '_Thread_local|VIKI_TLS' $SRC | grep -v 'define VIKI_TLS' \
-      | grep -vE 'g_err|g_pWatch' || true)
-[ -z "$tls" ] && ok "C5b thread-local state is exactly g_err and g_pWatch" \
-               || bad "C5b core grew a third thread-local" "$tls"
+      | grep -vE 'g_err|g_pWatch|g_pBlobHold' || true)
+[ -z "$tls" ] && ok "C5b thread-local state is exactly the three named above" \
+               || bad "C5b core grew an unnamed thread-local" "$tls"
 # C6 is the positive control for C1-C5: if the grep itself were broken, every
 # one of them would pass against any file at all.
 if grep -qE 'sqlite3_open|sqlite3_prepare' $SRC; then

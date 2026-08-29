@@ -455,14 +455,51 @@ int main(void){
             check(sqlN("SELECT max(length(body)) FROM viki_assert") < 512,
                   "B5 the payload is NOT in the assertion row", "the bytes are in viki_assert");
 
+            /* AN IMAGE IS THE SAME THING, and this is why it matters that
+            ** the description goes through the ORDINARY chunk path rather
+            ** than a side table: it lands in viki_chunk_text, so viki_fts
+            ** indexes it, so the PRIMITIVE legs find it. A photo is findable
+            ** with no embedder loaded at all -- which is the case a phone,
+            ** a fresh clone, or a degraded run is actually in. */
+            {
+                unsigned char aPng[64];
+                char idImg[VIKI_ID_HEX+1];
+                int i3;
+                for(i3=0;i3<64;i3++) aPng[i3] = (unsigned char)(i3*13);
+                aPng[0]=0x89; aPng[1]='P'; aPng[2]='N'; aPng[3]='G';
+                viki_blob_put("photograph of the north gate latch, rusted through, "
+                              "taken after the January freeze",
+                              "aa11bb22", aPng, sizeof aPng, idImg);
+                viki_reindex(0, &n);
+                /* NO VikiEmbed retained here -- keyword and literal only. */
+                check(viki_ask("rusted latch photograph", 5, &h)==VIKI_OK
+                      && h && h->n>0 && strstr(h->a[0].zText,"north gate"),
+                      "B7 an image blob is found by the KEYWORD leg, no embedder",
+                      (h&&h->n)?h->a[0].zText:"nothing");
+                check(h && h->bDegraded==1,
+                      "B7b CONTROL: ...and that search really was degraded",
+                      "an embedder was retained, so B7 proves less");
+                viki_hits_free(h); h=0;
+                check(viki_ask("aPng binary 0x89", 5, &h)==VIKI_OK
+                      && (h->n==0 || !strstr(h->a[0].zText,"\x89")),
+                      "B7c CONTROL: the PAYLOAD is not searchable, only the description",
+                      "binary reached the index");
+                viki_hits_free(h); h=0;
+            }
+
             /* Identity is (content hash, description): the same bytes
             ** described differently are two claims about one payload. */
             {
+                /* Baseline captured rather than a literal: this section grew
+                 * an image blob above it once already, and a magic number
+                 * would have made B6 fail for a reason that was not its
+                 * subject. */
                 char id2[VIKI_ID_HEX+1];
+                int nBefore = nOf(VIKI_N_ASSERT,"blob");
                 viki_blob_put("a different description of the same file",
                               "e3b0c44298fc1c149afbf4c8996fb924",
                               aPayload, sizeof aPayload, id2);
-                check(strcmp(id2, idB)!=0 && nOf(VIKI_N_ASSERT,"blob")==2,
+                check(strcmp(id2, idB)!=0 && nOf(VIKI_N_ASSERT,"blob")==nBefore+1,
                       "B6 the same bytes under a different description are a second assertion",
                       "they collided");
             }
@@ -480,9 +517,9 @@ int main(void){
         ** change to core, because VikiEmbed and VikiStore are separate retain
         ** stacks with independent lifetimes. */
         sqlite3 *dbM=0, *dbX=0, *dbY=0;
-        VikiStore sX, sY;
+        VikiStore sM, sX, sY;
         int a=0, b=0;
-        sqlite3_open(":memory:",&dbM);
+        sqlite3_open(":memory:",&dbM); sM.db=dbM;
         sqlite3_open(":memory:",&dbX); sX.db=dbX; viki_attach(dbX);
         sqlite3_open(":memory:",&dbY); sY.db=dbY; viki_attach(dbY);
         emb.xEmbed=stubEmbed; emb.pApp=0; emb.nDim=DIM; emb.zModel="shared-v1";
@@ -511,26 +548,24 @@ int main(void){
                 "it embedded anyway");
           RETAIN_END(g3); }
 
-        /* A BLOB SURVIVES A ROUND TRIP BYTE-FOR-BYTE, which is what makes
-        ** "store the .onnx and hand ORT the pointer" possible at all. */
+        /* The model itself is a BLOB ASSERTION -- the same machinery the
+        ** B series covers -- so the probe needs no model table of its own.
+        ** Before blobs existed this section hand-rolled one, which was the
+        ** probe reaching past the API for something the API should have
+        ** provided. C8 is what noticed. */
         {
-            sqlite3_stmt *q = 0;
-            unsigned char aIn[1024], *pOut; int nOut = 0, i2, bSame = 1;
+            unsigned char aIn[1024]; int i2; char idM[VIKI_ID_HEX+1];
+            const void *pOut=0; sqlite3_int64 nOut=0;
             for(i2=0;i2<1024;i2++) aIn[i2] = (unsigned char)(i2*31);
-            sqlite3_exec(dbM,"CREATE TABLE model(name TEXT PRIMARY KEY, bytes BLOB)",0,0,0);
-            sqlite3_prepare_v2(dbM,"INSERT INTO model VALUES('m.onnx',?1)",-1,&q,0);
-            sqlite3_bind_blob(q,1,aIn,sizeof aIn,SQLITE_STATIC);
-            sqlite3_step(q); sqlite3_finalize(q);
-            sqlite3_prepare_v2(dbM,"SELECT bytes FROM model WHERE name='m.onnx'",-1,&q,0);
-            if( sqlite3_step(q)==SQLITE_ROW ){
-                pOut = (unsigned char*)sqlite3_column_blob(q,0);
-                nOut = sqlite3_column_bytes(q,0);
-                if( nOut!=(int)sizeof aIn || memcmp(pOut,aIn,sizeof aIn)!=0 ) bSame = 0;
-            } else bSame = 0;
-            sqlite3_finalize(q);
-            check(bSame && nOut==1024,
-                  "N2 a blob round-trips byte-for-byte, uncompressed and contiguous",
-                  "the bytes changed -- CreateSessionFromArray could not use them");
+            viki_attach(dbM);
+            { RETAIN_BEGIN(VikiStore, &sM, gm);
+              check(viki_blob_put("the pinned embedding model, as a blob",
+                                  "deadbeef", aIn, sizeof aIn, idM)==VIKI_OK
+                 && viki_blob_get(idM,&pOut,&nOut)==VIKI_OK
+                 && nOut==1024 && memcmp(pOut,aIn,1024)==0,
+                    "N2 the model is an ordinary blob assertion in its own diary",
+                    "round trip failed");
+              RETAIN_END(gm); }
         }
         sqlite3_close(dbM); sqlite3_close(dbX); sqlite3_close(dbY);
     }
