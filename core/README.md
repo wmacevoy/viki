@@ -356,3 +356,88 @@ verified by disabling the FTS delete entirely.
 
 A real embedder binding, and the CLI/HTTP/MCP faces, which are bindings to this
 ABI rather than new implementations.
+
+---
+
+## The CLI, and `viki run`
+
+`cli/viki_cli.c` — a **binding**, not an implementation. Every verb is a thin
+call into core, and **the CLI is the host**: it resolves the path and opens the
+connection, which core never learns about. That is the boundary demonstrated
+rather than asserted.
+
+    viki note TEXT · ask QUERY · forget ID · merge PATH · reindex
+    viki cal ingest FILE · cal events [FROM TO] · count WHAT · list · sql
+    viki run CMD [ARGS...]
+
+`sh cli/cli-probe.sh <dir>` → **12 passed, 0 failed.**
+
+### `viki run` — and the obvious justification is wrong
+
+The proposal was "fast fork": build a context, fork, parent serves, child gets
+`$VIKI_CONTEXT`. The shape is right. **The speed argument is not**, and it is
+worth writing down because it changes what the feature is for.
+
+Measured on this machine:
+
+```
+sqlite3_open + WAL     0.267 ms      bare fork+exec   1.282 ms
+viki_attach (schema)   0.023 ms
+retain + one ask       0.638 ms
+  total cold setup     0.928 ms
+```
+
+**Cold viki setup is cheaper than the process spawn.** End to end, 60 CLI
+invocations cost 0.16 s directly and 0.13 s through a warm context — about
+0.5 ms saved per call. For a plaintext store with no model, `viki run` is not
+worth having.
+
+What it actually holds is the two costs that are *not* in that table:
+
+| | per invocation |
+|---|---|
+| SQLCipher with a **passphrase** | **345.93 ms** (PBKDF2; FINDINGS.md) |
+| SQLCipher with a raw `x'…'` key | 5.99 ms |
+| an ONNX model load | 100–500 ms typical |
+
+So `viki run` is **"pay for the key and the model once, and never hand either
+to a child"** — not fast fork. The fork is incidental; the custody is the
+point.
+
+### Which is exactly why the transport is a unix socket
+
+After `viki run`, the parent holds a **decrypted** store and a loaded model.
+Anything that can reach the socket can read the whole memory *without the
+passphrase* — so the transport is the boundary, not a convenience.
+
+A loopback port (v6 or v4) is reachable by **every process of every user** on
+the machine, so it would need a token in the URL — and a token in an
+environment variable is readable from `/proc` on Linux and leaks into any
+child's `env` output. A unix socket in a **0700 directory** is guarded by the
+filesystem: no token, no port, absent from `netstat`, and it never touches the
+network stack. Stricter *and* faster. S1–S3 assert it, including a control that
+the context is a path and never a `host:port`.
+
+### Three things the implementation had to get right
+
+- **The child's exit status is the wrapper's** (R1). A wrapper that swallowed
+  it would be useless in a script, which is the only place this is worth having.
+- **The store is opened before the fork**, so the child never opens it and
+  never needs the key. SQLite forbids using one connection across a fork, and
+  nothing does: the child speaks the socket and touches no `sqlite3*`.
+- **The parent drains after the child exits** (R3). A script whose last line is
+  `viki note …` has that write in flight at exit; a server that stopped
+  accepting on `SIGCHLD` would lose it.
+
+And one bug worth keeping: `signal()` installs a BSD handler with `SA_RESTART`,
+so `SIGCHLD` does **not** interrupt `accept()` — it resumes, and the loop
+condition is never re-tested. The parent served every request correctly and
+then hung forever. `select()` with a short timeout polls the flag instead of
+fighting the signal semantics, and gives the drain for free.
+
+### Degradation
+
+A stale `$VIKI_CONTEXT` — a killed parent, a copied environment — **degrades to
+opening the store directly** (F1), the same way a missing embedder degrades
+retrieval instead of refusing it. Failing there would make an exported variable
+a permanent trap.

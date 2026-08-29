@@ -30,6 +30,8 @@ cc $CFLAGS $INC -c "$ROOT/core/src/viki_core.c" -o "$OUT/viki_core.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_cal.c"  -o "$OUT/viki_cal.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/sha256.c"    -o "$OUT/sha256.o"
 ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/sha256.o"
+echo "==> cli"
+cc $CFLAGS $INC -o "$OUT/viki" "$ROOT/cli/viki_cli.c" "$OUT/libvikicore.a" "$OUT/sqlite3.o" -lm -lpthread
 echo "==> probe"
 cc $CFLAGS $INC -o "$OUT/core-probe" "$ROOT/core/test/core_probe.c" \
    "$OUT/libvikicore.a" "$OUT/sqlite3.o" -lm -lpthread
