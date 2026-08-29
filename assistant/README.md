@@ -36,6 +36,20 @@ cannot, which is proof it was never a viki feature.
   risk, what I can and cannot see, which channels need signing in, and what I am
   unsure about.
 
+- **`schedule-brief.sh`** — makes the brief ARRIVE rather than wait to be
+  asked (§2.4, "the clock, not the query"). `install [HH:MM]` writes a launchd
+  agent on macOS; anywhere else it PRINTS the cron line rather than editing
+  someone's crontab for them — installing a recurring job on a person's machine
+  is not a thing to do silently. Output is `~/.viki/brief/YYYY-MM-DD.txt` plus a
+  `latest.txt` symlink.
+  **A failed run writes the failure into that file.** A scheduled job breaks on
+  a morning nobody is watching, and this file's own rule is that silence is
+  indistinguishable from a broken job — so an empty brief must never read as a
+  quiet day.
+  It writes a file rather than sending mail: sending would make the assistant a
+  SENDER, and `observe` is the only authority rung that needs no policy decided
+  first (§2.2c).
+
 It is a shell script on purpose. It is the *simplest possible* assistant, it is
 readable in one sitting, and it establishes the interface an actual agent should
 use. A real agent — nanoclaw, openclaw, an MCP client — replaces this file and

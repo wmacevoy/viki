@@ -427,7 +427,7 @@ unreadable.
 | 2.2b | continuity | **PARTIAL** | supersession works; no agent identity, no "what did I already try" |
 | 2.2c | authority has degrees | **UNMET** | only `observe` exists; `draft`/`act` need Q2/Q3 |
 | 2.3 | calendar + notification ingest | **RESCOPED 2026-08-28 -- see below** | acquisition is L3 and NOT viki's; the viki-side half is largely met |
-| 2.4 | the clock, not the query | **PARTIAL** | brief works; nothing schedules it |
+| 2.4 | the clock, not the query | **MET 2026-08-29** | `assistant/schedule-brief.sh install` -- launchd daily, cron line printed elsewhere |
 | 2.5 | coverage | **PARTIAL** | calendar sources invisible to `viki coverage` |
 | 2.6 | capture that cannot be lost | **PARTIAL** | PWA holds captures in IndexedDB with **no outbound path** |
 | 2.7 | cross-project recall | **MET** | 111 projects, one question |
@@ -441,9 +441,15 @@ unreadable.
 ### What it costs to finish, in the only units that matter
 
 **CHEAP -- days, no decisions needed.** These are the ones to do next.
-- **2.4 scheduling.** A launchd plist / cron entry. The brief exists and works;
-  nothing runs it. This is the single highest ratio of felt value to effort in
-  the whole list.
+- ~~**2.4 scheduling.**~~ **DONE 2026-08-29.** `assistant/schedule-brief.sh`:
+  a launchd agent on macOS, and elsewhere it PRINTS the cron line rather than
+  editing a crontab on someone's behalf. Output is a dated file plus
+  `latest.txt`; a failed run writes the failure INTO that file, because a
+  scheduled job breaks when nobody is watching and an empty brief must not read
+  as a quiet day. Fixing this also exposed a contradiction in the brief itself:
+  it printed "all channels read today" directly under a row marked STALE,
+  because the closing line was chosen from the SIGN-IN list and "captured here"
+  is deliberately excluded from that list. Two questions, one answer.
 - **2.9's two missing messages.** "the cache never arrived" vs "I searched and
   found nothing" is a distinction viki already has and discards. "sync is a
   week stale" needs one timestamp written at `cache pull`.

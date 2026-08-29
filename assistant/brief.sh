@@ -99,6 +99,7 @@ now = datetime.datetime.now(datetime.timezone.utc)
 cut = (now - datetime.timedelta(days=stale_days)).strftime("%Y-%m-%d")
 today = now.strftime("%Y-%m-%d")
 stale = []
+any_stale = False
 for r in rows:
     src, seen = r["source"], (r["last_seen"] or "")[:10]
     # A CHANNEL viki INFERRED IS NOT A CHANNEL TO SIGN IN TO.
@@ -119,13 +120,30 @@ for r in rows:
         src, when, r["notes"],
         "   STALE" if is_stale else "",
         "" if declared else "   (inferred, not a real channel)"))
+    if is_stale:
+        any_stale = True
     if is_stale and src != "captured here" and declared:
         stale.append(src)
+# TWO DIFFERENT QUESTIONS, AND THEY WERE ANSWERED WITH ONE LINE.
+#
+# `stale` is the SIGN-IN list, and "captured here" is deliberately excluded
+# from it -- you cannot log in to your own captures. But the closing line was
+# chosen from that same list, so a run where the only stale row was
+# "captured here" printed "all channels read today." DIRECTLY UNDER a row
+# marked STALE. Measured 2026-08-29 on this repo.
+#
+# Contradicting yourself on screen is worse than either message alone: it
+# teaches the reader that the summary line is decoration.
 if stale:
     # The sign-in round as a BOUNDED task -- a list that shrinks on a good day,
     # rather than "go check everything".
     print("\n  SIGN IN: " + ", ".join(stale))
     print("  Five minutes now buys the rest of the day.")
+elif any_stale:
+    # Stale, but nothing you can DO about it by signing in. Name it rather than
+    # rounding it to "all read".
+    print("\n  Nothing to sign in to, but not everything is current --")
+    print("  the rows marked STALE above have not been added to.")
 else:
     print("\n  all channels read today.")
 ' "$STALE_DAYS"
