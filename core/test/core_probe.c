@@ -1,0 +1,204 @@
+/*
+** core_probe.c -- viki-core's proof.
+**
+** Most assertions are paired with a CONTROL that must come out the other way,
+** because this repository's recurring failure is a suite that is green for
+** reasons unrelated to the claim: a keywrap build once passed its own
+** round-trip while emitting keys real `age` rejected, and a retrieval probe
+** scored 7/7 against a binary with no leg at all.
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "viki_core.h"
+
+static int nPass = 0, nFail = 0;
+static void ok(const char *z){ nPass++; printf("  ok    %s\n", z); }
+static void bad(const char *z, const char *why){
+    nFail++; printf("  FAIL  %s\n        %s\n", z, why?why:"");
+}
+static void check(int c, const char *z, const char *why){ if(c) ok(z); else bad(z,why); }
+
+/* ---- a stub embedder ------------------------------------------------
+** TOPIC vectors, deliberately built so a query can hit a chunk it shares NO
+** WORD with. That is what makes E2 a real test of the vector leg rather than
+** a second keyword leg wearing a float coat. */
+#define DIM 4
+static const char *azTopic[DIM][6] = {
+  {"gate","latch","fence","hinge","boundary","fastener"},
+  {"invoice","payment","billing","refund","charge","receipt"},
+  {"vet","dog","puppy","kennel","veterinary","paw"},
+  {"kernel","compiler","pointer","socket","syscall","linker"}
+};
+static int stubEmbed(void *pApp, const char *zText, float *aOut, int nDim){
+    int d, w; (void)pApp;
+    if( nDim!=DIM ) return 1;
+    for(d=0;d<DIM;d++){
+        aOut[d] = 0.0f;
+        for(w=0;w<6;w++){
+            const char *p = zText;
+            size_t n = strlen(azTopic[d][w]);
+            while( (p = strstr(p, azTopic[d][w])) ){ aOut[d] += 1.0f; p += n; }
+        }
+    }
+    return 0;
+}
+
+/* deep call sites: nothing here is handed a store */
+static void deepest(void){ viki_note("written from the deepest frame"); }
+static void c3(void){ deepest(); }
+static void c2(void){ c3(); }
+static void via_callback(void *ignored){ (void)ignored; c2(); }
+
+static int count(sqlite3 *db, const char *zSql){
+    sqlite3_stmt *st = 0; int n = -1;
+    if( sqlite3_prepare_v2(db, zSql, -1, &st, 0)==SQLITE_OK
+     && sqlite3_step(st)==SQLITE_ROW ) n = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st); return n;
+}
+
+int main(void){
+    sqlite3 *dbA = 0, *dbB = 0;
+    VikiStore sA, sB;
+    VikiEmbed emb;
+    VikiHits *h = 0;
+    char id1[VIKI_ID_HEX+1], id2[VIKI_ID_HEX+1];
+    int n = 0, i, rank_gate;
+
+    sqlite3_open(":memory:", &dbA);
+    sqlite3_open(":memory:", &dbB);
+    sA.db = dbA; sB.db = dbB;
+    check(viki_attach(dbA)==VIKI_OK, "A0 viki_attach creates the schema", viki_errmsg());
+    viki_attach(dbB);
+
+    printf("\n== A: the context ==\n");
+    check(viki_note("this must not be silently lost")==VIKI_ENOCTX,
+          "A1 CONTROL: with NO store retained, viki_note FAILS", "it returned OK");
+
+    {
+        RETAIN_BEGIN(VikiStore, &sA, gA);
+        check(viki_note("the gate latch sticks below freezing")==VIKI_OK,
+              "A2 viki_note() takes one argument", viki_errmsg());
+        via_callback(0);
+        check(count(dbA,"SELECT count(*) FROM viki_assert")==2,
+              "A3 a note four frames down, through a callback, was stored", "count != 2");
+
+        viki_noteid("identical bytes", id1);
+        viki_noteid("identical bytes", id2);
+        check(strcmp(id1,id2)==0 && count(dbA,"SELECT count(*) FROM viki_assert")==3,
+              "A4 identity IS the content hash: same bytes, same id, one row", "differed");
+
+        {   /* a nested store, then the outer restored */
+            RETAIN_BEGIN(VikiStore, &sB, gB);
+            viki_note("this belongs to store B");
+            RETAIN_END(gB);
+        }
+        check(count(dbB,"SELECT count(*) FROM viki_assert")==1
+           && count(dbA,"SELECT count(*) FROM viki_assert")==3,
+              "A5 a nested store is separate, and the outer one is restored", "leaked");
+        RETAIN_END(gA);
+    }
+    check(viki_note("after scope")==VIKI_ENOCTX,
+          "A6 CONTROL: after the scope ends, the store is gone again", "still retained");
+
+    printf("\n== M: merge is union ==\n");
+    {
+        RETAIN_BEGIN(VikiStore, &sA, g);
+        check(viki_merge(dbB, &n)==VIKI_OK && n==1,
+              "M1 merging another store adds its assertions", "n != 1");
+        check(viki_merge(dbB, &n)==VIKI_OK && n==0,
+              "M2 CONTROL: merging again adds NOTHING (union is idempotent)", "n != 0");
+        RETAIN_END(g);
+    }
+
+    printf("\n== S: resolution at read time ==\n");
+    {
+        VikiNote a, b; char idA[65];
+        RETAIN_BEGIN(VikiStore, &sA, g);
+        memset(&a,0,sizeof a); a.vftbl=&vikiNoteVftbl;
+        a.zText="draft one"; a.zKey="plan"; a.zTs="2026-08-01T00:00:00Z";
+        viki_put((VikiAssert*)&a); memcpy(idA, a.zId, 65);
+        memset(&b,0,sizeof b); b.vftbl=&vikiNoteVftbl;
+        b.zText="draft two"; b.zKey="plan"; b.zTs="2026-08-02T00:00:00Z";
+        viki_put((VikiAssert*)&b);
+        {
+            char *zBody = 0;
+            check(viki_current("plan", 0, &zBody)==VIKI_OK
+                  && zBody && strcmp(zBody,"draft two")==0,
+                  "S1 the highest-ranked assertion on a key is current", zBody?zBody:"none");
+            free(zBody);
+        }
+        {   /* now supersede the winner explicitly */
+            VikiNote c; char *zBody = 0;
+            memset(&c,0,sizeof c); c.vftbl=&vikiNoteVftbl;
+            c.zText="draft three"; c.zKey="plan"; c.zTs="2026-08-03T00:00:00Z";
+            c.zSupersedes = b.zId;
+            viki_put((VikiAssert*)&c);
+            viki_current("plan", 0, &zBody);
+            check(zBody && strcmp(zBody,"draft three")==0,
+                  "S2 a superseded assertion is NOT current", zBody?zBody:"none");
+            free(zBody);
+            check(count(dbA,"SELECT count(*) FROM viki_assert WHERE akey='plan'")==3,
+                  "S3 CONTROL: the superseded row is RETAINED, not deleted", "row vanished");
+        }
+        RETAIN_END(g);
+    }
+
+    printf("\n== R: retrieval ==\n");
+    {
+        RETAIN_BEGIN(VikiStore, &sA, g);
+        viki_note("the veterinary appointment for the puppy is on Tuesday");
+        viki_note("kernel pointer arithmetic in the linker is subtle");
+        viki_reindex(&n);
+        check(n>0, "R0 reindex produced chunks", "no chunks");
+        check(viki_ask("gate latch freezing", 5, &h)==VIKI_OK && h->n>0
+              && strstr(h->a[0].zText,"gate latch"),
+              "R1 keyword+literal find the planted answer at rank 1",
+              h&&h->n?h->a[0].zText:"no hits");
+        check(h && h->bDegraded==1,
+              "R2 with no embedder retained, hits are marked DEGRADED", "not marked");
+        viki_hits_free(h); h=0;
+
+        check(viki_ask("zzzznotpresent", 5, &h)==VIKI_OK && h->n==0,
+              "R3 CONTROL: a query matching nothing returns nothing", "returned hits");
+        viki_hits_free(h); h=0;
+        RETAIN_END(g);
+    }
+
+    printf("\n== E: the vector leg ==\n");
+    {
+        RETAIN_BEGIN(VikiStore, &sA, g);
+        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zEpoch = "stub/c40o10";
+        /* CONTROL FIRST: with no embedder, a query sharing no word with the
+        ** target cannot find it. If this passes, E2 below proves nothing. */
+        check(viki_ask("boundary fastener hinge", 5, &h)==VIKI_OK
+              && (h->n==0 || !strstr(h->a[0].zText,"gate latch")),
+              "E1 CONTROL: without vectors, a no-shared-word query MISSES",
+              "it found it anyway -- E2 would be vacuous");
+        viki_hits_free(h); h=0;
+
+        {
+            RETAIN_BEGIN(VikiEmbed, &emb, ge);
+            viki_reindex(&n);
+            check(count(dbA,"SELECT count(*) FROM viki_chunk WHERE vec IS NOT NULL")>0,
+                  "E2 reindex at an embed epoch stored vectors", "no vectors");
+            rank_gate = -1;
+            if( viki_ask("boundary fastener hinge", 5, &h)==VIKI_OK ){
+                for(i=0;i<h->n;i++)
+                    if( strstr(h->a[i].zText,"gate latch") ){ rank_gate = i; break; }
+            }
+            check(rank_gate==0,
+                  "E3 the vector leg finds a chunk sharing NO WORD with the query",
+                  "not at rank 1");
+            check(h && h->bDegraded==0,
+                  "E4 with an embedder retained, hits are NOT degraded", "still degraded");
+            viki_hits_free(h); h=0;
+            RETAIN_END(ge);
+        }
+        RETAIN_END(g);
+    }
+
+    printf("\n%d passed, %d failed\n", nPass, nFail);
+    sqlite3_close(dbA); sqlite3_close(dbB);
+    return nFail ? 1 : 0;
+}

@@ -153,3 +153,44 @@ because it is not the thing running on a phone.
 
 viki-core never learns that Fossil exists. It inherits the patterns and
 nothing else.
+
+---
+
+## Built (2026-08-29)
+
+```
+core/include/viki_core.h   the whole public surface
+core/src/viki_core.c       assertions, merge, projection, retrieval
+core/src/sha256.c          ported unchanged
+core/build.sh              no downloads, no submodules, no fossil
+core/test/core-probe.sh    6 constraint + 20 behaviour assertions
+```
+
+`sh core/test/core-probe.sh` → **26 passed, 0 failed.**
+
+Inputs are the SQLite amalgamation this repo already caches and `retain.h`
+from the sibling checkout. That short list *is* the design.
+
+**The controls are the point.** E1 asserts that *without* vectors a query
+sharing no word with its target MISSES — so E3 finding it at rank 1 is
+evidence the vector leg works rather than evidence the keyword leg is good.
+M2 asserts a second merge adds nothing. S3 asserts the superseded row is
+retained, not deleted. A1/A6 assert `viki_note()` with nothing retained is an
+error rather than a silent drop. C6 asserts the constraint greps find
+`sqlite3_*`, so C1–C5 are not passing because the pattern is broken.
+
+### What is real
+
+- one argument: `viki_note("the gate latch sticks below freezing")`, working
+  four frames down through a callback that was handed nothing
+- content addressing: same bytes → same id → one row
+- union is merge, and idempotent
+- resolution at read time, losers retained, ONE statement for every type
+- three-leg RRF retrieval, degraded mode reported rather than hidden
+- nested stores, outer restored on scope exit
+
+### Not yet
+
+Time/intervals (`viki_cal.c` ports next), a real embedder binding, a delete
+path (FTS first, then chunk — the order is load-bearing), and the CLI/HTTP/MCP
+faces, which are bindings to this ABI rather than new implementations.
