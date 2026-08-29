@@ -335,10 +335,10 @@ fi
 
 # == P: viki NEVER FORKS ==================================================
 #
-# THE RULE IS "fork per tribe or per connection, never per operation"
-# (settled 2026-08-29; the earlier "viki never forks" was rescinded, because
-# `viki serve` must fork early or exec per hosted connection). Indexing is ONE
-# operation, so its fork count must be zero.
+# THE RULE IS: the SERVER may fork for connections; nothing else may.
+# (Settled 2026-08-29. "viki never forks" was rescinded for `viki serve`,
+# which must fork or exec per hosted connection -- and that licence is the
+# server's alone, because on iOS there is no fork() to spend at all.)
 #
 # Every dev machine and CI runner CAN fork, so a subprocess creeping back into
 # the index path is invisible here and fails only on iOS, the platform nobody

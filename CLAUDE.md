@@ -550,15 +550,29 @@ That is cache *fragmentation*, not corruption, and not an epoch bump — but the
 header formats are frozen, and changing one must be called out as
 cache-fragmenting.
 
-**FORK PER TRIBE OR PER CONNECTION, NEVER PER OPERATION** (settled
-2026-08-29). An earlier rule here was "viki never forks"; that was rescinded by
-Warren the same day, because `viki serve` has to fork early or exec for each
-hosted connection and pretending otherwise buys nothing. Forking once to host a
-repo is architecture. Forking once per unversioned blob was the bug.
+**THE SERVER MAY FORK FOR CONNECTIONS. NOTHING ELSE MAY FORK** (settled
+2026-08-29). An earlier rule here was "viki never forks", rescinded the same
+day: `viki serve` has to fork or exec per hosted connection, and pretending
+otherwise buys nothing.
 
-**`viki index` still forks zero times**, and that is the rule above applied
-rather than a separate goal: indexing is one operation, so a per-artifact
-subprocess in it is always wrong. As of 2026-08-29 every one of the nine content classes is
+**That licence is the server's alone.** A first draft of this paragraph
+generalised it to "fork per tribe or per connection", which put `viki cache
+push/pull` on the safe side because sync is per-tribe. Wrong — **on iOS there
+is no `fork()` at all**, so a client does everything in process regardless of
+how coarse the operation is. `uv sync` therefore does **not** fork; it runs
+through libfossilsee once fossil-see's config/use split lands (`embed/API_V1.md`
+§0c), and that split is a v1 item rather than a deferred one.
+
+**`viki index` forks zero times**, verified with a counting wrapper as
+`$VIKI_FOSSIL_BIN` and asserted by `build/fossilsee-probe.sh` P1/P2.
+
+**An iOS app with MULTIPLE LOCAL REPOS is a hard block today.** The
+`_Thread_local Global *gp` patch in fossil-see removes the first layer and is
+deliberately kept, but it is not sufficient: 66 cached prepared statements
+across 26 files hold pointers into one connection, and switching contexts
+without closing is exactly what two open repos means. fossil-see's
+`docs/FINDINGS.md` has the counts and the two candidate fixes; `embed/API_V1.md`
+has the lift. Single tribe per process is the v1 scope. As of 2026-08-29 every one of the nine content classes is
 read through `fossil_sql_framed()` — **zero** `fork()`/`execvp()` on the whole
 index path, measured with a counting wrapper as `$VIKI_FOSSIL_BIN`. The last
 two per-artifact shell-outs went in that round: `fossil wiki list` +
@@ -575,12 +589,13 @@ authorized" through `libfossilsee` while the identical query succeeds through
 less than the other. `sqlite_master` is allowed on both, which is why
 `ticket_has_col()` parses DDL instead of asking SQLite directly.
 
-**What still forks, and under the rule above only one of them is wrong:**
+**What still forks, and all of it is on the wrong side of that rule:**
 `viki cache push/pull` (`fossil uv add/sync/export`) and the `viki-identity`
-signature verifier. `uv sync` is a per-tribe operation and forking for it is
-fine; `uv export` is a per-blob read and is the one that should not fork --
-`build/substrate-probe.sh` S9 reports it LIFTED and names the fix as
-`fossilsee_uv_get()`, a patch to libfossilsee rather than viki-side SQL.
+signature verifier. `uv export` is the nearest — `build/substrate-probe.sh` S9
+already reports it LIFTED and names `fossilsee_uv_get()` as the fix, a patch to
+libfossilsee rather than viki-side SQL. `uv add` needs a write verb. `uv sync`
+needs the config/use split, and is the one that decides whether a phone can be
+a peer at all.
 Neither is reachable from `libfossilsee`'s v0 ABI, which is read-only SQL by
 design — `embed/fossilsee.h` puts `wiki/sync/clone` out of scope because they
 need an argv shim and output capture, and that work is open upstream in
