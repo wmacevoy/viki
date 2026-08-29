@@ -102,15 +102,54 @@ Named explicitly so the boundary does not erode the way `edge/` did:
 - the CLI, the HTTP face, MCP, wasm — all bindings to this ABI, per `oopc`'s
   rule that the C ABI is the interface
 
-## 7. Open
+## 7. The libfossil track is a DEAD END
 
-1. **Does Fossil stay in the picture at all?** Ancestry says the ideas are
-   inherited. But viki today reads nine artifact classes out of real Fossil
-   repos, and that corpus is the product. Likely answer: a *connector* (SCOPES
-   L3) reads Fossil and writes assertions — outside core, using core's API,
-   and free to shell out because it is not on a phone.
-2. **Sync without a network layer.** `viki_merge(sqlite3 *other)` is the core
-   primitive — union two stores. How `other` arrived is the host's business.
-   Needs checking that this is sufficient for the tribe model.
-3. **Does `viki-core` live in this repo or its own?** It has no dependency on
-   anything here except the ported algorithms.
+Recorded with numbers so it is not re-proposed. Growing `libfossilsee` into
+viki's substrate fails on two counts, and both were measured this week rather
+than argued.
+
+**Hundreds of patch points.** Making Fossil's C safe to embed means owning:
+
+```
+5,006   g.<field> references behind a process-global Global
+  219   function-local mutable statics
+   78   file-scope mutable statics
+   66   cached prepared statements (static Stmt) across 26 files, each
+        holding an sqlite3_stmt* bound to ONE connection
+   96   raw printf() outside the fossil_print() funnel
+    3   caches already known to bite -- zSavedKey (a second open silently
+        reuses the first key: measured, a WRONG key succeeded),
+        savedKeySize, dbRepositoryFilenameCache (returns the first repo
+        ever opened)
+    6   patches fossil-see already carries just to build at all
+```
+
+Three of those caches were found "one at a time, each by a different symptom"
+(`embed/README.md`'s own words) and there was no reason to think the audit was
+finished.
+
+**And a bad API.** `libfossilsee` exposes five symbols — a read-only SQLite
+handle. It is a *database* handle, not a *program* handle, so a caller can read
+what Fossil stores and invoke nothing Fossil does. Using it correctly required
+learning eight facts from Fossil's **source** (that `tagxref.rid` is the
+artifact while `tagxref.value` is the page size, that `GROUP BY 1 + max(mtime)`
+avoids a superseded page, that the body is a counted `W` card, …), which is the
+definition of a failed abstraction. It also behaves differently by transport:
+`pragma_table_info` succeeds through `fossil sql` and returns *not authorized*
+in process, which silently indexed zero tickets on one path and not the other.
+
+**What survives from that track**, because it was worth doing on its own:
+the upstream `/json/finfo` deletion fix, the `text/calendar` finding, and the
+swappable-context patch. They stay in fossil-see. What does not survive is the
+plan to build on top of them.
+
+## 8. Ingress is not viki's problem
+
+Reading Fossil repositories — or Outlook, or a calendar feed — is **ingress**,
+which is SCOPES L3 and already settled: *"injest is not viki's problem, it is
+the job of the humans/agents using viki"* (Warren). A connector reads whatever
+it likes and calls `viki_note()`; it may fork, link libfossil, or shell out,
+because it is not the thing running on a phone.
+
+viki-core never learns that Fossil exists. It inherits the patterns and
+nothing else.
