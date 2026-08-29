@@ -161,7 +161,7 @@ int main(void){
         RETAIN_BEGIN(VikiStore, &sA, g);
         viki_note("the veterinary appointment for the puppy is on Tuesday");
         viki_note("kernel pointer arithmetic in the linker is subtle");
-        viki_reindex(&n);
+        viki_reindex(0, &n);
         check(n>0, "R0 reindex produced chunks", "no chunks");
         check(viki_ask("gate latch freezing", 5, &h)==VIKI_OK && h->n>0
               && strstr(h->a[0].zText,"gate latch"),
@@ -180,7 +180,7 @@ int main(void){
     printf("\n== E: the vector leg ==\n");
     {
         RETAIN_BEGIN(VikiStore, &sA, g);
-        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zEpoch = "stub/c40o10";
+        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
         /* CONTROL FIRST: with no embedder, a query sharing no word with the
         ** target cannot find it. If this passes, E2 below proves nothing. */
         check(viki_ask("boundary fastener hinge", 5, &h)==VIKI_OK
@@ -191,7 +191,7 @@ int main(void){
 
         {
             RETAIN_BEGIN(VikiEmbed, &emb, ge);
-            viki_reindex(&n);
+            viki_reindex(0, &n);
             check(count(dbA,"SELECT count(*) FROM viki_chunk WHERE vec IS NOT NULL")>0,
                   "E2 reindex at an embed epoch stored vectors", "no vectors");
             rank_gate = -1;
@@ -218,7 +218,7 @@ int main(void){
         ** fixed line. */
         sqlite3 *dbG = 0; VikiStore sG;
         sqlite3_open(":memory:", &dbG); sG.db = dbG; viki_attach(dbG);
-        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zEpoch = "stub/c40o10";
+        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
         {
             RETAIN_BEGIN(VikiStore, &sG, g);
             /* ORDER IS THE WHOLE POINT: index ONLY at the embed epoch. The
@@ -227,7 +227,7 @@ int main(void){
             {
                 RETAIN_BEGIN(VikiEmbed, &emb, ge);
                 viki_note("the gate latch sticks below freezing");
-                viki_reindex(&n);
+                viki_reindex(0, &n);
                 RETAIN_END(ge);
             }
             check(viki_ask("gate latch freezing", 5, &h)==VIKI_OK && h && h->n>0,
@@ -264,7 +264,7 @@ int main(void){
                 int after;
                 sqlite3_exec(dbG, "BEGIN", 0, 0, 0);
                 viki_note("written inside the CALLER's transaction");
-                viki_reindex(&n);                 /* used to COMMIT it */
+                viki_reindex(0, &n);                 /* used to COMMIT it */
                 sqlite3_exec(dbG, "ROLLBACK", 0, 0, 0);
                 after = count(dbG,
                   "SELECT count(*) FROM viki_assert WHERE body LIKE '%CALLER%'");
@@ -289,8 +289,8 @@ int main(void){
             {   /* a reserved/empty epoch must be refused, not silently no-op */
                 VikiEmbed bad = { stubEmbed, 0, DIM, "" };
                 RETAIN_BEGIN(VikiEmbed, &bad, gb);
-                check(viki_reindex(&n)==VIKI_EINVAL,
-                      "G7 an empty zEpoch is refused (it collides with 'unembedded')",
+                check(viki_reindex(0, &n)==VIKI_EINVAL,
+                      "G7 an empty zModel is refused (it collides with 'unembedded')",
                       "accepted, and reindex became a permanent no-op");
                 RETAIN_END(gb);
             }
@@ -311,6 +311,101 @@ int main(void){
         sqlite3_close(dbG);
     }
 
+    printf("\n== V: ranges, and two chunkings over one blob ==\n");
+    {
+        sqlite3 *dbV = 0; VikiStore sV;
+        VikiChunking fine  = { "l2o0",  2, 0 };
+        VikiChunking coarse= { "l8o2",  8, 2 };
+        char idV[VIKI_ID_HEX+1];
+        sqlite3_open(":memory:", &dbV); sV.db = dbV; viki_attach(dbV);
+        emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "stub-v1";
+        {
+            RETAIN_BEGIN(VikiStore, &sV, g);
+            /* the gate topic and the invoice topic are SIX LINES APART, so a
+            ** 2-line chunking can never put them in one range and an 8-line
+            ** one always does */
+            viki_noteid(
+              "the gate latch sticks\n"
+              "filler line two\n"
+              "filler line three\n"
+              "filler line four\n"
+              "filler line five\n"
+              "the invoice payment is late\n"
+              "filler line seven\n"
+              "filler line eight\n", idV);
+            {
+                RETAIN_BEGIN(VikiEmbed, &emb, ge);
+                viki_reindex(&fine, &n);
+                check(n>0, "V1 a fine chunking produced ranges", "none");
+                /* THE CONTROL COMES FIRST. With only the 2-line chunking, no
+                ** range can hold both topics -- they are six lines apart. If
+                ** this finds one, V4 below proves nothing about coarse ranges. */
+                rank_gate = -1;
+                if( viki_ask("boundary fastener invoice billing", 5, &h)==VIKI_OK ){
+                    for(i=0;i<h->n;i++)
+                        if( strstr(h->a[i].zText,"gate latch")
+                         && strstr(h->a[i].zText,"invoice payment") ){ rank_gate = i; break; }
+                }
+                check(rank_gate<0,
+                      "V3b CONTROL: with only the FINE chunking, no range holds both topics",
+                      "it found one -- V4 would be vacuous");
+                viki_hits_free(h); h=0;
+
+                {   /* THE COLLISION THE PREDECESSOR HAD IS UNREPRESENTABLE.
+                    ** Two policies over the same assertion at the same model
+                    ** used to agree on the key (content_hash, model, ordinal)
+                    ** and disagree on the text. The extent is in the key now. */
+                    int before = count(dbV,"SELECT count(*) FROM viki_chunk");
+                    viki_reindex(&coarse, &n);
+                    check(count(dbV,"SELECT count(*) FROM viki_chunk") > before,
+                          "V2 a SECOND chunking adds ranges without disturbing the first",
+                          "the second policy collided with the first");
+                    check(count(dbV,"SELECT count(DISTINCT chunking) FROM viki_chunk")==2,
+                          "V3 both chunkings coexist over one assertion", "only one survived");
+                }
+                /* THE REASON FOR TWO CHUNKINGS, and V5 is its control. */
+                rank_gate = -1;
+                if( viki_ask("boundary fastener invoice billing", 5, &h)==VIKI_OK ){
+                    for(i=0;i<h->n;i++)
+                        if( strstr(h->a[i].zText,"gate latch")
+                         && strstr(h->a[i].zText,"invoice payment") ){ rank_gate = i; break; }
+                }
+                check(rank_gate>=0,
+                      "V4 a query spanning two topics finds the COARSE range holding both",
+                      "no hit contained both halves");
+                viki_hits_free(h); h=0;
+                RETAIN_END(ge);
+            }
+            check(count(dbV,"SELECT count(*) FROM viki_chunk c JOIN viki_chunk d"
+                            " ON c.id=d.id AND c.lo=d.lo AND c.hi=d.hi AND c.model=d.model"
+                            " AND c.seq<>d.seq")==0,
+                  "V5 CONTROL: no two rows share (id, lo, hi, model) -- the key is the extent",
+                  "a duplicate range exists");
+            {   /* THE TEXT EXISTS EXACTLY ONCE. viki_chunk has no text column
+                ** at all; a chunk's text is computed by substr over the
+                ** assertion, which is what makes overlap free. */
+                sqlite3_stmt *q = 0; int bHasText = 0;
+                sqlite3_prepare_v2(dbV,"SELECT count(*) FROM pragma_table_info('viki_chunk') WHERE name='text'",-1,&q,0);
+                if(sqlite3_step(q)==SQLITE_ROW) bHasText = sqlite3_column_int(q,0);
+                sqlite3_finalize(q);
+                check(bHasText==0, "V6 viki_chunk stores NO text -- ranges only", "a text column exists");
+                check(count(dbV,"SELECT count(*) FROM viki_chunk_text WHERE text<>''")>0,
+                      "V6b CONTROL: the text is still reachable, computed from the range",
+                      "the view returns nothing");
+            }
+            {   /* FTS can regenerate itself from ranges alone */
+                check(viki_sql("INSERT INTO viki_fts(viki_fts) VALUES('rebuild')", 0, 0)==VIKI_OK,
+                      "V7 the FTS index rebuilds from the ranges, with no stored text",
+                      viki_errmsg());
+                check(viki_ask("gate latch", 3, &h)==VIKI_OK && h && h->n>0,
+                      "V7b ...and still answers afterwards", "empty after rebuild");
+                viki_hits_free(h); h=0;
+            }
+            RETAIN_END(g);
+        }
+        sqlite3_close(dbV);
+    }
+
     printf("\n== W: withdrawal, and the delete ORDER ==\n");
     {
         sqlite3 *dbW = 0; VikiStore sW; char idW[VIKI_ID_HEX+1];
@@ -319,7 +414,7 @@ int main(void){
             RETAIN_BEGIN(VikiStore, &sW, g);
             viki_noteid("the passphrase is hunter2 and should never have been typed", idW);
             viki_note("an unrelated note about fence posts");
-            viki_reindex(&n);
+            viki_reindex(0, &n);
             check(viki_ask("passphrase hunter2", 5, &h)==VIKI_OK && h && h->n>0,
                   "W1 the text is findable before forgetting", "not found");
             viki_hits_free(h); h=0;
@@ -359,13 +454,13 @@ int main(void){
 
             {   /* pruning a dead epoch leaves the assertions alone */
                 int nDrop = 0, nBefore = count(dbW,"SELECT count(*) FROM viki_assert");
-                emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zEpoch = "old/c40o10";
-                { RETAIN_BEGIN(VikiEmbed, &emb, ge); viki_reindex(&n); RETAIN_END(ge); }
-                check(count(dbW,"SELECT count(*) FROM viki_chunk WHERE epoch='old/c40o10'")>0,
-                      "W7 a second epoch's chunks exist", "none written");
-                check(viki_prune_epoch("old/c40o10", &nDrop)==VIKI_OK && nDrop>0
-                   && count(dbW,"SELECT count(*) FROM viki_chunk WHERE epoch='old/c40o10'")==0,
-                      "W8 pruning an epoch drops its projection", "chunks remain");
+                emb.xEmbed = stubEmbed; emb.pApp = 0; emb.nDim = DIM; emb.zModel = "old-v1";
+                { RETAIN_BEGIN(VikiEmbed, &emb, ge); viki_reindex(0, &n); RETAIN_END(ge); }
+                check(count(dbW,"SELECT count(*) FROM viki_chunk WHERE model='old-v1'")>0,
+                      "W7 a second model's ranges exist", "none written");
+                check(viki_prune_model("old-v1", &nDrop)==VIKI_OK && nDrop>0
+                   && count(dbW,"SELECT count(*) FROM viki_chunk WHERE model='old-v1'")==0,
+                      "W8 pruning a model drops its ranges", "chunks remain");
                 check(count(dbW,"SELECT count(*) FROM viki_assert")==nBefore,
                       "W9 CONTROL: pruning a projection does NOT touch the assertions",
                       "truth was deleted with the projection");

@@ -61,8 +61,29 @@ typedef struct {
     viki_embed_fn xEmbed;
     void         *pApp;
     int           nDim;
-    const char   *zEpoch;
+    const char   *zModel;   /* THE MODEL. Chunking is no longer folded in --
+                            ** the chunk's extent is in its key, so it cannot
+                            ** collide, and D-11's model_id means the model. */
 } VikiEmbed;
+
+/* WHICH POLICY DREW THE LINES. Passing a different one to viki_reindex() adds
+** a SECOND set of ranges over the same assertions without disturbing the
+** first, and viki_ask() searches all of them -- a fine chunking finds the
+** precise sentence, a coarse one keeps enough context to be judged. Overlap
+** costs nothing now: overlapping ranges are just ranges.
+**
+** `zName` is provenance, not identity. Two policies that happen to produce
+** the same boundaries produce the same rows, which is correct. */
+typedef struct {
+    const char *zName;
+    int         nLines;     /* lines per chunk                              */
+    int         nOverlap;   /* lines shared with the previous chunk         */
+} VikiChunking;
+
+/* The measured default: 40 lines with 10 overlapping. Ported, not re-chosen
+** (recall@1 0.256 -> 0.349, MRR 0.381 -> 0.424 at +26% chunks; 20 cost +77%
+** chunks for nothing). */
+extern const VikiChunking vikiChunkDefault;
 
 RETAIN_DECLARE(VikiStore);
 RETAIN_DECLARE(VikiEmbed);
@@ -128,20 +149,21 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded);
 ** people stop telling things to. */
 VikiStatus viki_forget(const char *zId);
 
-/* Drops a dead embedding epoch's projection. The assertions are untouched --
-** this is reclaiming space from a model that is no longer pinned. */
-VikiStatus viki_prune_epoch(const char *zEpoch, int *pnDropped);
+/* Drops a dead model's ranges. The assertions are untouched -- this is
+** reclaiming space from a model that is no longer pinned. */
+VikiStatus viki_prune_model(const char *zModel, int *pnDropped);
 
 /* Rebuild the chunk/FTS/vector projection for anything not yet projected at
 ** the retained epoch. Safe to call repeatedly; it is incremental. */
-VikiStatus viki_reindex(int *pnChunked);
+VikiStatus viki_reindex(const VikiChunking *pCh, int *pnChunked);
 
 /* ---- retrieval ------------------------------------------------------- */
 typedef struct {
     char   zId[VIKI_ID_HEX+1];
-    int    ix;
+    int    lo, hi;        /* the RANGE, which is the citable extent          */
     double score;
-    char  *zText;         /* owned by the VikiHits */
+    char  *zText;         /* owned by the VikiHits; computed, never stored   */
+    char   zChunking[32]; /* which policy drew these lines -- provenance     */
 } VikiHit;
 typedef struct VikiHits {
     int      n;

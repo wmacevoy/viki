@@ -78,28 +78,63 @@ static void cosFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 ** rebuildable, never merged. */
 static const char zSchema[] =
   "CREATE TABLE IF NOT EXISTS viki_assert("
-  "  id         TEXT PRIMARY KEY,"   /* sha256 hex of canon()               */
+  "  id         TEXT PRIMARY KEY,"   /* sha256 hex of the framed canon()     */
   "  kind       TEXT NOT NULL,"
-  "  akey       TEXT NOT NULL,"      /* what it competes on                 */
-  "  arank      TEXT NOT NULL,"      /* LEXICAL sort key; max wins          */
+  "  akey       TEXT NOT NULL,"      /* what it competes on                  */
+  "  arank      TEXT NOT NULL,"      /* LEXICAL sort key; max wins           */
   "  ts         TEXT NOT NULL,"
   "  supersedes TEXT,"
   "  body       TEXT NOT NULL,"
-  "  atext      TEXT NOT NULL"
+  "  atext      TEXT NOT NULL"       /* what gets chunked -- THE ONLY COPY   */
   ") WITHOUT ROWID;"
   "CREATE INDEX IF NOT EXISTS viki_assert_key ON viki_assert(akey, arank);"
   "CREATE INDEX IF NOT EXISTS viki_assert_sup ON viki_assert(supersedes);"
+
+  /* A CHUNK IS A RANGE OVER AN ASSERTION, AND STORES NO TEXT.
+  **
+  ** The predecessor keyed chunks on (content_hash, model_id, chunk_ix) and
+  ** stored the text per chunk. chunk_ix is an ORDINAL whose meaning depends
+  ** on the parameters that produced it, so two peers with different chunk
+  ** sizes wrote rows that AGREED ON THE KEY and DISAGREED ON THE TEXT, and
+  ** INSERT OR IGNORE silently double-indexed a document. The fix there was to
+  ** fold the chunking into the model id.
+  **
+  ** Keyed on (id, lo, hi, model) that collision is UNREPRESENTABLE: different
+  ** boundaries produce different keys by construction, because the extent is
+  ** IN the key rather than implied by it. Three things follow:
+  **
+  **   - `model` means the MODEL again, as D-11 originally said. `chunking` is
+  **     provenance -- which policy drew these lines -- not identity.
+  **   - Chunk rows become IMMUTABLE ON A CONTENT KEY, so they are grow-only
+  **     and union-mergeable, the same class as assertions.
+  **   - OVERLAP IS FREE. Overlapping ranges are just ranges; the predecessor
+  **     duplicated the overlapped text into two rows.
+  **
+  ** And the reason that matters most: a device can store an assertion with NO
+  ** chunking decision at all, and a device with a model can add ranges over it
+  ** later -- a SECOND set with different boundaries without disturbing the
+  ** first. Compute-once-share-many extends from embedding to chunking. */
   "CREATE TABLE IF NOT EXISTS viki_chunk("
-  "  seq   INTEGER PRIMARY KEY,"
-  "  id    TEXT NOT NULL,"
-  "  ix    INTEGER NOT NULL,"
-  "  epoch TEXT NOT NULL,"           /* '' when unembedded                  */
-  "  text  TEXT NOT NULL,"
-  "  vec   BLOB,"
-  "  UNIQUE(id, ix, epoch)"
+  "  seq      INTEGER PRIMARY KEY,"
+  "  id       TEXT NOT NULL,"        /* the assertion this ranges over       */
+  "  lo       INTEGER NOT NULL,"     /* byte offset, inclusive               */
+  "  hi       INTEGER NOT NULL,"     /* byte offset, exclusive               */
+  "  model    TEXT NOT NULL,"        /* '' when unembedded                   */
+  "  chunking TEXT NOT NULL,"        /* provenance, NOT identity             */
+  "  vec      BLOB,"
+  "  UNIQUE(id, lo, hi, model)"
   ");"
+  "CREATE INDEX IF NOT EXISTS viki_chunk_id ON viki_chunk(id);"
+
+  /* The text of a chunk is COMPUTED, never stored. FTS5 accepts a view as its
+  ** external content (verified), so the index is built over ranges and
+  ** `INSERT INTO viki_fts(viki_fts) VALUES('rebuild')` regenerates it from
+  ** them. substr() is 1-based; lo is 0-based. */
+  "CREATE VIEW IF NOT EXISTS viki_chunk_text(seq, text) AS"
+  "  SELECT c.seq, substr(a.atext, c.lo+1, c.hi-c.lo)"
+  "    FROM viki_chunk c JOIN viki_assert a ON a.id = c.id;"
   "CREATE VIRTUAL TABLE IF NOT EXISTS viki_fts"
-  " USING fts5(text, content='viki_chunk', content_rowid='seq');";
+  " USING fts5(text, content='viki_chunk_text', content_rowid='seq');";
 
 VikiStatus viki_attach(sqlite3 *db){
     char *zErr = 0;
@@ -322,47 +357,61 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
     return VIKI_OK;
 }
 
-/* ---- projection: chunk, FTS, vectors --------------------------------
+/* ---- projection: ranges, FTS, vectors --------------------------------
 ** Chunk geometry is PORTED, not re-chosen: 40 lines with 10 overlapping was
 ** measured in (recall@1 0.256 -> 0.349, MRR 0.381 -> 0.424 at +26% chunks),
-** and 20 cost +77% chunks for nothing. Do not adjust without re-measuring. */
-#define VIKI_CHUNK_LINES   40
-#define VIKI_CHUNK_OVERLAP 10
-#define VIKI_CHUNK_STRIDE  (VIKI_CHUNK_LINES-VIKI_CHUNK_OVERLAP)
+** and 20 cost +77% chunks for nothing. */
+const VikiChunking vikiChunkDefault = { "l40o10", 40, 10 };
 
-/* Returns chunk ix of zText into pz and pn, or 0 when ix is past the end. */
-static int chunk_at(const char *zText, int ix, const char **pz, size_t *pn){
-    const char *p = zText, *zStart; int line = 0, want = ix*VIKI_CHUNK_STRIDE, n = 0;
-    if( ix<0 ) return 0;
+/* Byte range of chunk ix, or 0 when ix is past the end. Ranges are computed
+** over the assertion's text and only the OFFSETS are stored. */
+static int range_at(const char *zText, const VikiChunking *pCh, int ix,
+                    int *pLo, int *pHi){
+    int stride = pCh->nLines - pCh->nOverlap;
+    const char *p = zText;
+    int line = 0, want, n = 0;
+    const char *zStart;
+    if( stride < 1 ) stride = 1;          /* clamp: an override must not hang */
+    want = ix * stride;
+    if( ix < 0 ) return 0;
     while( line<want && *p ){ if( *p=='\n' ) line++; p++; }
     if( !*p && want>0 ) return 0;
     zStart = p;
-    while( *p && n<VIKI_CHUNK_LINES ){ if( *p=='\n' ) n++; p++; }
+    while( *p && n<pCh->nLines ){ if( *p=='\n' ) n++; p++; }
     if( p==zStart ) return 0;
-    *pz = zStart; *pn = (size_t)(p-zStart);
+    *pLo = (int)(zStart - zText);
+    *pHi = (int)(p - zText);
     return 1;
 }
 
-VikiStatus viki_reindex(int *pnChunked){
+VikiStatus viki_reindex(const VikiChunking *pCh, int *pnChunked){
     sqlite3 *db = db_or_null();
     const VikiEmbed *pe = RETAINED(VikiEmbed) ? RECALL(VikiEmbed) : 0;
-    const char *zEpoch = pe ? pe->zEpoch : "";
+    const char *zModel = pe ? pe->zModel : "";
     sqlite3_stmt *st = 0; int nTot = 0;
     if( !db ) return VIKI_ENOCTX;
     if( pnChunked ) *pnChunked = 0;
-    /* '' is the reserved "unembedded" epoch. A host that supplies it, or
-    ** NULL, would collide with that sentinel -- and a NULL bound into
-    ** `epoch TEXT NOT NULL` was silently swallowed by INSERT OR IGNORE, so
-    ** reindex looped forever over the same rows reporting VIKI_OK and 0. */
-    if( pe && (!pe->zEpoch || !pe->zEpoch[0]) )
-        return fail(VIKI_EINVAL, "viki_reindex: VikiEmbed.zEpoch must be non-empty%s","");
+    if( !pCh ) pCh = &vikiChunkDefault;
+    if( pCh->nLines<1 || pCh->nOverlap<0 || pCh->nOverlap>=pCh->nLines || !pCh->zName )
+        return fail(VIKI_EINVAL, "viki_reindex: bad chunking policy%s","");
+    /* '' is the reserved "unembedded" model. A host supplying it, or NULL,
+    ** would collide with that sentinel -- and NULL bound into a NOT NULL
+    ** column was swallowed by INSERT OR IGNORE, so reindex looped forever
+    ** over the same rows reporting success. */
+    if( pe && (!pe->zModel || !pe->zModel[0]) )
+        return fail(VIKI_EINVAL, "viki_reindex: VikiEmbed.zModel must be non-empty%s","");
     if( pe && pe->nDim<=0 )
         return fail(VIKI_EINVAL, "viki_reindex: VikiEmbed.nDim must be positive%s","");
+
+    /* Selects assertions with no ranges AT THIS (model, chunking). A second
+    ** policy therefore adds to the first rather than replacing it. */
     if( sqlite3_prepare_v2(db,
-        "SELECT id, atext FROM viki_assert WHERE id NOT IN"
-        " (SELECT id FROM viki_chunk WHERE epoch=?1)", -1, &st, 0)!=SQLITE_OK )
+        "SELECT a.id, a.atext FROM viki_assert a WHERE NOT EXISTS("
+        "  SELECT 1 FROM viki_chunk c WHERE c.id=a.id AND c.model=?1 AND c.chunking=?2)",
+        -1, &st, 0)!=SQLITE_OK )
         return fail(VIKI_ESQL, "viki_reindex: %s", sqlite3_errmsg(db));
-    sqlite3_bind_text(st, 1, zEpoch, -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 1, zModel,     -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 2, pCh->zName, -1, SQLITE_STATIC);
     if( tx_begin(db, "viki_reindex")!=SQLITE_OK ){
         sqlite3_finalize(st);
         return fail(VIKI_ESQL, "viki_reindex: %s", sqlite3_errmsg(db));
@@ -371,60 +420,60 @@ VikiStatus viki_reindex(int *pnChunked){
         const char *zId = (const char*)sqlite3_column_text(st, 0);
         const char *zTx = (const char*)sqlite3_column_text(st, 1);
         char zIdBuf[VIKI_ID_HEX+1];
-        const char *zC; size_t nC; int ix = 0;
+        int ix = 0, lo = 0, hi = 0;
         if( !zId ) continue;
         if( !zTx ) zTx = "";
         snprintf(zIdBuf, sizeof(zIdBuf), "%s", zId);
-        /* An empty atext yields no chunks, and without this the selection
-        ** "id NOT IN (SELECT id FROM viki_chunk WHERE epoch=?)" picks it
-        ** again on every run, forever. One empty chunk marks it projected. */
+        /* An empty atext yields no ranges; a zero-length one marks it done so
+        ** the selection above does not pick it again on every run, forever. */
         if( !zTx[0] ){
             sqlite3_stmt *e = 0;
             if( sqlite3_prepare_v2(db,
-                "INSERT OR IGNORE INTO viki_chunk(id,ix,epoch,text,vec)"
-                " VALUES(?1,0,?2,'',NULL)", -1, &e, 0)==SQLITE_OK ){
+                "INSERT OR IGNORE INTO viki_chunk(id,lo,hi,model,chunking,vec)"
+                " VALUES(?1,0,0,?2,?3,NULL)", -1, &e, 0)==SQLITE_OK ){
                 sqlite3_bind_text(e, 1, zIdBuf, -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(e, 2, zEpoch, -1, SQLITE_STATIC);
+                sqlite3_bind_text(e, 2, zModel, -1, SQLITE_STATIC);
+                sqlite3_bind_text(e, 3, pCh->zName, -1, SQLITE_STATIC);
                 sqlite3_step(e); sqlite3_finalize(e);
             }
             continue;
         }
-        while( chunk_at(zTx, ix, &zC, &nC) ){
+        while( range_at(zTx, pCh, ix, &lo, &hi) ){
             sqlite3_stmt *ins = 0;
             float *aVec = 0;
             if( pe ){
-                char *zTmp = (char*)malloc(nC+1);
+                char *zTmp = (char*)malloc((size_t)(hi-lo)+1);
                 if( zTmp ){
-                    memcpy(zTmp, zC, nC); zTmp[nC] = 0;
+                    memcpy(zTmp, zTx+lo, (size_t)(hi-lo)); zTmp[hi-lo] = 0;
                     aVec = (float*)calloc((size_t)pe->nDim, sizeof(float));
                     if( aVec && pe->xEmbed(pe->pApp, zTmp, aVec, pe->nDim)!=0 ){
-                        free(aVec); aVec = 0;     /* embedder declined: keyword only */
+                        free(aVec); aVec = 0;   /* declined: keyword only */
                     }
                     free(zTmp);
                 }
             }
             if( sqlite3_prepare_v2(db,
-                "INSERT OR IGNORE INTO viki_chunk(id,ix,epoch,text,vec)"
-                " VALUES(?1,?2,?3,?4,?5)", -1, &ins, 0)==SQLITE_OK ){
+                "INSERT OR IGNORE INTO viki_chunk(id,lo,hi,model,chunking,vec)"
+                " VALUES(?1,?2,?3,?4,?5,?6)", -1, &ins, 0)==SQLITE_OK ){
                 sqlite3_bind_text(ins, 1, zIdBuf, -1, SQLITE_TRANSIENT);
-                sqlite3_bind_int (ins, 2, ix);
-                sqlite3_bind_text(ins, 3, zEpoch, -1, SQLITE_STATIC);
-                sqlite3_bind_text(ins, 4, zC, (int)nC, SQLITE_TRANSIENT);
-                if( aVec ) sqlite3_bind_blob(ins, 5, aVec,
-                                             (int)(pe->nDim*sizeof(float)), SQLITE_TRANSIENT);
-                else       sqlite3_bind_null(ins, 5);
+                sqlite3_bind_int (ins, 2, lo);
+                sqlite3_bind_int (ins, 3, hi);
+                sqlite3_bind_text(ins, 4, zModel, -1, SQLITE_STATIC);
+                sqlite3_bind_text(ins, 5, pCh->zName, -1, SQLITE_STATIC);
+                if( aVec ) sqlite3_bind_blob(ins, 6, aVec,
+                             (int)((size_t)pe->nDim*sizeof(float)), SQLITE_TRANSIENT);
+                else       sqlite3_bind_null(ins, 6);
                 if( sqlite3_step(ins)==SQLITE_DONE && sqlite3_changes(db)>0 ){
                     sqlite3_stmt *f = 0;
                     sqlite3_int64 seq = sqlite3_last_insert_rowid(db);
-                    /* External-content FTS: the row must be told about the
-                    ** text explicitly, and it re-reads viki_chunk to know
-                    ** what tokens to drop on delete -- which is why any
-                    ** future delete path must remove FTS FIRST. */
+                    /* External content over a VIEW: FTS is told the text
+                    ** explicitly at insert, and can regenerate the whole index
+                    ** from the ranges with ('rebuild') if it ever drifts. */
                     if( sqlite3_prepare_v2(db,
                         "INSERT INTO viki_fts(rowid, text) VALUES(?1,?2)",
                         -1, &f, 0)==SQLITE_OK ){
                         sqlite3_bind_int64(f, 1, seq);
-                        sqlite3_bind_text (f, 2, zC, (int)nC, SQLITE_TRANSIENT);
+                        sqlite3_bind_text (f, 2, zTx+lo, hi-lo, SQLITE_TRANSIENT);
                         sqlite3_step(f); sqlite3_finalize(f);
                     }
                     nTot++;
@@ -516,7 +565,8 @@ VikiStatus viki_forget(const char *zId){
     if( tx_begin(db, "viki_forget")!=SQLITE_OK )
         return fail(VIKI_ESQL, "viki_forget: %s", sqlite3_errmsg(db));
     drop_chunks(db,
-        "SELECT seq, text FROM viki_chunk WHERE id=?1",
+        "SELECT seq, text FROM viki_chunk_text WHERE seq IN"
+        " (SELECT seq FROM viki_chunk WHERE id=?1)",
         "DELETE FROM viki_chunk WHERE id=?1", zId);
     if( sqlite3_prepare_v2(db, "DELETE FROM viki_assert WHERE id=?1",
                            -1, &st, 0)==SQLITE_OK ){
@@ -528,17 +578,18 @@ VikiStatus viki_forget(const char *zId){
     return VIKI_OK;
 }
 
-VikiStatus viki_prune_epoch(const char *zEpoch, int *pnDropped){
+VikiStatus viki_prune_model(const char *zModel, int *pnDropped){
     sqlite3 *db = db_or_null();
     int n;
     if( pnDropped ) *pnDropped = 0;
     if( !db ) return VIKI_ENOCTX;
-    if( !zEpoch ) return fail(VIKI_EINVAL, "viki_prune_epoch: null epoch%s","");
+    if( !zModel ) return fail(VIKI_EINVAL, "viki_prune_model: null model%s","");
     if( tx_begin(db, "viki_prune")!=SQLITE_OK )
-        return fail(VIKI_ESQL, "viki_prune_epoch: %s", sqlite3_errmsg(db));
+        return fail(VIKI_ESQL, "viki_prune_model: %s", sqlite3_errmsg(db));
     n = drop_chunks(db,
-        "SELECT seq, text FROM viki_chunk WHERE epoch=?1",
-        "DELETE FROM viki_chunk WHERE epoch=?1", zEpoch);
+        "SELECT seq, text FROM viki_chunk_text WHERE seq IN"
+        " (SELECT seq FROM viki_chunk WHERE model=?1)",
+        "DELETE FROM viki_chunk WHERE model=?1", zModel);
     tx_end(db, "viki_prune", 1);
     if( pnDropped ) *pnDropped = n;
     return VIKI_OK;
@@ -600,7 +651,7 @@ static int split_terms(const char *zQ, char **az, int nMax){
 VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
     sqlite3 *db = db_or_null();
     const VikiEmbed *pe = RETAINED(VikiEmbed) ? RECALL(VikiEmbed) : 0;
-    const char *zEpoch = pe ? pe->zEpoch : "";
+    const char *zModel = pe ? pe->zModel : "";
     Cand pool[VIKI_POOL];
     char *azTerm[VIKI_MAX_TERMS];
     int nTerm, nPool = 0, i, j, nOut;
@@ -626,13 +677,11 @@ VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
     }
     if( zMatch && sqlite3_prepare_v2(db,
         /* NO EPOCH FILTER. The keyword leg needs no model, so restricting it
-        ** to the retained epoch made degraded mode return ZERO hits over any
-        ** corpus that had been indexed WITH an embedder -- the required
-        ** working path answering "nothing is known" about a store full of
-        ** text. Only the vector leg is epoch-sensitive, because only vectors
-        ** are. Duplicate (id,ix) across epochs is collapsed at
-        ** materialisation. */
-        "SELECT c.seq FROM viki_fts f JOIN viki_chunk c ON c.seq=f.rowid"
+        ** to one model made degraded mode return ZERO hits over any corpus
+        ** indexed WITH an embedder -- the required working path answering
+        ** "nothing is known" about a store full of text. Only the vector leg
+        ** is model-sensitive, because only vectors are. */
+        "SELECT f.rowid FROM viki_fts f"
         " WHERE viki_fts MATCH ?1"
         " ORDER BY bm25(viki_fts) LIMIT ?2", -1, &st, 0)==SQLITE_OK ){
         int r = 0;
@@ -654,7 +703,7 @@ VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
             double df = 1.0; int cnt = 0;
             sqlite3_stmt *q = 0;
             if( sqlite3_prepare_v2(db,
-                "SELECT count(*) FROM viki_chunk"
+                "SELECT count(*) FROM viki_chunk_text"
                 " WHERE instr(lower(text), lower(?1))>0", -1, &q, 0)!=SQLITE_OK ) continue;
             sqlite3_bind_text(q, 1, azTerm[i], -1, SQLITE_STATIC);
             if( sqlite3_step(q)==SQLITE_ROW ) cnt = sqlite3_column_int(q, 0);
@@ -662,7 +711,7 @@ VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
             if( cnt<=0 ) continue;
             df = (double)cnt;
             if( sqlite3_prepare_v2(db,
-                "SELECT seq FROM viki_chunk"
+                "SELECT seq FROM viki_chunk_text"
                 " WHERE instr(lower(text), lower(?1))>0", -1, &q, 0)!=SQLITE_OK ) continue;
             sqlite3_bind_text(q, 1, azTerm[i], -1, SQLITE_STATIC);
             while( sqlite3_step(q)==SQLITE_ROW ){
@@ -692,15 +741,25 @@ VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
 
     /* --- leg 3: VECTOR, only when an embedder was retained. Its absence is
     ** the degraded mode, reported rather than hidden. */
-    if( pe && pe->nDim>0 && pe->zEpoch && pe->zEpoch[0] ){
+    if( pe && pe->nDim>0 && pe->zModel && pe->zModel[0] ){
         float *aQ = (float*)calloc((size_t)pe->nDim, sizeof(float));
         if( aQ && pe->xEmbed(pe->pApp, zQuery, aQ, pe->nDim)==0 ){
             if( sqlite3_prepare_v2(db,
-                "SELECT seq FROM viki_chunk WHERE epoch=?1 AND vec IS NOT NULL"
-                " ORDER BY viki_cos(vec, ?2) DESC LIMIT ?3", -1, &st, 0)==SQLITE_OK ){
+                /* ACROSS EVERY CHUNKING AT THIS MODEL, which is the point of
+                ** ranges: a fine policy finds the precise sentence, a coarse
+                ** one keeps enough context to be judged, and RRF decides. The
+                ** budget is per-CHUNKING so one policy cannot crowd out the
+                ** others -- without that partition, the finest chunking wins
+                ** every slot simply by having the most rows. */
+                "SELECT seq FROM ("
+                "  SELECT seq, chunking, viki_cos(vec, ?2) AS cs,"
+                "         row_number() OVER (PARTITION BY chunking"
+                "                            ORDER BY viki_cos(vec, ?2) DESC) AS rn"
+                "    FROM viki_chunk WHERE model=?1 AND vec IS NOT NULL"
+                ") WHERE rn <= ?3 ORDER BY cs DESC", -1, &st, 0)==SQLITE_OK ){
                 int r = 0;
-                sqlite3_bind_text(st, 1, zEpoch, -1, SQLITE_STATIC);
-                sqlite3_bind_blob(st, 2, aQ, (int)(pe->nDim*sizeof(float)), SQLITE_STATIC);
+                sqlite3_bind_text(st, 1, zModel, -1, SQLITE_STATIC);
+                sqlite3_bind_blob(st, 2, aQ, (int)((size_t)pe->nDim*sizeof(float)), SQLITE_STATIC);
                 sqlite3_bind_int (st, 3, VIKI_LEG_BUDGET);
                 while( sqlite3_step(st)==SQLITE_ROW )
                     nPool = cand_add(pool, nPool, sqlite3_column_int64(st,0), r++);
@@ -731,21 +790,30 @@ VikiStatus viki_ask(const char *zQuery, int k, VikiHits **ppOut){
     ** first occurrence is the best because the pool is sorted descending. */
     for(i=0;i<nPool && pH->n<nOut;i++){
         sqlite3_stmt *q = 0;
-        if( sqlite3_prepare_v2(db, "SELECT id, ix, text FROM viki_chunk WHERE seq=?1",
+        if( sqlite3_prepare_v2(db,
+              "SELECT c.id, c.lo, c.hi, t.text, c.chunking FROM viki_chunk c"
+              " JOIN viki_chunk_text t ON t.seq=c.seq WHERE c.seq=?1",
                                -1, &q, 0)!=SQLITE_OK ) break;
         sqlite3_bind_int64(q, 1, pool[i].seq);
         if( sqlite3_step(q)==SQLITE_ROW ){
+            /* Collapse on the RANGE, not an ordinal: the same bytes reached
+            ** through two chunkings are one answer, and two overlapping
+            ** ranges that merely intersect are not. */
             int d, bDup = 0;
             const char *zIdC = (const char*)sqlite3_column_text(q, 0);
-            int ixC = sqlite3_column_int(q, 1);
+            int loC = sqlite3_column_int(q, 1), hiC = sqlite3_column_int(q, 2);
             for(d=0; d<pH->n; d++)
-                if( pH->a[d].ix==ixC && strcmp(pH->a[d].zId, zIdC?zIdC:"")==0 ){ bDup=1; break; }
+                if( pH->a[d].lo==loC && pH->a[d].hi==hiC
+                 && strcmp(pH->a[d].zId, zIdC?zIdC:"")==0 ){ bDup=1; break; }
             if( bDup ){ sqlite3_finalize(q); continue; }
-            const char *zT = (const char*)sqlite3_column_text(q, 2);
+            const char *zT = (const char*)sqlite3_column_text(q, 3);
+            const char *zCh = (const char*)sqlite3_column_text(q, 4);
             snprintf(pH->a[pH->n].zId, VIKI_ID_HEX+1, "%s", sqlite3_column_text(q,0));
-            pH->a[pH->n].ix    = sqlite3_column_int(q, 1);
+            pH->a[pH->n].lo    = loC;
+            pH->a[pH->n].hi    = hiC;
             pH->a[pH->n].score = pool[i].score;
             pH->a[pH->n].zText = zT ? strdup(zT) : 0;
+            snprintf(pH->a[pH->n].zChunking, sizeof(pH->a[pH->n].zChunking), "%s", zCh?zCh:"");
             pH->n++;
         }
         sqlite3_finalize(q);

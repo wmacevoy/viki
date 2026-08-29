@@ -167,7 +167,7 @@ core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **61 passed, 0 failed** (9 constraint + 52 behaviour).
+`sh core/test/core-probe.sh` → **71 passed, 0 failed** (9 constraint + 62 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -252,6 +252,47 @@ empty calendar, and an object with no `uid` has no identity and is skipped
 **C7 is the constraint this bought**: no hand-written lexer may reappear in
 core — no `strtok` over input, no quote-state machine, no fold rule — with C7b
 as its control, because a grep for absence passes on an empty file.
+
+### Chunks are RANGES, and two chunkings coexist — V2_DESIGN §3, built
+
+The predecessor keyed chunks on `(content_hash, model_id, chunk_ix)` and stored
+the text per chunk. `chunk_ix` is an **ordinal** whose meaning depends on the
+parameters that produced it, so two peers with different chunk sizes wrote rows
+that **agreed on the key and disagreed on the text**, and `INSERT OR IGNORE`
+silently double-indexed a document. The fix there was to fold chunking into the
+model id.
+
+Keyed on `(id, lo, hi, model)` **that collision is unrepresentable** — the
+extent is *in* the key rather than implied by it. Four things follow, and each
+has an assertion:
+
+| | |
+|---|---|
+| `model` means the **model** again (D-11 as originally written); `chunking` is provenance, not identity | V5 |
+| a **second chunking adds** ranges over the same assertion without disturbing the first | V2, V3 |
+| **overlap is free** — overlapping ranges are just ranges; the predecessor duplicated the overlapped text into two rows | V6 |
+| chunk rows are immutable on a content key, so they are **grow-only and union-mergeable**, the same class as assertions | — |
+
+**The text exists exactly once.** `viki_chunk` has no text column at all (V6);
+a chunk's text is `substr(atext, lo+1, hi-lo)` through a view, and FTS5 accepts
+that **view** as its external content — verified, including
+`INSERT INTO viki_fts(viki_fts) VALUES('rebuild')` regenerating the whole index
+from ranges alone (V7).
+
+**And the reason it matters most**: a device can store an assertion with **no
+chunking decision at all**, and a device with a model can add ranges over it
+later. Compute-once-share-many extends from embedding to chunking.
+
+The search win is measured, not asserted. Two topics six lines apart:
+
+```
+V3b CONTROL  only the FINE (2-line) chunking  -> no range holds both  ✓ misses
+V4           the COARSE (8-line) added        -> one range holds both ✓ found
+```
+
+The vector leg's budget is **per chunking** (`row_number() OVER (PARTITION BY
+chunking)`), because without that partition the finest policy takes every slot
+simply by having the most rows.
 
 ### Withdrawal, and a rule that turned out to be narrower than inherited
 
