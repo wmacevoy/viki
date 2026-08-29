@@ -117,11 +117,47 @@ The test to apply to any new viki code, replacing the placement test in SCOPES
 
 ---
 
-## 3. The oopc-shaped API
+## 3. Polymorphism (what `oopc` is)
 
-`../oopc`'s rule: prefix layout, `static const` vtables, **every slot takes the
-root type**, `static_assert` pins each layer. One C ABI; other languages bind
-with code in that language only.
+> *"polymorph is the well known pattern (oopc)"* — Warren
+
+Naming it plainly matters, and not only for tidiness. Calling it "the
+oopc-shaped API" made it sound like adopting a library; it is not. It is the
+ordinary pattern, and `oopc` is one disciplined way to spell it in C: prefix
+layout, `static const` vtables, **every slot takes the root type**,
+`static_assert` pinning each layer. The question is not whether to use `oopc`.
+It is **where viki has a polymorphic family it has written out by hand.**
+
+There are two, and the second is more obvious than the first.
+
+### 3a. The extractors — nine bodies, one algorithm
+
+Every one of the nine `index_*` functions is the same procedure:
+
+    build SQL -> fossil_sql_framed -> framed_init -> loop framed_next
+              -> compose a virtual path -> index_text_blob -> return seenEof
+
+Eight of the nine contain *exactly* four framing calls; only `index_tickets`
+differs, and only because it introspects first. What varies is three things:
+
+| slot | wiki | uv | checkins |
+|---|---|---|---|
+| `sql()` | tag/tagxref/blob | unversioned + `decompress()` | event + `content()` |
+| `path()` | `wiki:<name>` | `uv:<name>` | `ckin:<uuid>` |
+| `text()` | `find_w_card()` | split at first `\n` | the record as-is |
+
+That is a template method with three overridden slots, written nine times.
+
+**Every defect in this family is a defect OF the family**, and the tree shows
+it. The NUL exclusion — *the subprocess transport cannot carry an embedded NUL,
+so exclude such rows in SQL* — is now written **four** times, at
+`viki_index.c:1077`, `:1472`, `:1888` and `:1985`. It reached `attach:` first
+and had to be copied to `wiki:`, `ticket:` and `uv:` one at a time as each was
+converted. The `return it.seenEof` authority idiom is written seven times.
+Nothing is wrong with any single copy; the wrongness is that there are four,
+and the fifth extractor will need someone to remember.
+
+### 3b. The assertions
 
 The root type is the assertion:
 
@@ -185,38 +221,64 @@ the next projection from growing its own retrieval path.
 
 ---
 
-## 4. The retain-shaped context
+## 4. Pushing state opaquely to nested scope (what `retain` is)
 
-`../retain-recall` exists for exactly what `viki_index.c` does by hand. Nine
-extractors, three drifted shapes of the same trailing context:
+> *"retain is pushing state opaquely to nested scope"* — Warren
 
-```
-index_wiki    (sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked)
-index_forum   (sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked)
-index_tickets (sqlite3 *db, viki_embedder *emb, const char *modelId, int *nItems, int *nChunked)
-index_checkins(sqlite3 *db, viki_embedder *emb, const char *modelId, ...)
-index_file    (sqlite3 *db, const char *path,   int *nFiles, int *nChunked, ...)   <-- drifted
-```
+**This correction kills the argument I made for it first.** I proposed `retain`
+to collapse the five-parameter tail threaded through the nine extractors. That
+is not what it is for: parameters threaded through *one* frame want a **struct**,
+and reaching for dynamic scope to avoid typing a parameter is how dynamic scope
+gets a bad name. The counter drift (`nFiles` vs `nItems`) is real, and a struct
+fixes it.
 
-`index_file` calls its counter `nFiles` where the others call it `nItems`. That
-is not a naming nit; it is the observable symptom of ambient context threaded
-manually — the shapes diverge because nothing forces them together.
+The actual case is the one already in the tree, done badly.
+
+**viki already pushes state opaquely to nested scope — with `getenv`.** Ten
+values, read in four files, by whoever needs them at whatever depth:
+
+    VIKI_FOSSIL_REPO   VIKI_FOSSIL_BIN    VIKI_FOSSIL_URL   VIKI_FOSSIL_USER
+    VIKI_FOSSILSEE_LIB VIKI_MODEL_DIR     VIKI_IDENTITY_BIN VIKI_NO_FORK
+    VIKI_VERSE         VIKI_ME
+
+That is exactly the pattern — a caller provides state, a callee several frames
+down consumes it, and neither names the other — implemented with the worst
+available mechanism: untyped, process-global, no nesting, no lifetime, and not
+safely writable at runtime.
+
+**And there is a forcing function, not just a tidiness argument.** SCOPES §4
+defines *the verse* as the set of tribes reachable from one device, and on iOS
+that is **one process**. `VIKI_FOSSIL_REPO` as a process global cannot express
+"this call is about tribe A, that one about tribe B" — so the current mechanism
+does not merely offend taste, it caps viki at one tribe per process on the
+platform where multiple tribes are the point.
+
+`retain` gives that state a type, a scope, and a stack: a command retains the
+tribe it is operating on, everything beneath recalls it, and a nested operation
+on a second tribe pushes and pops without disturbing the first.
 
 ```c
-typedef struct { sqlite3 *db; viki_embedder *emb;
-                 const char *zEpoch;      /* viki_cache_epoch_id(), derived ONCE */
-                 int nItems, nChunked; } VikiCtx;
+typedef struct {                 /* the TRIBE being operated on -- retained */
+    const char *zRepo, *zUrl, *zUser, *zKey;
+    const char *zModelDir, *zEpoch;   /* viki_cache_epoch_id(), derived ONCE */
+    unsigned mFlags;                  /* VIKI_NO_FORK, ... */
+} VikiTribe;
 
-static int index_wiki(void){
-    VikiCtx *ctx = viki_recall(VikiCtx);
+static int index_wiki(const VikiExtractCtx *ctx){    /* a STRUCT: same frame */
+    const VikiTribe *t = viki_recall(VikiTribe);     /* RETAIN: many frames down */
     ...
 }
 ```
 
-Nine signatures collapse to zero parameters, the counter drift becomes
-impossible, and `zEpoch` gets one home — which matters, because composing the
-epoch in two places is the bug that silently turned hybrid retrieval into
-BM25-only and took four m1 assertions to catch.
+The distinction is the whole point: `VikiExtractCtx` is passed, because
+`viki_cmd_index` calls these directly and a parameter is honest there.
+`VikiTribe` is retained, because `viki_fossil_binary()` and
+`viki_fork_forbidden()` are four frames down and must not grow a parameter
+apiece — which is precisely why they read `getenv` today.
+
+`zEpoch` living in the retained tribe also gives it one home, which matters:
+composing the epoch in two places is the bug that silently turned hybrid
+retrieval into BM25-only and took four m1 assertions to catch.
 
 `ports/c/retain.h` already exists and is CI-covered across three thread-local
 backends on four platforms. Nothing needs inventing.
@@ -228,7 +290,11 @@ backends on four platforms. Nothing needs inventing.
 Not "what it adds" — that is the point of doing it.
 
 - **one** `resolve()` instead of two, with a third never written
+- the nine hand-written extractor bodies, and with them the class of defect
+  where a fix (the NUL exclusion) has to be applied three separate times
 - the five-parameter tail, nine times over
+- `getenv` as viki's dynamic-scope mechanism, and the one-tribe-per-process
+  ceiling it imposes on the platform where the verse is supposed to live
 - `viki_prov.c`'s re-derivation of `finfo` — `ARBITRATION.md` §4 already
   withdrew half its justification once the deletion bug was fixed
 - the counted framing protocol, once in-process access is the only transport
