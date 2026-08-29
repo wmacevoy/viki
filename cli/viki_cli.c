@@ -698,8 +698,18 @@ static int run_cmd(const char *zStore, int argc, char **argv,
         }
         /* Retained AROUND the serve loop, so every request the children make
         ** is answered with the identity and the model already in scope. */
+        /* CONDITIONAL, and D4 is why. Retaining a ZEROED VikiEmbed is not the
+        ** same as retaining none: viki_reindex sees one, finds zModel NULL,
+        ** and correctly refuses -- so every CLI invocation silently indexed
+        ** nothing. retain's own RETAIN_BEGIN_IF is the answer (the C form of
+        ** C++ retain<T>(p,false)); a struct that is present-but-empty is not
+        ** absence, and core is right to tell them apart.
+        **
+        ** The identity is retained UNCONDITIONALLY on purpose: with no signer
+        ** it still carries xVerify, so this process can always say who wrote
+        ** what even when it cannot sign. */
         RETAIN_BEGIN(VikiIdentity, &held.id, gi);
-        RETAIN_BEGIN(VikiEmbed,    &held.embed, ge);
+        RETAIN_BEGIN_IF(VikiEmbed, &held.embed, held.bEmbed, ge);
         /* SELECT WITH A TIMEOUT, NOT A BLOCKING accept().
         **
         ** signal() installs a BSD-style handler with SA_RESTART, so SIGCHLD
@@ -790,8 +800,18 @@ int main(int argc, char **argv){
         RETAIN_BEGIN(VikiStore, &st, g);
         st.db = db;
         if( held_open(&held)!=0 ){ sqlite3_close(db); return 1; }
+        /* CONDITIONAL, and D4 is why. Retaining a ZEROED VikiEmbed is not the
+        ** same as retaining none: viki_reindex sees one, finds zModel NULL,
+        ** and correctly refuses -- so every CLI invocation silently indexed
+        ** nothing. retain's own RETAIN_BEGIN_IF is the answer (the C form of
+        ** C++ retain<T>(p,false)); a struct that is present-but-empty is not
+        ** absence, and core is right to tell them apart.
+        **
+        ** The identity is retained UNCONDITIONALLY on purpose: with no signer
+        ** it still carries xVerify, so this process can always say who wrote
+        ** what even when it cannot sign. */
         RETAIN_BEGIN(VikiIdentity, &held.id, gi);
-        RETAIN_BEGIN(VikiEmbed,    &held.embed, ge);
+        RETAIN_BEGIN_IF(VikiEmbed, &held.embed, held.bEmbed, ge);
         rc = do_verb(stdout, argc-1, argv+1, nLines, nOverlap);
         RETAIN_END(ge);
         RETAIN_END(gi);
