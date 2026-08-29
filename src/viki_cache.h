@@ -37,6 +37,11 @@ int viki_cmd_cache_pull(const char *zCacheDbPath);
 ** is bounded: the model is re-published only when the epoch actually
 ** changes (see the manifest check in viki_cmd_cache_push_opts), so a
 ** routine `viki cache push` moves the cache and nothing else. */
+/* Where "when did THIS device last hear from the hub" is kept. A local file
+** rather than a cache row, because the cache is what syncs -- a timestamp
+** inside it would travel and answer the wrong question (VIKIVERSE_V1 2.9). */
+#define VIKI_LAST_PULL_PATH ".viki/last-pull"
+
 #define VIKI_CACHE_NO_MODEL 0x01u
 
 /* VIKI_CACHE_REQUIRE_SIG -- refuse a model whose epoch pin is not signed by a

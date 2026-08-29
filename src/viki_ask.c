@@ -1027,7 +1027,36 @@ int viki_cmd_ask_opts(sqlite3 *db, const char *zQuery, int topK, viki_embedder *
                 "%d weaker hit(s) withheld. Re-run with --min-cos 0 to see them.)\n",
                 info.bestCos, opts.minCos, info.nSuppressed);
         }else{
-            fprintf(stderr, "(no matches)\n");
+            /* "THE CACHE NEVER ARRIVED" AND "I SEARCHED AND FOUND NOTHING" ARE
+            ** TWO OF SS 2.9's FOUR REQUIRED MESSAGES, and they were byte-
+            ** identical: an empty directory and a real corpus with no answer
+            ** both printed "(no matches)" and exited 0. An agent cannot tell
+            ** "ask again differently" from "there is nothing here to ask", and
+            ** the second is the one that needs a person.
+            **
+            ** Counted rather than guessed: one cheap query against the cache
+            ** viki just searched. No threshold and no advice about what a
+            ** small corpus means -- that is a judgment and it belongs to the
+            ** caller. */
+            sqlite3_stmt *stc = NULL;
+            sqlite3_int64 nChunk = -1;
+            if( sqlite3_prepare_v2(db, "SELECT count(*) FROM viki_chunk", -1, &stc, NULL) == SQLITE_OK ){
+                if( sqlite3_step(stc) == SQLITE_ROW ) nChunk = sqlite3_column_int64(stc, 0);
+                sqlite3_finalize(stc);
+            }
+            if( nChunk == 0 ){
+                fprintf(stderr,
+                    "(NOTHING IS INDEXED HERE -- the cache holds 0 chunks.\n"
+                    " This is not \"no answer\"; there was nothing to search.\n"
+                    " Run 'viki index <dir>', or 'viki cache pull' if this tribe\n"
+                    " syncs from a hub.)\n");
+            }else if( nChunk < 0 ){
+                fprintf(stderr,
+                    "(no matches -- and the corpus size could not be read, so this\n"
+                    " cannot say whether anything was searched at all.)\n");
+            }else{
+                fprintf(stderr, "(no matches in %lld indexed chunk(s))\n", (long long)nChunk);
+            }
         }
     }else if( info.bestCos > VIKI_COS_NONE ){
         fprintf(stderr, "viki ask: best cosine %.4f (floor %.2f)\n", info.bestCos, opts.minCos);

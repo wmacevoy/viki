@@ -477,5 +477,52 @@ else
 fi
 
 
+echo "== 2.9 honest failure: two messages that did not exist (2026-08-29) =="
+# SS 2.9 names FOUR messages that must be distinguishable. Two were not:
+#   "the cache never arrived" vs "I searched and found nothing" -- byte-identical
+#       "(no matches)", exit 0, on an empty directory and on a real corpus.
+#   "sync is a week stale" -- nothing anywhere recorded when a pull happened.
+mkdir -p h-empty
+HE=$( cd h-empty && VIKI_MODEL_DIR="$DIR/no-model" "$V" ask "anything at all" 2>&1 )
+HR=$( "$V" ask "xylophone quantum submarine tariff" 2>&1 )
+
+chk "H8 an EMPTY cache says nothing is indexed, not 'no matches'" \
+    "$(printf '%s' "$HE" | grep -c 'NOTHING IS INDEXED HERE')" "1"
+# CONTROL, and the one that makes H8 mean something: a real corpus with no
+# answer must NOT say that -- it must say it searched and found nothing.
+chk "H9 CONTROL: a real corpus with no answer reports what it searched" \
+    "$(printf '%s' "$HR" | grep -c 'no matches in [0-9]* indexed chunk')" "1"
+chk "H10 CONTROL: ...and does NOT claim to be empty" \
+    "$(printf '%s' "$HR" | grep -c 'NOTHING IS INDEXED')" "0"
+
+# The sync fact: viki reports the instant and judges nothing.
+rm -f .viki/last-pull
+chk "H11 coverage says so when this device has NEVER pulled" \
+    "$("$V" coverage 2>/dev/null | grep -c 'never pulled')" "1"
+printf '2020-01-01T00:00:00Z\n' > .viki/last-pull
+chk "H12 ...and reports the instant once there is one" \
+    "$("$V" coverage 2>/dev/null | grep -c '2020-01-01T00:00:00Z')" "1"
+# THE SCOPE LINE: viki must NOT judge it. A threshold in src/ is the violation
+# SCOPES SS 3 exists to prevent, and coverage already carries none for channels.
+chk "H13 CONTROL: viki renders NO verdict on how old that is" \
+    "$("$V" coverage 2>/dev/null | grep -ciE 'stale|too old|should pull')" "0"
+
+if [ -f "$ROOT/assistant/brief.sh" ]; then
+    # ...and the assistant DOES judge it, which is the other half of the same rule.
+    HB=$(VIKI_BIN="$V" sh "$ROOT/assistant/brief.sh" --me mine 2>/dev/null)
+    chk "H14 the BRIEF calls a 2020 pull stale -- the judgment lives here" \
+        "$(printf '%s' "$HB" | grep -c 'MORE THAN 7 DAYS AGO')" "1"
+    printf '%sT06:00:00Z\n' "$(date -u +%Y-%m-%d)" > .viki/last-pull
+    HB2=$(VIKI_BIN="$V" sh "$ROOT/assistant/brief.sh" --me mine 2>/dev/null)
+    chk "H15 CONTROL: a pull TODAY is reported and not nagged about" \
+        "$(printf '%s' "$HB2" | grep -c 'MORE THAN 7 DAYS AGO')" "0"
+    chk "H16 CONTROL: ...but the sync line is still SHOWN, not omitted" \
+        "$(printf '%s' "$HB2" | grep -c '(sync)')" "1"
+else
+    sk "H14 (no brief.sh)"; sk "H15 (no brief.sh)"; sk "H16 (no brief.sh)"
+fi
+rm -f .viki/last-pull
+
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]

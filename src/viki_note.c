@@ -1,5 +1,6 @@
 #include "viki_note.h"
 #include "viki_db.h"
+#include "viki_cache.h"
 #include "viki_grep.h"
 
 #include <ctype.h>
@@ -658,6 +659,39 @@ int viki_cmd_coverage(sqlite3 *db, int bJson){
         n++;
     }
     sqlite3_finalize(st);
+
+    /* WHEN DID THIS DEVICE LAST HEAR FROM THE HUB. SS 2.9 names "sync is a week
+    ** stale" as one of four messages viki must be able to produce, and the
+    ** fact it rests on was recorded nowhere until 2026-08-29.
+    **
+    ** REPORTED, NEVER JUDGED. No "stale", no threshold, no advice -- coverage
+    ** prints last-seen times and lets assistant/ decide what a week means, the
+    ** same rule it already follows for channels. What it must NOT do is stay
+    ** silent: a tribe that has never pulled and one that pulled an hour ago
+    ** would otherwise look identical here. */
+    {
+        FILE *lp = fopen(VIKI_LAST_PULL_PATH, "r");
+        char zPull[64];
+        int haveP = 0;
+        if( lp ){
+            if( fgets(zPull, sizeof(zPull), lp) ){
+                size_t L = strlen(zPull);
+                while( L && (zPull[L-1] == '\n' || zPull[L-1] == '\r') ) zPull[--L] = 0;
+                haveP = zPull[0] != 0;
+            }
+            fclose(lp);
+        }
+        if( bJson ){
+            printf(",{\"source\":\"(sync)\",\"last_seen\":\"");
+            viki_json_escape(haveP ? zPull : "");
+            printf("\",\"notes\":0,\"declared\":true,\"kind\":\"sync\"}");
+        }else{
+            printf("%-18s %-28s %s\n", "(sync)",
+                   haveP ? zPull : "never",
+                   haveP ? "last pull from a hub" : "this device has never pulled");
+        }
+    }
+
     if( bJson ) printf("]\n");
     else if( n == 0 ) printf("(nothing captured or ingested)\n");
     /* Deliberately NO "stale" column and no advice. When a source counts as

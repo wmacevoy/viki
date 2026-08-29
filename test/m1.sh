@@ -632,8 +632,14 @@ check "A11 CONTROL: that query does NOT return barn.md at all" \
     >"$LOG/a.sem.out" 2>"$LOG/a.sem.err" </dev/null ) || true
 check "A12 VECTOR PROOF (half 1): semantic query finds NOTHING without a model" \
       '[ ! -s "$LOG/a.sem.out" ]' "$LOG/a.sem.out"
+# MATCHED AS A SHAPE, NOT A LITERAL. The message gained a corpus size on
+# 2026-08-29 because SS 2.9 requires "the cache never arrived" and "I searched
+# and found nothing" to be different messages, and they were byte-identical
+# "(no matches)". The property these three assert -- nothing was retrieved --
+# is unchanged; only the wording moved. Matching the shape keeps them honest
+# without pinning them to a sentence that is allowed to improve.
 check "A13 ... and says so on stderr" \
-      '$GREP -qx "(no matches)" "$LOG/a.sem.err"' "$LOG/a.sem.err"
+      '$GREP -qE "^\(no matches( in [0-9]+ indexed chunk)?"  "$LOG/a.sem.err"' "$LOG/a.sem.err"
 
 ( cd "$D" && VIKI_MODEL_DIR="$NOMODEL" "$VIKI_BIN" index . \
     >"$LOG/a.index2.out" 2>"$LOG/a.index2.err" </dev/null ) || true
@@ -1155,7 +1161,7 @@ check "H3 the re-index reports retiring the superseded chunk" \
 ( cd "$G" && VIKI_MODEL_DIR="$NOMODEL" "$VIKI_BIN" ask "$Q_OLD_BARN" \
     >"$LOG/g.old1.out" 2>"$LOG/g.old1.err" </dev/null ) || true
 check "H4 EDIT: the OLD text is no longer retrievable at all (H1 found it)" \
-      '[ ! -s "$LOG/g.old1.out" ] && $GREP -qx "(no matches)" "$LOG/g.old1.err"' "$LOG/g.old1.out"
+      '[ ! -s "$LOG/g.old1.out" ] && $GREP -qE "^\(no matches( in [0-9]+ indexed chunk)?"  "$LOG/g.old1.err"' "$LOG/g.old1.out"
 
 # The other side: invalidation must not be a euphemism for losing the
 # document. The NEW wording has to answer, under the same path.
@@ -1185,7 +1191,7 @@ check "H7 the re-index reports retiring the deleted file's source row" \
 ( cd "$G" && VIKI_MODEL_DIR="$NOMODEL" "$VIKI_BIN" ask "$Q_KEYWORD_CTL" \
     >"$LOG/g.tax1.out" 2>"$LOG/g.tax1.err" </dev/null ) || true
 check "H8 DELETE: the deleted document's text is no longer retrievable (H2 found it)" \
-      '[ ! -s "$LOG/g.tax1.out" ] && $GREP -qx "(no matches)" "$LOG/g.tax1.err"' "$LOG/g.tax1.out"
+      '[ ! -s "$LOG/g.tax1.out" ] && $GREP -qE "^\(no matches( in [0-9]+ indexed chunk)?"  "$LOG/g.tax1.err"' "$LOG/g.tax1.out"
 
 # THE CONTROL that makes H4/H8 mean "withdrawn", not "the sweep ate the
 # cache". grocery.md was never touched by either mutation and must still

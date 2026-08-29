@@ -432,7 +432,7 @@ unreadable.
 | 2.6 | capture that cannot be lost | **PARTIAL** | PWA holds captures in IndexedDB with **no outbound path** |
 | 2.7 | cross-project recall | **MET** | 111 projects, one question |
 | 2.8 | provenance | **UNMET** | `viki when`/`since` exist on a branch, not merged |
-| 2.9 | honest failure | **PARTIAL** | 2 of its 4 required messages do not exist |
+| 2.9 | honest failure | **MET 2026-08-29** | all four messages exist and are distinguishable |
 | 2.10 | encrypted at rest | **MET** | m1 E1-E4 |
 | 2.11 | one API, several consumers | **PARTIAL** | `/api/ask` + `/api/capture`; MCP designed, on a branch, not merged |
 
@@ -450,9 +450,13 @@ unreadable.
   it printed "all channels read today" directly under a row marked STALE,
   because the closing line was chosen from the SIGN-IN list and "captured here"
   is deliberately excluded from that list. Two questions, one answer.
-- **2.9's two missing messages.** "the cache never arrived" vs "I searched and
-  found nothing" is a distinction viki already has and discards. "sync is a
-  week stale" needs one timestamp written at `cache pull`.
+- ~~**2.9's two missing messages.**~~ **DONE 2026-08-29.** `viki ask` on an
+  empty cache now says nothing is indexed and names the count on a fruitless
+  search, so the two stop being byte-identical `(no matches)`. `cache pull`
+  records `.viki/last-pull` -- a LOCAL file, because a timestamp inside the
+  synced cache would travel and answer "when did the PUSHER last pull" -- and
+  `viki coverage` reports the instant while judging nothing. The brief calls
+  seven days stale, which is where that judgment belongs.
 - **2.2's brief separation.** Presentation only; the ledger already
   distinguishes parties.
 - **2.5 calendar coverage.** `viki coverage` queries `viki_note` only; the
@@ -503,9 +507,27 @@ have seen a channel it has not.
   model from v1 entirely, and it also means V2's own scope (V2_DESIGN.md:
   escalation by resources, range-addressed chunks, the MCP face) carries no
   hosting obligation either.
-- **Q2** who else is in a tribe in v1 -- your devices and agents only, or other
-  people. Still open, and it gates 2.2c entirely: multi-person makes revocation
-  urgent rather than deferred.
+- ~~**Q2** who else is in a tribe~~ **SETTLED 2026-08-29: Warren's devices plus
+  two agent ROLES -- the Claude Cowork agent and Claude Code. No other people
+  in v1.**
+
+  Two distinctions that came out of settling it, and both are load-bearing:
+
+  **The two agents are not equivalent holders.** Claude Code runs locally and
+  holds the tribe key; Cowork runs elsewhere and does not. That asymmetry is
+  exactly what the fronting container (5a1) is for -- it is how a collaborator
+  holding no key gets bounded access, and it is why "auth is a container
+  concern" and "who is in the tribe" are one answer rather than two.
+
+  **"Claude Code" is a ROLE, not an identity.** Each session is ephemeral and
+  knows nothing of the last, which is precisely why 2.2b exists. The ledger's
+  `who` names the role; continuity has to come from the notes, never from a
+  session that will not be there tomorrow.
+
+  **Consequence for 2.2c:** with no other people, revocation stays deferred and
+  the `draft`/`act` rungs stay cut. Every holder that matters already has the
+  key, so a capability bound is a courtesy rather than a control -- which is the
+  same conclusion 5a1 reached from the other direction.
 - ~~**Q3** Fossil users or tokens~~ **SETTLED 2026-08-28: neither, in viki.**
   Auth belongs to a fronting container (nanoclaw / Caddy); viki stays loopback
   and unauthenticated. See 5a1.

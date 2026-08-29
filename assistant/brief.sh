@@ -100,6 +100,20 @@ cut = (now - datetime.timedelta(days=stale_days)).strftime("%Y-%m-%d")
 today = now.strftime("%Y-%m-%d")
 stale = []
 any_stale = False
+# THE SYNC ROW IS A DIFFERENT KIND OF FACT and gets a different judgment.
+# viki reports WHEN this device last pulled and refuses to say whether that is
+# too long; SS 2.9 requires the message "sync is a week stale" to be sayable,
+# and this is where the week comes from. A number in src/ would be the scope
+# violation SCOPES SS 3 exists to prevent.
+sync_row = None
+keep = []
+for r in rows:
+    if r.get("kind") == "sync":
+        sync_row = r
+    else:
+        keep.append(r)
+rows = keep
+
 for r in rows:
     src, seen = r["source"], (r["last_seen"] or "")[:10]
     # A CHANNEL viki INFERRED IS NOT A CHANNEL TO SIGN IN TO.
@@ -134,6 +148,23 @@ for r in rows:
 #
 # Contradicting yourself on screen is worse than either message alone: it
 # teaches the reader that the summary line is decoration.
+# SYNC_STALE_DAYS is a judgment about the week Warren keeps, not a fact about
+# a corpus. Seven, because that is the interval SS 2.9 acceptance text names.
+SYNC_STALE_DAYS = 7
+if sync_row is not None:
+    ls = (sync_row.get("last_seen") or "")[:10]
+    if not ls:
+        print("  (sync)           NEVER pulled from a hub -- if this tribe has one,")
+        print("                   everything above is only what THIS device wrote.")
+    else:
+        cutoff = (now - datetime.timedelta(days=SYNC_STALE_DAYS)).strftime("%Y-%m-%d")
+        if ls < cutoff:
+            print("  (sync)           last pull %s -- MORE THAN %d DAYS AGO." % (ls, SYNC_STALE_DAYS))
+            print("                   Peers may have written things this device cannot see:")
+            print("                   viki cache pull")
+        else:
+            print("  (sync)           last pull %s" % ls)
+
 if stale:
     # The sign-in round as a BOUNDED task -- a list that shrinks on a good day,
     # rather than "go check everything".

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -1144,6 +1145,28 @@ static int cache_merge_in(const char *zCacheDbPath, const char *zIncoming){
     return 0;
 }
 
+static void iso_now_utc(char *zOut, size_t n){
+    time_t t = time(NULL);
+    struct tm g;
+#if defined(_WIN32)
+    g = *gmtime(&t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    strftime(zOut, n, "%Y-%m-%dT%H:%M:%SZ", &g);
+}
+
+/* ".viki/last-pull" -- one ISO instant, written on a successful pull. See the
+** call site for why this is a local file rather than a cache row. */
+static void record_last_pull(void){
+    FILE *f = fopen(VIKI_LAST_PULL_PATH, "w");
+    char zNow[32];
+    if( !f ) return;                 /* not worth failing a good pull over */
+    iso_now_utc(zNow, sizeof(zNow));
+    fprintf(f, "%s\n", zNow);
+    fclose(f);
+}
+
 int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags){
     const char *fossil = viki_fossil_binary();
     char *argvSync[] = { (char*)fossil, "uv", "sync", NULL };
@@ -1177,6 +1200,21 @@ int viki_cmd_cache_pull_opts(const char *zCacheDbPath, unsigned mFlags){
         unlink(zTmp);
         return 1;
     }
+
+    /* RECORD WHEN THIS DEVICE LAST PULLED. VIKIVERSE_V1 SS 2.9 requires "sync is
+    ** a week stale" to be a message viki can produce, and nothing recorded the
+    ** fact it would be computed from.
+    **
+    ** LOCAL, IN A FILE, NOT IN THE CACHE -- and that is the whole design
+    ** decision. The cache is what SYNCS: a timestamp stored inside it would
+    ** travel to every peer and answer "when did the PUSHER last pull", which is
+    ** not the question. "How long since I heard from the hub" is a fact about
+    ** THIS device and must live where nothing merges it.
+    **
+    ** No threshold here. viki records the instant; how long is too long is a
+    ** judgment about Warren's day and belongs to assistant/ -- the same rule
+    ** that keeps a staleness number out of `viki coverage`. */
+    record_last_pull();
 
     if( mFlags & VIKI_CACHE_NO_MODEL ){
         fprintf(stderr, "viki cache pull: --no-model: embedding cache only, model not fetched\n");
