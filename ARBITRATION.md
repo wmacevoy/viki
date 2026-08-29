@@ -134,6 +134,16 @@ What works, from the CLI, with `-R` and no checkout:
    the reason its probe mutates `AND ml.fid <> 0` — the mutation that makes
    `when` behave like `finfo` and drops every deletion.
 
+   > **2026-08-29, and this one changed:** it is a *bug*, not a limit. The
+   > query inner-joins `blob b` on `b.rid=mlink.fid` while a deletion has
+   > `fid==0`, so the join removes exactly the rows the `isDel` column it also
+   > computes exists to flag. Fixed for the JSON route in fossil-see
+   > (`fossil-json-finfo-deletions.patch`, vendored); the CLI has the same
+   > defect and the **web** `/finfo` page does not. So the argument in §4 that
+   > deletions are "genuinely viki's and NOT available from Fossil's own
+   > surfaces" is now **wrong as stated** — Fossil can report them, and one of
+   > its faces always could. See FINDINGS.md.
+
 **So the framing protocol stays.** It is solving bulk content read, which JSON
 does not solve. What was actually wrong with it was never SQL — it was having
 **two transports** and letting the weaker one define the wire format. The
@@ -163,16 +173,21 @@ than "is provenance good":
 provenance than I expected.** Two things in it are genuinely viki's and are NOT
 available from Fossil's own surfaces:
 
-- **Deletions.** `fossil finfo` and `json finfo` both omit them. "This file was
-  removed" is the single most important thing a memory system can say about a
-  document it once indexed, and Fossil's file-history surface does not say it.
+- **Deletions.** ~~`fossil finfo` and `json finfo` both omit them.~~
+  **Withdrawn 2026-08-29.** They omit them because of a two-line bug, now fixed
+  in the vendored build for the JSON route; the web `/finfo` page never had it.
+  So this is not a gap viki has to fill — the deletion row is available from
+  Fossil, and re-deriving it in `viki_prov.c` would be duplicating a surface
+  that works rather than adding one that does not. The honest remaining claim
+  is the next bullet only.
 - **The index join.** "This artifact changed, and here is whether it is in your
   cache" is viki's question by construction.
 
-So provenance is not merely re-derived history. What it should NOT do is
-re-derive the parts Fossil does give — and the thinning target is anything in
-those 1,066 lines that duplicates `finfo`'s per-checkin fields rather than
-adding the deletion row or the index column.
+So provenance is not merely re-derived history — but the case for it is now
+**one bullet, not two**, and that is a materially weaker case than when this
+section was written. What it should NOT do is re-derive the parts Fossil does
+give, and with deletions moving into that category the thinning target is
+anything in those 1,066 lines that is not the index join.
 
 **Sequence:** this thinning is a rewrite, and the branch has already failed
 three review rounds. Land nothing from it until 2b is settled, because
@@ -197,9 +212,11 @@ notes-as-tickets changes what `viki why` and `viki when` even need to do.
 ## 5. Open
 
 1. ~~Does `fossil json` work from the CLI?~~ **ANSWERED 2026-08-29 — yes, and
-   it does not help enough.** Per-artifact content, no tickets, no deletions in
-   `finfo`. See §2c. The framing protocol stays; the two-transport problem is
-   the real defect and `libfossilsee` is already its fix.
+   it does not help enough.** Per-artifact content, no tickets. See §2c. The
+   framing protocol stays; the two-transport problem is the real defect and
+   `libfossilsee` is already its fix. (The third reason given here, "no
+   deletions in `finfo`", was a bug and has been fixed — it is no longer an
+   argument for anything. The first two still hold and are sufficient.)
 2. Does a ticket-backed note survive `fossil` being absent at *read* time? The
    projection must still answer from the cache when the repo cannot be opened.
 3. Does supersession-as-ticket-change preserve `viki why`'s both-directions

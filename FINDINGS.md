@@ -12,7 +12,7 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
-## Fossil's /json/finfo silently omits every file deletion, and the CLI finfo does not
+## Fossil's `finfo` omits every file deletion on two of its three routes
 
 2026-08-29. `json_finfo.c` computes `(mlink.fid==0) AS isDel` and passes it to
 `json_artifact_status_to_string()`, which can return `"added"`, `"modified"` or
@@ -21,12 +21,28 @@ and a deletion has `fid==0` while no blob has `rid==0`, so the join removes
 exactly the rows `isDel` exists to flag. The column is dead code and `"removed"`
 is unreachable from that route.
 
-**The wrong assumption it replaces:** that the CLI and JSON faces of `finfo`
-report the same history, so measuring one measures both. They do not. `finfo.c`
-has an explicit `mlink.fid>0 OR NOT EXISTS(...)` clause and gets deletions
-right; only the JSON path is wrong. This is why the earlier measurement that
-"`fossil json finfo` does not report deletions" read as a design limit of the
-JSON API rather than as a bug with a two-line fix.
+**The wrong assumption it replaces:** that "`fossil json finfo` does not report
+deletions" was a design limit of the JSON API. It is a two-line bug.
+
+**And a correction to my own first reading of it, made the same day.** I wrote
+here that the CLI `fossil finfo` got this right and only the JSON route was
+wrong, citing the `mlink.fid>0 OR NOT EXISTS(...)` clause at `finfo.c:453`.
+That clause is in **`finfo_page()`** -- the *web* `/finfo` page. The CLI's own
+log-mode query (`finfo.c:223`) carries the identical inner join and drops
+deletions exactly like the JSON route. Caught by running `fossil finfo f.txt`
+instead of restating the claim, after it had already been written into an
+upstream report. Three routes onto one file's history:
+
+| route | function | deletions |
+|---|---|---|
+| `/finfo` (web) | `finfo_page()`, `finfo.c:453` | **reported** |
+| `fossil finfo` (CLI) | `finfo_cmd()`, `finfo.c:223` | omitted |
+| `/json/finfo` | `json_finfo.c:80` | omitted |
+
+Each route's own query, run verbatim against the repro repo below: the CLI
+query returns `add, mod`; the web page query returns `add, mod, del` with
+`isDel=1`. The web page having been correct all along is the strongest
+evidence that omitting deletions was never the intended behaviour.
 
 Repro -- one file added, modified, then removed:
 
@@ -36,12 +52,15 @@ echo one > f.txt && fossil add f.txt && fossil commit -m add
 echo two >> f.txt                    && fossil commit -m mod
 fossil rm f.txt                      && fossil commit -m del
 fossil json finfo --name f.txt       # two rows: added, modified
-fossil finfo f.txt                   # three -- the CLI sees the deletion
+fossil finfo f.txt                   # also omits the deletion
 ```
 
 The fix is `LEFT JOIN blob b ON b.rid=mlink.fid` in place of the inner join;
-`build/patches/fossil-json-finfo-deletions.patch` in fossil-see carries it, and
-the rebuilt binary returns the third row with `state="removed"`. On a deletion
+`build/patches/fossil-json-finfo-deletions.patch` in fossil-see carries it for
+the JSON route, and the rebuilt binary returns the third row with
+`state="removed"`. `finfo.c:223` takes the identical change and is deliberately
+not patched: the CLI *prints* `artifact: [%S]` from a column that is NULL on a
+deletion, and what such a row should display is a decision for upstream. On a deletion
 row `b.uuid` and `b.size` are NULL, `json_new_string()` maps NULL to NULL, and
 `cson_object_set()` unsets the key -- so the row carries `state` and no `uuid`,
 which is correct because a removal names no content.
