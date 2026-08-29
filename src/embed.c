@@ -107,6 +107,64 @@ static char *find_name(const OrtApi *ort, OrtSession *session, OrtAllocator *all
     return result;
 }
 
+/* FROM MEMORY. A filesystem is not available everywhere viki runs -- not in
+** wasm, not inside a sandboxed robot -- so the graph and the vocabulary
+** arrive as BYTES and ORT's CreateSessionFromArray takes the graph directly.
+** The dimension is passed in rather than read from a manifest file, because
+** the manifest is a file too; a caller that has the blob has the pin.
+**
+** The path opener below now calls this, so there is ONE implementation. */
+viki_embedder *viki_embedder_open_mem(const void *pGraph, size_t nGraph,
+                                      const char *zVocab, size_t nVocab,
+                                      const char *zModelId, int nDim){
+    struct viki_embedder *e;
+    OrtStatus *st;
+    OrtSessionOptions *opts;
+
+    if( !pGraph || !nGraph || !zVocab || !nVocab || nDim<=0 ) return NULL;
+    e = calloc(1, sizeof(*e));
+    if( !e ) return NULL;
+    e->dim = nDim;
+    snprintf(e->modelId, sizeof(e->modelId), "%s", zModelId ? zModelId : "unknown");
+
+    e->vocab = viki_vocab_load_mem(zVocab, nVocab);
+    if( !e->vocab ){ free(e); return NULL; }
+
+    e->ort = get_ort_api();
+    if( check(e->ort, e->ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "viki", &e->env), "CreateEnv") ){
+        viki_vocab_free(e->vocab); free(e); return NULL;
+    }
+    if( check(e->ort, e->ort->CreateSessionOptions(&opts), "CreateSessionOptions") ){
+        viki_vocab_free(e->vocab); free(e); return NULL;
+    }
+    st = e->ort->CreateSessionFromArray(e->env, pGraph, nGraph, opts, &e->session);
+    e->ort->ReleaseSessionOptions(opts);
+    if( check(e->ort, st, "CreateSessionFromArray") ){
+        viki_vocab_free(e->vocab); free(e); return NULL;
+    }
+    if( check(e->ort, e->ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault,
+                                                 &e->memInfo), "CreateCpuMemoryInfo") ){
+        viki_vocab_free(e->vocab); free(e); return NULL;
+    }
+    if( check(e->ort, e->ort->GetAllocatorWithDefaultOptions(&e->allocator),
+              "GetAllocatorWithDefaultOptions") ){
+        viki_vocab_free(e->vocab); free(e); return NULL;
+    }
+    /* "last_hidden_state", not NULL: find_name strstr()s the needle, so a
+    ** NULL is a segfault rather than a wildcard. The path opener has always
+    ** passed it; omitting it here crashed on the first real model. */
+    e->inputIdsName  = find_name(e->ort, e->session, e->allocator, 1, "input_ids");
+    e->attnMaskName  = find_name(e->ort, e->session, e->allocator, 1, "attention_mask");
+    e->tokenTypeName = find_name(e->ort, e->session, e->allocator, 1, "token_type_ids");
+    e->outputName    = find_name(e->ort, e->session, e->allocator, 0, "last_hidden_state");
+    if( !e->inputIdsName || !e->attnMaskName || !e->outputName ){
+        fprintf(stderr, "viki embed: model does not expose the expected inputs\n");
+        viki_embedder_close(e);
+        return NULL;
+    }
+    return e;
+}
+
 viki_embedder *viki_embedder_open(const char *zModelDir){
     struct viki_embedder *e;
     char modelPath[4096], vocabPath[4096], manifestPath[4096];

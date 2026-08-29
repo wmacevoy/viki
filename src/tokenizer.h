@@ -119,6 +119,9 @@ typedef struct {
 /* Loads vocab.txt (one token per line, line number == token id). Returns
 ** NULL on failure (prints diagnostics to stderr). */
 viki_vocab *viki_vocab_load(const char *zVocabPath);
+/* The same, from bytes. A filesystem is not available in wasm or inside a
+** sandboxed robot, so loading by path is the special case. */
+viki_vocab *viki_vocab_load_mem(const char *zText, size_t nText);
 void viki_vocab_free(viki_vocab *v);
 
 /* Tokenizes zText into WordPiece token ids, framed with [CLS] ... [SEP],

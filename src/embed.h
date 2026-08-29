@@ -22,6 +22,12 @@ typedef struct viki_embedder viki_embedder;
 ** the "no model present" case VIKI_DESIGN.md requires degrading
 ** gracefully from, not a hard error for callers to propagate as fatal. */
 viki_embedder *viki_embedder_open(const char *zModelDir);
+/* The same from BYTES -- no filesystem. wasm and a sandboxed robot have no
+** directory to point at, and the graph, the vocabulary and the pin all
+** travel as blobs. */
+viki_embedder *viki_embedder_open_mem(const void *pGraph, size_t nGraph,
+                                      const char *zVocab, size_t nVocab,
+                                      const char *zModelId, int nDim);
 void viki_embedder_close(viki_embedder *e);
 
 const char *viki_embedder_model_id(const viki_embedder *e);

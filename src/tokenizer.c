@@ -37,6 +37,51 @@ static int vocab_lookup(const void *vv, const char *tok){
     return -1;
 }
 
+static unsigned long djb2(const char *s);   /* defined below */
+
+/* FROM MEMORY, because a filesystem is not available everywhere viki runs --
+** not in wasm, not in a sandboxed robot. The path loader below is now a thin
+** wrapper on this one, so there is one implementation and the file case is
+** the special case rather than the other way round. */
+viki_vocab *viki_vocab_load_mem(const char *zText, size_t nText){
+    struct VikiVocabImpl *impl;
+    const char *p = zText, *zEnd = zText + nText;
+    int cap = 40000;
+
+    if( !zText ) return NULL;
+    impl = calloc(1, sizeof(*impl));
+    impl->pub.tokens = calloc((size_t)cap, sizeof(char*));
+    impl->pub.nTokens = 0;
+    impl->nBuckets = 65537;
+    impl->buckets = calloc((size_t)impl->nBuckets, sizeof(HNode*));
+
+    while( p < zEnd ){
+        const char *zNl = memchr(p, '\n', (size_t)(zEnd - p));
+        size_t len = zNl ? (size_t)(zNl - p) : (size_t)(zEnd - p);
+        char *tok;
+        HNode *node;
+        unsigned long h;
+        while( len && (p[len-1]=='\r') ) len--;
+        if( impl->pub.nTokens >= cap ){
+            cap *= 2;
+            impl->pub.tokens = realloc(impl->pub.tokens, (size_t)cap * sizeof(char*));
+        }
+        tok = malloc(len+1);
+        memcpy(tok, p, len); tok[len] = 0;
+        impl->pub.tokens[impl->pub.nTokens] = tok;
+        node = malloc(sizeof(HNode));
+        node->tok = tok;
+        node->id = impl->pub.nTokens;
+        h = djb2(tok) % (unsigned long)impl->nBuckets;
+        node->next = impl->buckets[h];
+        impl->buckets[h] = node;
+        impl->pub.nTokens++;
+        if( !zNl ) break;
+        p = zNl + 1;
+    }
+    return (viki_vocab*)impl;
+}
+
 viki_vocab *viki_vocab_load(const char *zVocabPath){
     FILE *f = fopen(zVocabPath, "r");
     struct VikiVocabImpl *impl;

@@ -51,6 +51,7 @@
 #include <sys/time.h>
 #include "viki_core.h"
 #include "viki_cal.h"
+#include "sha256.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 
@@ -69,6 +70,8 @@ static int usage(void){
 "  reindex               (re)project ranges; repeat with --lines/--overlap\n"
 "                        to add a SECOND chunking over the same assertions\n"
 "  cal ingest FILE       jsCalendar (RFC 8984) in\n"
+"  model import DIR      ingest model.onnx, vocab.txt and the pinned dim\n"
+"                        as blobs. Files are read HERE and never again.\n"
 "  cal events [FROM TO]  the resolved tier\n"
 "  count WHAT            assert|current|range|vector|chunking|model\n"
 "  sql SELECT ...        the raw rung\n"
@@ -80,7 +83,8 @@ static int usage(void){
 "                          $VIKI_KEY, else a prompt on a terminal.\n"
 "                          64 hex chars is used as a RAW key (no KDF).\n"
 "  --signer PATH           Ed25519 key file (mode 600): name, then 64 hex\n"
-"  --embedder PATH.so      a library exporting the embedder ABI\n"
+"  --embedder PATH.so      a library exporting the embedder ABI. It reads the\n"
+"                          model from THIS DIARY -- import it once first.\n"
 "  --source-keyfile PATH   key for `merge`'s source, if it differs\n"
 "  --plaintext             open an UNENCRYPTED diary, deliberately\n"
 "  --store PATH            default $VIKI_STORE, else ./viki.db\n"
@@ -245,11 +249,19 @@ static const char *zEmbedLib = 0;
 ** pModel is the model BLOB out of the diary, or NULL when the library knows
 ** where its own weights are. That is the shape that lets one model database
 ** serve several diaries without any of them carrying a copy. */
-typedef int  (*fnEmbOpen )(const void*, size_t, int*, void**);
+/* THE HOST RESOLVES NAMES TO BYTES. Where from is the host's business and
+** that is the entire point: a diary blob works in wasm and inside a sandbox,
+** a file works on a laptop, and the embedder is told neither. An earlier
+** version passed $VIKI_MODEL_DIR, which is a filesystem assumption wearing a
+** plugin's clothes -- there is no directory in two of the three places this
+** must run. */
+static char *slurp(const char *zPath, size_t *pn);   /* defined below */
+typedef const void *(*viki_blob_fn)(void*, const char*, size_t*);
+typedef int  (*fnEmbOpen )(viki_blob_fn, void*, int*, void**);
 typedef int  (*fnEmbEmbed)(void*, const char*, float*, int);
 typedef void (*fnEmbClose)(void*);
 typedef struct {
-    void *hLib; void *pApp;
+    void *hLib; void *pApp; sqlite3 *pDb;
     fnEmbEmbed xEmbed; fnEmbClose xClose;
 } Embedder;
 
@@ -258,10 +270,58 @@ static int embed_thunk(void *pApp, const char *zText, float *aOut, int nDim){
     return e->xEmbed(e->pApp, zText, aOut, nDim);
 }
 
+/* THE DIARY IS THE ONLY SOURCE. There is no file fallback and that is the
+** correction: reading model.onnx off disk at runtime is an INGEST step
+** wearing a resolver's clothes. Files exist once, at `viki model import`, and
+** after that a diary is self-contained -- which is what makes the wasm case
+** and the sandboxed-robot case identical to the laptop case instead of a
+** degraded version of it.
+**
+** Names are matched against a blob assertion's description prefix, so
+** "model.onnx", "vocab.txt" and "dim" are ordinary blobs that merge, sync and
+** are signed like anything else in the diary. */
+static char *g_aHeld[4];
+static int   g_nHeld = 0;
+
+static const void *cli_blob(void *pApp, const char *zName, size_t *pn){
+    char zLike[128];
+    sqlite3_stmt *q = 0;
+    sqlite3 *db = (sqlite3*)pApp;
+    const void *pRet = 0;
+    *pn = 0;
+    if( !db ) return 0;
+    snprintf(zLike, sizeof zLike, "%s%%", zName);
+    if( sqlite3_prepare_v2(db,
+        "SELECT b.bytes FROM viki_blob b JOIN viki_assert a ON a.id=b.id"
+        " WHERE a.kind='blob' AND a.atext LIKE ?1 ORDER BY a.ts DESC LIMIT 1",
+        -1, &q, 0)==SQLITE_OK ){
+        sqlite3_bind_text(q, 1, zLike, -1, SQLITE_TRANSIENT);
+        if( sqlite3_step(q)==SQLITE_ROW ){
+            int n = sqlite3_column_bytes(q, 0);
+            const void *p = sqlite3_column_blob(q, 0);
+            /* COPIED, because the pointer dies with the statement and ORT
+            ** keeps the graph bytes for the life of the session. */
+            if( p && n>0 && g_nHeld < 4 ){
+                char *z = (char*)malloc((size_t)n+1);
+                if( z ){ memcpy(z, p, (size_t)n); z[n]=0;
+                         g_aHeld[g_nHeld++] = z; pRet = z; *pn = (size_t)n; }
+            }
+        }
+        sqlite3_finalize(q);
+    }
+    if( !pRet )
+        fprintf(stderr,"%s: no '%s' in this diary -- viki model import DIR\n", zProg, zName);
+    return pRet;
+}
+
 static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
-                         const char *zModelId){
+                         const char *zModelId, sqlite3 *pDb){
     fnEmbOpen xOpen;
     memset(e, 0, sizeof *e);
+    /* AFTER the memset. Setting it in the caller was silently undone here,
+    ** and the only symptom was "no model.onnx" from a diary that plainly had
+    ** one -- the resolver was being handed a NULL connection. */
+    e->pDb = pDb;
     e->hLib = dlopen(zPath, RTLD_NOW);
     if( !e->hLib ){ fprintf(stderr,"%s: %s\n", zProg, dlerror()); return -1; }
     xOpen     = (fnEmbOpen )dlsym(e->hLib, "viki_embedder_open");
@@ -272,7 +332,7 @@ static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
         dlclose(e->hLib); e->hLib = 0; return -1;
     }
     pOut->nDim = 0;
-    if( xOpen(0, 0, &pOut->nDim, &e->pApp)!=0 || pOut->nDim<=0 ){
+    if( xOpen(cli_blob, e->pDb, &pOut->nDim, &e->pApp)!=0 || pOut->nDim<=0 ){
         fprintf(stderr,"%s: %s failed to open its model\n", zProg, zPath);
         dlclose(e->hLib); e->hLib = 0; return -1;
     }
@@ -282,7 +342,11 @@ static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
     return 0;
 }
 static void embedder_close(Embedder *e){
+    int i;
     if( e->hLib ){ if( e->xClose ) e->xClose(e->pApp); dlclose(e->hLib); e->hLib = 0; }
+    /* held only as long as the session that borrowed them */
+    for(i=0;i<g_nHeld;i++) free(g_aHeld[i]);
+    g_nHeld = 0;
 }
 
 static sqlite3 *open_store(const char *zPath){
@@ -469,6 +533,48 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
         return 0;
     }
+    if( !strcmp(argv[0],"model") && argc>=2 ){
+        /* INGEST. Files are read HERE, once, and never again -- after this
+        ** the diary carries the model and needs no directory to exist. */
+        if( !strcmp(argv[1],"import") && argc>=3 ){
+            static const char *azWant[] = { "model.onnx", "vocab.txt" };
+            char zPath[2048], zHash[80], zDesc[256];
+            size_t k;
+            int nDim = 0;
+            for(k=0;k<sizeof(azWant)/sizeof(azWant[0]);k++){
+                size_t nB = 0;
+                char *zB, zId[VIKI_ID_HEX+1];
+                snprintf(zPath,sizeof zPath,"%s/%s",argv[2],azWant[k]);
+                zB = slurp(zPath,&nB);
+                if( !zB ){ fprintf(stderr,"%s: cannot read %s\n",zProg,zPath); return 1; }
+                viki_sha256_hex(zB, nB, zHash);
+                snprintf(zDesc,sizeof zDesc,"%s -- imported from %s",azWant[k],argv[2]);
+                if( viki_blob_put(zDesc, zHash, zB, (sqlite3_int64)nB, zId)!=VIKI_OK ){
+                    fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); free(zB); return 1; }
+                fprintf(out,"%-12s %8ld bytes  %.12s\n",azWant[k],(long)nB,zId);
+                free(zB);
+            }
+            {   /* the pinned dimension, out of the manifest and stored as its
+                ** own blob so nothing downstream ever parses JSON again */
+                size_t nM = 0; char *zM; const char *p2; char zId[VIKI_ID_HEX+1];
+                char zDim[32];
+                snprintf(zPath,sizeof zPath,"%s/viki-manifest.json",argv[2]);
+                zM = slurp(zPath,&nM);
+                if( zM && (p2=strstr(zM,"\"dim\""))!=0 && (p2=strchr(p2,':'))!=0 )
+                    nDim = atoi(p2+1);
+                free(zM);
+                if( nDim<=0 ){ fprintf(stderr,"%s: no \"dim\" in %s\n",zProg,zPath); return 1; }
+                snprintf(zDim,sizeof zDim,"%d",nDim);
+                viki_sha256_hex(zDim, strlen(zDim), zHash);
+                if( viki_blob_put("dim -- the pinned embedding width", zHash,
+                                  zDim, (sqlite3_int64)strlen(zDim), zId)!=VIKI_OK ){
+                    fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+                fprintf(out,"%-12s %8d\n","dim",nDim);
+            }
+            return 0;
+        }
+        return usage();
+    }
     if( !strcmp(argv[0],"id") && argc>=2 ){
         if( !strcmp(argv[1],"new") && argc>=3 ){
             char zSeed[80];
@@ -561,7 +667,8 @@ static int held_open(Held *h){
         h->bId = 1;
     }
     if( zEmbedLib ){
-        if( embedder_open(zEmbedLib, &h->emb, &h->embed, zEmbedLib)!=0 ) return -1;
+        if( embedder_open(zEmbedLib, &h->emb, &h->embed, zEmbedLib,
+                          RETAINED(VikiStore) ? RECALL(VikiStore)->db : 0)!=0 ) return -1;
         h->bEmbed = 1;
     }
     return 0;

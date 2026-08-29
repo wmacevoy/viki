@@ -174,6 +174,53 @@ chk "$("$V" --signer "$D/signer.key" run sh -c 'cat '"$D"'/signer.key >/dev/null
 chk "$("$V" --store "$D/peer.db" id check "$SID" | cut -d' ' -f1)" "verified" \
     "S6 a peer that merged the diary verifies WHO, holding no key"
 
+echo "== N: a REAL onnx embedder, model living IN the diary =="
+# The embedder is a host component behind core's ABI, and it asks for named
+# blobs. There is NO filesystem in the resolution path: files are read once by
+# `model import` and never again, so wasm and a sandboxed robot see exactly
+# what a laptop sees rather than a degraded version of it.
+EMB=""
+for c in "$ROOT/core/build/viki-embed-onnx.dylib" "$ROOT/core/build/viki-embed-onnx.so"; do
+  [ -f "$c" ] && EMB="$c"
+done
+MD="${VIKI_MODEL_DIR:-$ROOT/build/dist/model}"
+if [ -n "$EMB" ] && [ -f "$MD/model.onnx" ]; then
+  NS="$D/sem.db"
+  "$V" --store "$NS" model import "$MD" >/dev/null 2>&1
+  chk "$("$V" --store "$NS" count assert blob)" "3" \
+      "N0 model import puts model.onnx, vocab.txt and dim in the diary"
+  "$V" --store "$NS" note "the quarterly invoice has not been paid" >/dev/null
+  "$V" --store "$NS" note "the puppy has a vet appointment on Tuesday" >/dev/null
+  "$V" --store "$NS" note "the gate latch sticks below freezing" >/dev/null
+  Q="money owed for services rendered"
+  # THE CONTROL FIRST: the query shares no content word with any note, so
+  # without vectors there is nothing to find. If this finds something, N2
+  # proves nothing about the model.
+  "$V" --store "$NS" reindex >/dev/null
+  "$V" --store "$NS" ask "$Q" >/dev/null 2>&1 \
+    && bad "N1 CONTROL: keyword-only should find NOTHING for this query" "it found something" \
+    || ok "N1 CONTROL: with no model, a no-shared-word query finds nothing"
+  # env -u VIKI_MODEL_DIR: nothing may fall back to a directory.
+  env -u VIKI_MODEL_DIR "$V" --store "$NS" --embedder "$EMB" reindex >/dev/null 2>&1
+  env -u VIKI_MODEL_DIR "$V" --store "$NS" --embedder "$EMB" ask "$Q" 2>/dev/null \
+    | grep -q 'invoice' \
+    && ok "N2 the model, read FROM THE DIARY, ranks the invoice first" \
+    || bad "N2 semantic retrieval failed" "wrong note or none"
+  # and the child holds neither a model nor a directory
+  cat > "$D/nchild.sh" <<'CHILD'
+unset VIKI_MODEL_DIR
+viki ask "money owed for services rendered" 2>/dev/null | grep -c invoice
+CHILD
+  chmod +x "$D/nchild.sh"
+  chk "$(VIKI_STORE=$NS env -u VIKI_MODEL_DIR "$V" --embedder "$EMB" run "$D/nchild.sh" 2>/dev/null)" "1" \
+      "N3 a child with no model and no directory gets hybrid retrieval"
+  chk "$(VIKI_STORE=$NS env -u VIKI_MODEL_DIR "$V" run "$D/nchild.sh" 2>/dev/null)" "0" \
+      "N3b CONTROL: with no parent embedder the same child gets nothing"
+else
+  printf '  --   N0-N3 skipped: no embedder .so or no model\n'
+  printf '  --   (sh cli/build-embedder.sh, and build/build.sh once for the model)\n'
+fi
+
 echo "== J: merge semantics =="
 # What merge does to the SOURCE, which is the half that is easy to assume and
 # expensive to get wrong. Union-is-merge only means anything if promotion
