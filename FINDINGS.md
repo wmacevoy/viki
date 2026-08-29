@@ -12,6 +12,59 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## `fossil unversioned cat` was never the only way to read a uv blob: SQL has decompress()
+
+2026-08-29. `index_unversioned()` forked `fossil unversioned cat` once per
+unversioned blob, and both CLAUDE.md and AGENTS.md called this an
+**unavoidable** exception to the one-subprocess-per-class rule, on the grounds
+that `unversioned.content` is zlib-compressed behind a 4-byte big-endian length
+prefix when `encoding=1` and that `unversioned cat` "is the only extraction path
+that does not require linking zlib".
+
+**The wrong assumption it replaces:** that reading the blob in SQL would mean
+linking zlib into viki. It does not. Fossil registers a `decompress()` SQL
+function in `add_content_sql_commands()` (`sqlcmd.c:153`) -- the *same* call
+that registers `content()`, which viki already depends on for five other
+classes -- and it strips the length prefix itself. Both transports have it:
+`fossil sql` calls `add_content_sql_commands()`, and so does libfossilsee
+(`embed/fossilsee.c:221`). viki links no zlib either way.
+
+Repro, on a 6,000-byte blob stored at `encoding=1`, `length(content)=73`:
+
+```sh
+fossil sql "SELECT length(CASE WHEN encoding=1 THEN decompress(content)
+                               ELSE content END)
+              FROM unversioned WHERE name='big.txt';"     # 6000
+fossil unversioned cat big.txt | wc -c                    # 6000
+```
+
+Measured end to end with a fork-counting wrapper as `$VIKI_FOSSIL_BIN`, on a
+repo holding 8 uv blobs, with `VIKI_FOSSILSEE_LIB` pointed at a nonexistent
+path so every fork is visible:
+
+```
+before   unversioned cat forks 8    total forks per index run 17
+after    unversioned cat forks 0    total forks per index run  9
+```
+
+All 8 blobs still indexed, chunk text byte-identical.
+
+**A trap this ran into, and it is the one CLAUDE.md already warns about.** The
+first measurement showed the *old* query and 8 forks against what I believed was
+the rebuilt binary. `build/build.sh` had been run while the change was stashed
+for an unrelated warning check, and `git stash pop` does not rebuild. The
+fossilsee probe passed 22/0 against that stale binary, because it asserts the
+two transports AGREE -- which they did, both being the old path. Check
+`strings build/dist/viki` for a string unique to the change before believing
+any measurement.
+
+**The NUL exclusion moved into SQL**, exactly as `attach:` already does it,
+because the subprocess transport cannot carry an embedded NUL. Blobs containing
+one were already dropped by `looks_binary()` *without* being marked seen, so
+excluding them in the `WHERE` preserves liveness behaviour exactly rather than
+exposing them to `sweep_sources()`.
+
+---
 ## Fossil's `finfo` omits every file deletion on two of its three routes
 
 2026-08-29. `json_finfo.c` computes `(mlink.fid==0) AS isDel` and passes it to

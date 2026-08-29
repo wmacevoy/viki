@@ -1829,12 +1829,38 @@ static int is_viki_own_uv(const char *zName){
         || strncmp(zName, "viki-model/", 11) == 0;
 }
 
-/* `viki index`'s UNVERSIONED CONTENT extraction. Two calls, and it MUST be
-** two: `unversioned.content` is zlib-compressed with a 4-byte big-endian
-** length prefix whenever `encoding=1` (measured: sz=734,
-** length(content)=467, hex begins 000002DE789C...), so reading it through
-** `fossil sql` returns compressed bytes. `fossil unversioned cat` is the
-** only extraction path that does not require linking zlib.
+/* `viki index`'s UNVERSIONED CONTENT extraction. ONE call, like every other
+** class here.
+**
+** It used to be two, and the comment here asserted it MUST be:
+** `unversioned.content` is zlib-compressed behind a 4-byte big-endian length
+** prefix whenever `encoding=1` (measured: sz=734, length(content)=467, hex
+** begins 000002DE789C...), and `fossil unversioned cat` was said to be "the
+** only extraction path that does not require linking zlib". That was wrong.
+** Fossil registers a `decompress()` SQL function in
+** `add_content_sql_commands()` (`sqlcmd.c:153`) -- the same function that
+** registers `content()` -- and it strips the length prefix itself. It is
+** available on BOTH transports: `fossil sql` calls
+** `add_content_sql_commands()`, and so does libfossilsee
+** (`embed/fossilsee.c:221`). viki still links no zlib.
+**
+** Measured 2026-08-29 on a 6,000-byte uv blob stored at encoding=1,
+** length(content)=73: `decompress(content)` and `fossil unversioned cat`
+** return the same 6,000 bytes.
+**
+** So this was the last O(artifacts) subprocess cost in the read path, and it
+** was O(blobs) forks against one query. It is now one.
+**
+** THE NUL EXCLUSION IS IN THE SQL, not in C, for the same reason it is for
+** `attach:` above: the subprocess transport cannot carry an embedded NUL, so
+** a blob containing one must never enter the framing. Such blobs were already
+** dropped by `looks_binary()` without being marked seen, so excluding them
+** here preserves the previous liveness behaviour exactly.
+**
+** viki's OWN uv names are excluded in SQL as well as in C. The C check alone
+** would still be correct, but it fires after the transport has already
+** carried the bytes -- and `viki-cache.db` is the multi-megabyte artifact
+** this run is writing.
 **
 ** The listing puts the NAME IN THE PAYLOAD rather than in the key, because
 ** a uv name is the one key in this file that is not a hex uuid and may
@@ -1847,11 +1873,20 @@ static int is_viki_own_uv(const char *zName){
 static int index_unversioned(sqlite3 *db, viki_embedder *emb, const char *modelId,
                               int *nItems, int *nChunked){
     static const char *zSql =
-        "SELECT 'uv ' || length(cast(name AS BLOB))"
-        "    || char(10) || name"
-        "  FROM unversioned WHERE sz > 0 ORDER BY name;"
+        "WITH uv(name, body) AS ("
+        "  SELECT name,"
+        "         CASE WHEN encoding=1 THEN decompress(content) ELSE content END"
+        "    FROM unversioned"
+        "   WHERE sz > 0"
+        "     AND name <> 'viki-cache.db'"
+        "     AND name NOT LIKE 'viki-model/%'"
+        ")"
+        "SELECT 'uv ' || length(cast(name || char(10) || body AS BLOB))"
+        "    || char(10) || name || char(10) || body"
+        "  FROM uv"
+        " WHERE instr(cast(body AS BLOB), x'00') = 0"
+        " ORDER BY name;"
         "SELECT '" VIKI_FRAME_EOF "';";
-    const char *zFossil = viki_fossil_binary();
     char *zOut;
     size_t nOut = 0;
     FramedIter it;
@@ -1865,33 +1900,33 @@ static int index_unversioned(sqlite3 *db, viki_embedder *emb, const char *modelI
     while( framed_next(&it, &rec) ){
         char virtualPath[512];
         char zHeader[512];
-        char *argvCat[] = { (char*)zFossil, "unversioned", "cat", NULL, NULL };
+        char *zName = rec.zBody;
         char *zContent;
-        size_t nContent = 0;
-        int rcCat = -1;
+        size_t nContent;
+        char *zNl;
         char *zText;
         size_t nText = 0;
 
-        if( is_viki_own_uv(rec.zBody) ) continue;
+        /* The payload is `name \n content`. Splitting on the FIRST newline is
+        ** safe because a uv name is a filename and cannot contain one; the
+        ** name travels in the payload rather than the key because it is the
+        ** one key in this file that is not a hex uuid and may contain a
+        ** space. */
+        zNl = memchr(rec.zBody, '\n', rec.nBody);
+        if( !zNl ) continue;
+        *zNl = 0;
+        zContent = zNl + 1;
+        nContent = rec.nBody - (size_t)(zContent - rec.zBody);
 
-        argvCat[3] = rec.zBody;
-        zContent = run_capture(argvCat, &rcCat, &nContent);
-        if( !zContent ) continue;
-        snprintf(virtualPath, sizeof(virtualPath), "uv:%s", rec.zBody);
-        /* The header is built here rather than in SQL because this class's
-        ** name travels in the PAYLOAD, not the key -- it is the one key in
-        ** this file that is not a hex uuid and may contain a space. */
-        snprintf(zHeader, sizeof(zHeader), "unversioned file %s", rec.zBody);
-        if( rcCat != 0 ){
-            /* Could not re-read a blob the listing says exists. A failure
-            ** to observe, not a withdrawal -- keep whatever we have. */
-            mark_seen(db, virtualPath);
-            free(zContent);
-            continue;
-        }
-        if( looks_binary(zContent, nContent) ){ free(zContent); continue; }
+        /* Redundant with the SQL filter above and kept deliberately: the rule
+        ** about what viki refuses to index of its own output belongs in one
+        ** named predicate, not only in a WHERE clause. */
+        if( is_viki_own_uv(zName) ) continue;
+
+        snprintf(virtualPath, sizeof(virtualPath), "uv:%s", zName);
+        snprintf(zHeader, sizeof(zHeader), "unversioned file %s", zName);
+        if( looks_binary(zContent, nContent) ) continue;
         zText = compose_headed(zHeader, zContent, nContent, &nText);
-        free(zContent);
         if( !zText ){ mark_seen(db, virtualPath); continue; }
         (*nItems)++;
         index_text_blob(db, virtualPath, zText, nText, 0, emb, modelId, nChunked);

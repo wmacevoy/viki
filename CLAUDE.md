@@ -492,15 +492,21 @@ if `(content_hash, model_id)` is absent. **Nine** content types share one
 | unversioned files | `fossil sql`; content is zlib-compressed when `encoding=1` | `uv:NAME` |
 
 Each non-file class costs **one** `fossil sql` subprocess, not one per
-artifact, using a counted framing parsed by `framed_next()` — **with one
-unavoidable exception, `uv:`**. `index_unversioned()` uses framed SQL for the
-NAMES and then forks `fossil unversioned cat` per file
-(`src/viki_index.c:1724`), because `unversioned.content` is zlib-compressed
-behind a 4-byte big-endian length prefix when `encoding=1`, and `unversioned
-cat` is the only extraction path that does not require linking zlib. So a hub
-with many uv blobs really does pay O(blobs) subprocesses. Both this file and
-AGENTS.md stated the rule without that exception until 2026-08-23 (QUEUE 44).
-That is not
+artifact, using a counted framing parsed by `framed_next()` — **now with no
+exceptions.** `uv:` was one until 2026-08-29: `index_unversioned()` fetched
+only the NAMES in framed SQL and then forked `fossil unversioned cat` per
+file, because `unversioned.content` is zlib-compressed behind a 4-byte
+big-endian length prefix when `encoding=1`, and `unversioned cat` was believed
+to be the only extraction path not requiring zlib. **That belief was wrong.**
+Fossil registers a `decompress()` SQL function in `add_content_sql_commands()`
+(`sqlcmd.c:153`) — the same call that registers `content()` — and it strips
+the length prefix itself. It is present on both transports (`fossil sql`
+registers it; so does `libfossilsee`, `embed/fossilsee.c:221`), and viki still
+links no zlib. Measured on a repo with 8 uv blobs: `unversioned cat` forks
+went 8 → 0 and total forks per index run 17 → 9, with all 8 blobs still
+indexed and their content byte-identical. The NUL exclusion moved into the SQL
+`WHERE`, exactly as `attach:` already does it, because the subprocess
+transport cannot carry an embedded NUL. That is not
 tidiness: every `fossil` invocation costs a process spawn plus repo open, so
 per-artifact extraction is O(artifacts) subprocesses where this is O(1).
 **The magnitude depends on the key form and the old figure here was the
