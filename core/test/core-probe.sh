@@ -6,7 +6,7 @@
 # not add a fopen" is exactly the kind of claim that rots silently.
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-SRC="$ROOT/core/src/viki_core.c $ROOT/core/include/viki_core.h"
+SRC="$ROOT/core/src/viki_core.c $ROOT/core/include/viki_core.h $ROOT/core/src/viki_cal.c $ROOT/core/include/viki_cal.h"
 nPass=0; nFail=0
 ok(){   nPass=$((nPass+1)); printf '  ok    %s\n' "$1"; }
 bad(){  nFail=$((nFail+1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
@@ -34,6 +34,20 @@ if grep -qE 'sqlite3_open|sqlite3_prepare' $SRC; then
   ok "C6 CONTROL: the same grep DOES find sqlite3_* (C1-C5 are not vacuous)"
 else
   bad "C6 CONTROL failed" "the grep finds nothing at all -- C1-C5 prove nothing"
+fi
+
+# C7 IS THE ONE THIS FILE EXISTS FOR NOW. Calendar input is jsCalendar and
+# every field is reached with json_extract(); SQLite IS the parser. If a
+# hand-written lexer reappears -- strtok on the input, a quote-state machine, a
+# fold rule -- this fails, because that is the moment core stops being "the
+# SQLite contracts" and starts being a parser with a database attached.
+lex=$(grep -nE 'strtok|ics_unfold|ics_split|inQuote|unescape' $SRC || true)
+[ -z "$lex" ] && ok "C7 no hand-written parser: SQLite does the parsing" \
+              || bad "C7 a lexer reappeared in core" "$(printf '%s' "$lex" | head -3)"
+if grep -q 'json_extract' $SRC; then
+  ok "C7b CONTROL: json_extract IS present (C7 is not passing on an empty file)"
+else
+  bad "C7b CONTROL failed" "no json_extract -- C7 proves nothing"
 fi
 
 echo

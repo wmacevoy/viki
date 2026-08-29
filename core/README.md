@@ -161,13 +161,13 @@ nothing else.
 ```
 core/include/viki_core.h   the whole public surface
 core/src/viki_core.c       assertions, merge, projection, retrieval
-core/src/viki_cal.c        calendar: the RFC 5545 parser + ONE VikiAssert subtype
+core/src/viki_cal.c        calendar: NO parser + ONE VikiAssert subtype
 core/src/sha256.c          ported unchanged
 core/build.sh              no downloads, no submodules, no fossil
 core/test/core-probe.sh    7 constraint + 29 behaviour assertions
 ```
 
-`sh core/test/core-probe.sh` → **56 passed, 0 failed** (7 constraint + 49 behaviour).
+`sh core/test/core-probe.sh` → **61 passed, 0 failed** (9 constraint + 52 behaviour).
 
 Inputs are the SQLite amalgamation this repo already caches and `retain.h`
 from the sibling checkout. That short list *is* the design.
@@ -218,45 +218,40 @@ not own, so `viki_reindex()` **committed the caller's open transaction** — now
 and `viki_sql()` dropped every statement after the first and never read its
 step result, so a failed write on the raw rung returned `VIKI_OK`.
 
-### Calendar, ported 2026-08-29 — and the port is the argument
+### Calendar: jsCalendar in, and NO parser at all
 
-`cal_event` in the predecessor was a second, parallel implementation of
-"grow-only rows on an identity key, resolved at read time, losers retained" —
-the same structure as `viki_note`, written twice with different column names
-and different SQL. Here it is **one subtype**:
+The first port carried ~180 lines of hand-written iCalendar lexing — unfolding,
+the params/value split with quote tracking, TEXT unescaping, deriving the four
+time forms from syntax. **All of it is gone.** Input is **jsCalendar (RFC
+8984)** and every field is `json_extract()`; SQLite is the parser, which is
+the contract.
 
-| slot | value | what it means |
-|---|---|---|
-| `key()` | `uid␟recurrence_id` | RFC 5546's identity |
-| `rank()` | `%010d` SEQUENCE `␟` DTSTAMP | RFC 5546 §3.2's precedence, verbatim |
-| `canon()` | the identity tuple | so two feeds differing only in property ORDER are one assertion |
-| `text()` | SUMMARY + DESCRIPTION | what retrieval sees |
+Both JSON calendar formats parse in pure SQL — measured — but jCal (RFC 7265)
+is the mechanical transform of iCalendar into positional arrays
+(`["dtstart",{"tzid":…},"date-time","2026-09-01T15:00:00"]`), so every access
+is `$[3]` and the shape is iCalendar's problems in JSON clothing. jsCalendar is
+object-based, and three of its decisions are exactly viki's already:
 
-So `viki_current()` — **one statement, shared with notes** — *is* "highest
-SEQUENCE, then latest DTSTAMP wins", and core never learns that RFC 5546
-exists. SEQUENCE is zero-padded because it is an unbounded integer in the RFC
-and `"10"` must not sort below `"9"`.
+| jsCalendar | why it matters here |
+|---|---|
+| `start` is **local as written**, `timeZone` is an **IANA name** | "never store an offset" stops being a rule this code enforces and becomes the format. K4 is its control. |
+| `recurrenceOverrides` is an **object keyed by recurrence-id** | `json_each()` yields exactly the `(UID, RECURRENCE-ID)` identity RFC 5546 resolution needs — an override becomes its own assertion on its own key, with no special case in core |
+| `sequence` and `updated` are **named fields** | RFC 5546 precedence is two `json_extract()` calls |
 
-Ten assertions (K1–K10), each corresponding to a place an ICS parser is
-silently wrong rather than loudly broken. Two verified non-vacuous by
-reintroducing the classic bug:
+And it is what real sources already emit: JMAP is jsCalendar natively, Google
+Calendar and Microsoft Graph return JSON, EventKit hands you objects.
+**iCalendar text is the narrowest ingress path** — `.ics` files — and
+converting it is a connector's job (SCOPES L3), not core's.
 
-```
-fold kept as CRLF+space only   ->  FAIL K3   38 passed, 1 failed
-VALARM nesting skip removed    ->  FAIL K5   38 passed, 1 failed
-both fixed                     ->           39 passed, 0 failed
-```
+`viki_cal_ingest()` takes a single object, a bare array, or a JMAP-shaped
+envelope; `json_each()` flattens all three, so a caller need not know which its
+source produced (K9, K10). Invalid JSON is refused rather than reported as an
+empty calendar, and an object with no `uid` has no identity and is skipped
+(K1, K1b).
 
-K1 refuses input with no `BEGIN:VCALENDAR` — an adapter that fetched an HTML
-error page must not read as a quiet day. K7 asserts **no UTC offset is ever
-stored**: an offset is a fact about a moment, a TZID is a fact about a rule,
-and only the second survives the rule changing. K9 asserts the superseded
-assertion stays.
-
-**Occurrence expansion is deliberately absent**, unchanged from the
-predecessor's reasoning: it depends on the viewer's zone, the query window and
-the tzdata version, so it is not a shareable fact and does not belong in a
-grow-only store.
+**C7 is the constraint this bought**: no hand-written lexer may reappear in
+core — no `strtok` over input, no quote-state machine, no fold rule — with C7b
+as its control, because a grep for absence passes on an empty file.
 
 ### Withdrawal, and a rule that turned out to be narrower than inherited
 

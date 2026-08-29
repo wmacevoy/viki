@@ -36,8 +36,6 @@ typedef struct {
     const char *zStatus, *zTransp, *zOrganizer;
     /* when -- as written */
     const char *zDtstart, *zDtstartTzid, *zDtstartForm;
-    const char *zDtend,   *zDtendTzid,   *zDtendForm;
-    const char *zDue,     *zDueTzid,     *zDueForm;
     const char *zDuration, *zRrule;
     /* provenance and the bytes identity is computed over */
     const char *zSource, *zRaw;
@@ -51,11 +49,19 @@ extern const struct VikiAssertVftbl vikiEventVftbl;
 ** derived, deletable and rebuildable -- the same standing as viki_chunk. */
 VikiStatus viki_cal_attach(sqlite3 *db);
 
-/* Shreds iCalendar text into assertions. REFUSES input with no
-** BEGIN:VCALENDAR rather than reporting an empty calendar: an adapter that
-** fetched an HTML error page must not read as a quiet day. */
-VikiStatus viki_cal_shred(const char *zIcs, size_t nIcs,
-                          const char *zSource, int *pnAdded);
+/* Ingests jsCalendar (RFC 8984): one object, an array of them, or a JMAP
+** {"events":...} / {"list":[...]} envelope -- json_each() flattens all three,
+** so a caller need not know which its source produced.
+**
+** THERE IS NO PARSER HERE. Every field is json_extract(); SQLite is the
+** parser, which is the contract. iCalendar TEXT is a connector's problem
+** (SCOPES L3) -- and most real sources never produce it anyway: JMAP is
+** jsCalendar natively, Google and Microsoft Graph return JSON, EventKit hands
+** you objects.
+**
+** REFUSES invalid JSON rather than reporting an empty calendar: an adapter
+** that fetched an HTML error page must not read as a quiet day. */
+VikiStatus viki_cal_ingest(const char *zJson, const char *zSource, int *pnAdded);
 
 /* Rebuilds viki_event from the assertion store. Safe to call at any time;
 ** this is what makes the projection disposable rather than precious. */
