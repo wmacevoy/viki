@@ -81,6 +81,8 @@ static int usage(void){
 "                          64 hex chars is used as a RAW key (no KDF).\n"
 "  --signer PATH           Ed25519 key file (mode 600): name, then 64 hex\n"
 "  --embedder PATH.so      a library exporting the embedder ABI\n"
+"  --source-keyfile PATH   key for `merge`'s source, if it differs\n"
+"  --plaintext             open an UNENCRYPTED diary, deliberately\n"
 "  --store PATH            default $VIKI_STORE, else ./viki.db\n"
 "\n"
 "  `run` retains BOTH for the whole command, so children get signed writes\n"
@@ -174,9 +176,20 @@ static int is_raw_key(const char *z){
     return 1;
 }
 
+/* ENCRYPTED IS THE DEFAULT AND PLAINTEXT IS AN EXPLICIT ACT.
+**
+** The build already refuses stock SQLite, but that alone does not get you an
+** encrypted diary -- it gets you a binary CAPABLE of one. If opening without
+** a key just worked, every diary would be plaintext, because that is the
+** path of least effort and nobody chooses it on purpose. So the default is
+** to refuse, and --plaintext is how someone says they meant it. */
+static int bPlaintext = 0;
+
 /* Applies the key BEFORE anything else touches the connection: SQLCipher
 ** decrypts the header on the first read, so a PRAGMA key that arrives after
 ** any other statement is already too late. */
+static const char *zSrcKeyFile = 0;
+
 static int apply_key(sqlite3 *db, const char *zPath, const char *zKeyFile){
     char *zKey = 0;
     char *zSql;
@@ -184,7 +197,18 @@ static int apply_key(sqlite3 *db, const char *zPath, const char *zKeyFile){
     if( zKeyFile ) zKey = key_from_file(zKeyFile);
     else if( getenv("VIKI_KEY") ){ zKey = strdup(getenv("VIKI_KEY")); bWarn = 1; }
     else zKey = key_prompt();
-    if( !zKey ) return zKeyFile ? -1 : 0;      /* no key: a plaintext diary */
+    if( !zKey ){
+        if( zKeyFile ) return -1;              /* named a key file, got nothing */
+        if( bPlaintext ) return 0;             /* said so out loud */
+        fprintf(stderr,
+          "%s: refusing to open %s without a key.\n"
+          "%s:   --keyfile PATH   unlock (or create) an encrypted diary\n"
+          "%s:   $VIKI_KEY        same, for CI\n"
+          "%s:   --plaintext      say you meant an UNENCRYPTED diary\n"
+          "%s: a diary holds what someone told it in confidence.\n",
+          zProg, zPath, zProg, zProg, zProg, zProg);
+        return -1;
+    }
     if( bWarn )
         fprintf(stderr,"%s: using $VIKI_KEY -- readable from /proc and inherited "
                        "by children; prefer --keyfile\n", zProg);
@@ -373,6 +397,16 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         sqlite3 *other = 0;
         if( sqlite3_open_v2(argv[1], &other, SQLITE_OPEN_READONLY, 0)!=SQLITE_OK ){
             fprintf(stderr,"%s: cannot open %s\n",zProg,argv[1]); return 1; }
+        /* THE SOURCE NEEDS A KEY TOO, and forgetting that made merge work only
+        ** between plaintext diaries -- which, once encryption is the default,
+        ** means it did not work at all. The source's key defaults to this
+        ** diary's (the usual case is your own two diaries); --source-keyfile
+        ** is for a peer under a different one. */
+        if( apply_key(other, argv[1], zSrcKeyFile ? zSrcKeyFile : zKeyFile) < 0 ){
+            sqlite3_close(other); return 1; }
+        if( sqlite3_exec(other,"SELECT count(*) FROM sqlite_master",0,0,0)!=SQLITE_OK ){
+            fprintf(stderr,"%s: cannot read %s -- wrong key, or not a diary\n",zProg,argv[1]);
+            sqlite3_close(other); return 1; }
         if( viki_merge(other, &n)!=VIKI_OK ){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); sqlite3_close(other); return 1; }
         sqlite3_close(other);
@@ -776,6 +810,8 @@ int main(int argc, char **argv){
         if( !strcmp(argv[i],"--signer") && i+1<argc ){ zSignerFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--embedder") && i+1<argc ){ zEmbedLib=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--keyfile") && i+1<argc ){ zKeyFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
+        else if( !strcmp(argv[i],"--source-keyfile") && i+1<argc ){ zSrcKeyFile=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
+        else if( !strcmp(argv[i],"--plaintext") ){ bPlaintext=1; memmove(argv+i,argv+i+1,(size_t)(argc-i-1)*sizeof(char*)); argc-=1; }
         else if( !strcmp(argv[i],"--store") && i+1<argc ){ zStore=argv[i+1]; memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--lines") && i+1<argc ){ nLines=atoi(argv[i+1]); memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }
         else if( !strcmp(argv[i],"--overlap") && i+1<argc ){ nOverlap=atoi(argv[i+1]); memmove(argv+i,argv+i+2,(size_t)(argc-i-2)*sizeof(char*)); argc-=2; }

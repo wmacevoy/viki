@@ -12,11 +12,35 @@ mkdir -p "$D" || exit 2
 D=$(cd "$D" && pwd)
 export VIKI_STORE="$D/t.db"
 export PATH="$ROOT/core/build:$PATH"
+# THE PROBE RUNS ON AN ENCRYPTED DIARY, because that is what shipping looks
+# like. A suite that exercises the plaintext path proves the plaintext path.
+export VIKI_KEY="2b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfe"
 nPass=0; nFail=0
 ok(){   nPass=$((nPass+1)); printf '  ok    %s\n' "$1"; }
 bad(){  nFail=$((nFail+1)); printf '  FAIL  %s\n        %s\n' "$1" "${2:-}"; }
 chk(){  if [ "$1" = "$2" ]; then ok "$3"; else bad "$3" "expected [$2] got [$1]"; fi; }
 [ -x "$V" ] || { echo "no viki at $V -- run core/build.sh"; exit 2; }
+
+echo "== P: encrypted by default =="
+# The build already refuses stock SQLite, but that only makes an encrypted
+# diary POSSIBLE. If opening unkeyed just worked, every diary would be
+# plaintext -- that is the path of least effort, and nobody picks it on
+# purpose. So the default is refusal and --plaintext is a deliberate act.
+env -u VIKI_KEY "$V" --store "$D/nokey.db" note x >/dev/null 2>&1 \
+  && bad "P1 opening without a key should be REFUSED" "it opened" \
+  || ok "P1 opening without a key is refused"
+env -u VIKI_KEY "$V" --store "$D/plain.db" --plaintext note x >/dev/null 2>&1 \
+  && ok "P2 --plaintext opens one deliberately" \
+  || bad "P2 --plaintext should work" "it refused"
+head -c 15 "$D/plain.db" 2>/dev/null | grep -q 'SQLite format 3' \
+  && ok "P2b CONTROL: the --plaintext diary really is plaintext" \
+  || bad "P2b CONTROL is wrong" "it looks encrypted"
+# Its OWN store: seeding the shared one would shift every later count, which
+# is exactly what it did on the first run.
+"$V" --store "$D/enc-check.db" note "seed" >/dev/null 2>&1
+head -c 15 "$D/enc-check.db" 2>/dev/null | grep -q 'SQLite format 3' \
+  && bad "P3 a diary opened with \$VIKI_KEY is PLAINTEXT" "the key did nothing" \
+  || ok "P3 a diary opened with \$VIKI_KEY is encrypted (as every store below is)"
 
 echo "== D: direct, with no context =="
 ID=$("$V" note "the gate latch sticks below freezing")
@@ -88,7 +112,7 @@ if "$V" --store "$D/ct.db" sql "PRAGMA cipher_version" 2>/dev/null | grep -q .; 
     && bad "K4 CONTROL: the note is readable in the file" "plaintext on disk" \
     || ok "K4 CONTROL: the note is NOT readable in the file"
 
-  "$V" --store "$KS" count assert >/dev/null 2>&1 \
+  env -u VIKI_KEY "$V" --store "$KS" count assert >/dev/null 2>&1 \
     && bad "K5 CONTROL: it opened with NO key" "encryption is not on" \
     || ok "K5 CONTROL: without the key it will not open"
 
@@ -103,13 +127,17 @@ if "$V" --store "$D/ct.db" sql "PRAGMA cipher_version" 2>/dev/null | grep -q .; 
   # keying individually and 0.16s through one context -- 8.4x, where the same
   # comparison on a plaintext store was 0.16 vs 0.13.
   cat > "$D/kchild.sh" <<'CHILD'
+# The parent was given --keyfile; nothing should have put a key in here.
 [ -z "${VIKI_KEY:-}" ] || { echo "KEY LEAKED TO CHILD" >&2; exit 8; }
 viki note "written by the child through the parent's keyed context" >/dev/null
 CHILD
   chmod +x "$D/kchild.sh"
-  VIKI_STORE="$KS" "$V" --keyfile "$KH" run "$D/kchild.sh"; rcK=$?
+  # env -u: the PROBE sets $VIKI_KEY for its own stores, and the child
+  # inheriting THAT is not viki leaking anything. Clearing it is what makes
+  # the assertion about viki rather than about this script.
+  VIKI_STORE="$KS" env -u VIKI_KEY "$V" --keyfile "$KH" run "$D/kchild.sh"; rcK=$?
   chk "$rcK" "0" "K7 viki run keys ONCE and the child needs no key"
-  chk "$("$V" --keyfile "$KH" --store "$KS" count assert)" "2" \
+  chk "$(env -u VIKI_KEY "$V" --keyfile "$KH" --store "$KS" count assert)" "2" \
       "K7b ...and the child's write landed in the keyed diary"
 else
   printf '  --   K1-K7 skipped: built against stock SQLite, NOT SQLCipher\n'
@@ -172,7 +200,9 @@ echo "== F: degradation =="
 # A stale context -- a killed parent, a copied environment -- must degrade to
 # opening the store directly. Failing would make an exported variable a
 # permanent trap.
-OUT=$(VIKI_CONTEXT="$D/nonexistent.sock" "$V" count assert 2>&1)
+# stderr is NOT captured: with $VIKI_KEY set, viki warns there, and folding
+# that into the value compared two different things.
+OUT=$(VIKI_CONTEXT="$D/nonexistent.sock" "$V" count assert 2>/dev/null)
 chk "$OUT" "$("$V" count assert)" "F1 a STALE \$VIKI_CONTEXT degrades to direct, not failure"
 
 printf '\n%d passed, %d failed\n' "$nPass" "$nFail"

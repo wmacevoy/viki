@@ -370,7 +370,7 @@ rather than asserted.
     viki cal ingest FILE · cal events [FROM TO] · count WHAT · list · sql
     viki run CMD [ARGS...]
 
-`sh cli/cli-probe.sh <dir>` → **25 passed, 0 failed.**
+`sh cli/cli-probe.sh <dir>` → **36 passed, 0 failed**, on an encrypted diary.
 
 ### Opening a keyed diary
 
