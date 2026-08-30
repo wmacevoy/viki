@@ -25,7 +25,7 @@ no hand-written parser** -- asserted as C1-C8 in `core/test/core-probe.sh`,
 each with a control, because a constraint with no test is a comment.
 
     sh core/build.sh            -> core/build/{viki, libvikicore.a, core-probe}
-    ./core/build/core-probe     121 passed, 0 failed
+    ./core/build/core-probe     135 passed, 0 failed
     sh core/test/core-probe.sh  11 passed, 0 failed
 
 One assertion type carries everything: `viki_assert(id, kind, akey, arank, ts,
@@ -124,7 +124,7 @@ core/           VIKI-CORE -- the successor tree.  SQLite and nothing else.
                   built by json_object(); the due date is VALIDATED by SQLite
                   GLOB and a malformed one is REFUSED rather than stored
   src/viki_ed25519.c    signing, via LibreSSL EVP_PKEY_ED25519
-  test/core_probe.c     121 behaviour assertions. T1-T7 are the ledger; T5 is
+  test/core_probe.c     135 behaviour assertions. T1-T7 are the ledger; T5 is
                   the one that matters (a superseded task LEAVES). Non-vacuity
                   checked by dropping the supersession clause -- T5/T5b go red
                   and nothing else does
@@ -684,7 +684,7 @@ this file -- against a binary missing three fixes that were sitting in
 ## Verified working end to end (not just "should work")
 
 - **The ledger, on viki-core, against Warren's own obligations**
-  (2026-08-29). `core-probe` `121 passed, 0 failed`; `core-probe.sh`
+  (2026-08-29). `core-probe` `135 passed, 0 failed`; `core-probe.sh`
   `11 passed, 0 failed`. T5 -- a superseded task LEAVES the ledger -- is the
   assertion the rest exists to protect, and it is not vacuous: removing the
   `NOT EXISTS (... supersedes=a.id)` clause from `viki_ledger()`'s SQL turns

@@ -1414,6 +1414,21 @@ int main(void){
             ** Measured in this session's own transcript: the compaction summary
             ** is stored as type "user" with model null, which is why a trace
             ** says "I decided X" about a thing the human decided. */
+            /* Y3d: WHITESPACE IS NOT A FALSIFIER. The first version tested
+            ** for the empty string, so a single space passed -- and the
+            ** memoir built on that guard claimed no sentence could get past
+            ** it. One could. Found by a fresh trace, not by the author. */
+            memset(&c,0,sizeof c);
+            c.zText="asserted as knowledge, falsifier is one space";
+            c.zStatus="k0"; c.zFalsifier=" "; c.zTs="2026-08-01T00:00:06Z"; c.zBy="probe";
+            check(viki_claim(&c,idC)==VIKI_EINVAL,
+                  "Y3d a falsifier of only whitespace is REFUSED", "a space satisfied it");
+            memset(&c,0,sizeof c);
+            c.zText="attributed to whitespace"; c.zStatus="k1";
+            c.zTs="2026-08-01T00:00:07Z"; c.zBy="   ";
+            check(viki_claim(&c,idC)==VIKI_EINVAL,
+                  "Y3e attribution of only whitespace is REFUSED", "spaces satisfied it");
+
             memset(&c,0,sizeof c);
             c.zText="nobody said this"; c.zStatus="k1"; c.zTs="2026-08-01T00:00:05Z";
             check(viki_claim(&c,idC)==VIKI_EINVAL,

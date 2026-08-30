@@ -31,7 +31,7 @@ a control. The caller supplies an open `sqlite3*`; core supplies meaning.
     core/include/viki_task.h    tasks and the ledger
     core/include/viki_cal.h     jsCalendar (RFC 8984), not ICS
     core/src/                   the implementation
-    core/test/core_probe.c      121 behaviour assertions
+    core/test/core_probe.c      135 behaviour assertions
     core/test/core-probe.sh     11 constraint assertions, C1-C8
     cli/viki_cli.c              the host: keys, clock, embedder, argv
     sh core/build.sh            builds all of it; requires SQLCipher-LibreSSL
@@ -146,7 +146,7 @@ fields are columns and JSON, not text in a file.
 
 ```sh
 sh core/build.sh                 # -> core/build/{viki, libvikicore.a, core-probe}
-./core/build/core-probe          # 121 behaviour assertions
+./core/build/core-probe          # 135 behaviour assertions
 sh core/test/core-probe.sh       # 11 constraint assertions, C1-C8
 ```
 

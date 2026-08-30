@@ -70,6 +70,19 @@ VikiStatus viki_claim(VikiClaim *p, char *zIdOut){
     **     claim class that asserts correctness has to say how it could fail.
     **     Every other level may leave it empty: a k1 IS the admission, a k3
     **     is already known false, a k4 is held knowingly.
+    **
+    **     TRIM, and that is not tidiness. The first version tested `fa=''`,
+    **     so a SINGLE SPACE satisfied it. A fresh trace found that within
+    **     minutes of being pointed at the guard, and the finding was worse
+    **     than the bug: the author had written a memoir whose central claim
+    **     was "there was no sentence I could write to get past it." There
+    **     was. `x` gets past it. So did the real falsifier the author then
+    **     wrote on the k4 record -- meaning the demotion to k4 was a CHOICE
+    **     narrated afterwards as a mechanical refusal.
+    **
+    **     An assertion that has never failed is a sentence, not a check;
+    **     this guard had never been run against an adversary until one was
+    **     hired to run it.
     **   - AN UNATTRIBUTED CLAIM IS REFUSED, and this one is not symmetry
     **     with the others -- it is a measurement. The compaction boundary
     **     that carries a trace's own account across the gap stores it as
@@ -86,8 +99,8 @@ VikiStatus viki_claim(VikiClaim *p, char *zIdOut){
     zSql = sqlite3_mprintf(
       "WITH c(st,fa,by) AS (SELECT %Q,%Q,%Q) SELECT"
       " CASE WHEN (SELECT st FROM c) NOT IN ('k0','k1','k2','k3','k4') THEN 0"
-      "      WHEN (SELECT st FROM c)='k0' AND (SELECT fa FROM c)='' THEN 0"
-      "      WHEN (SELECT by FROM c)='' THEN 0"
+      "      WHEN (SELECT st FROM c)='k0' AND trim((SELECT fa FROM c))='' THEN 0"
+      "      WHEN trim((SELECT by FROM c))='' THEN 0"
       "      ELSE 1 END,"
       " json_object('kind','claim','text',%Q,'status',(SELECT st FROM c),"
       "             'falsified_by',(SELECT fa FROM c),'because',%Q,'by',%Q)",
