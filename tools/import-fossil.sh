@@ -51,6 +51,14 @@ KEYARGS="--plaintext"
 v() { "$VIKI" $KEYARGS --store "$DIARY" "$@"; }
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 MEMBERS="$TMP/members"; : > "$MEMBERS"
+# THE REPO IS PART OF THE PATH, and leaving it out silently destroyed data.
+# gee, inch and loom EACH have a wiki page called "birth". Mapped to a bare
+# akey of "wiki:birth" all three become versions of ONE document -- three
+# different agents' birth records collapsed into a chain where two are
+# "superseded" by a page they have nothing to do with. The batch reported
+# "0 artifact(s)" for the later repos and the corruption was in the diary.
+# Namespacing by repo is what makes "without loss" true across five repos.
+NS=$(basename "$REPO" .fossil); NS=$(basename "$NS" .efossil)
 
 nw=0; nt=0
 # ---- wiki pages ---------------------------------------------------------
@@ -72,9 +80,9 @@ nw=0; nt=0
          AND b.rid = tagxref.rid ORDER BY tagxref.mtime DESC LIMIT 1" \
       2>/dev/null | sed "s/^'//;s/'$//" > "$TMP/body"
     [ -s "$TMP/body" ] || continue
-    id=$(v file "wiki:$name" --content-from "$TMP/body" --who fossil-import 2>/dev/null) || continue
+    id=$(v file "$NS/wiki:$name" --content-from "$TMP/body" --who fossil-import 2>/dev/null) || continue
     echo "$id" >> "$MEMBERS"
-    echo "  wiki:$name"
+    echo "  $NS/wiki:$name"
 done
 
 # ---- tickets ------------------------------------------------------------
@@ -87,9 +95,9 @@ done
         FROM ticket WHERE tkt_uuid='$u'" 2>/dev/null \
       | sed "s/^'//;s/'$//" > "$TMP/body"
     [ -s "$TMP/body" ] || continue
-    id=$(v file "ticket:$u" --content-from "$TMP/body" --who fossil-import 2>/dev/null) || continue
+    id=$(v file "$NS/ticket:$u" --content-from "$TMP/body" --who fossil-import 2>/dev/null) || continue
     echo "$id" >> "$MEMBERS"
-    echo "  ticket:$u"
+    echo "  $NS/ticket:$u"
 done
 
 # ---- one check-in grouping what came across -----------------------------
