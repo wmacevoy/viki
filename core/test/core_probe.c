@@ -1503,7 +1503,7 @@ int main(void){
             RETAIN_BEGIN(VikiDiaries, &s1, g);
             memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
             nt.zText="hunter2"; nt.zTs="2026-08-30T00:00:00Z";
-            viki_put((VikiAssert*)&nt); memcpy(idSecret, nt.zId, sizeof idSecret);
+            viki_put((VikiAssert*)&nt);
             memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
             nt.zText="keep me"; nt.zTs="2026-08-30T00:00:01Z";
             viki_put((VikiAssert*)&nt);

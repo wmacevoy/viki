@@ -86,6 +86,11 @@ static int usage(void){
 "                        that merges. IRREVERSIBLE -- the id can never be\n"
 "                        re-added. Unlike forget, which the next merge undoes.\n"
 "                        The tombstone carries the id only, never the content.\n"
+"  clone DEST            checkpointed snapshot to a NEW file (VACUUM INTO).\n"
+"                        A plain cp is WRONG -- journal_mode=wal means a copy\n"
+"                        taken while anything holds the store drops committed\n"
+"                        rows still in -wal. The clone is HISTORICAL on\n"
+"                        arrival; it bounds the first merge, never replaces it.\n"
 "  observe               every assertion id here, sorted -- a MANIFEST.\n"
 "                        --lacking FILE   ids here that FILE does not list.\n"
 "                        This is anti-entropy, not a log tail: the store\n"
@@ -746,6 +751,44 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
             fprintf(stderr,"%s:   the id can never be re-added, and nothing recovers it.\n",zProg);
             return 1; }
         fprintf(out, "%s\n", zId);
+        return 0;
+    }
+    if( !strcmp(argv[0],"clone") && argc>=2 ){
+        /* CLONE IS NOT SYNC AND CANNOT REPLACE IT.
+        **
+        ** Warren, 2026-08-30: "even if the desktop got the current exact copy
+        ** of the phone viki, they will not be the same... checkpoint copy and
+        ** transport is clone, once the cloned (historical) repo is nearby you
+        ** still must sync."
+        **
+        ** A clone is HISTORICAL the instant it lands. It bounds how much the
+        ** first merge has to move; it never removes the merge. There is no
+        ** state in which two live stores are identical -- convergence is a
+        ** property of the OPERATION, not a condition either side can be in,
+        ** which is also why nothing here records having been "in sync".
+        **
+        ** AND A PLAIN cp IS WRONG. The store is journal_mode=wal, so a copy
+        ** taken while anything holds it open silently drops committed
+        ** transactions still in the -wal. VACUUM INTO takes a consistent
+        ** snapshot through SQLite, compacts it, and preserves the SQLCipher
+        ** key -- verified: the clone reads under the same key, a stock
+        ** sqlite3 still cannot open it, and its manifest is identical. */
+        char *zSql; VikiStatus rc; FILE *f;
+        if( (f = fopen(argv[1], "rb")) != 0 ){
+            fclose(f);
+            fprintf(stderr,"%s: %s exists -- refusing to overwrite a store.\n",
+                    zProg, argv[1]);
+            return 1;
+        }
+        zSql = sqlite3_mprintf("VACUUM INTO %Q", argv[1]);
+        if( !zSql ) return 1;
+        rc = viki_sql(zSql, 0, 0);
+        sqlite3_free(zSql);
+        if( rc!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        fprintf(out, "%s\n", argv[1]);
+        fprintf(stderr, "%s: cloned. It is HISTORICAL already -- the source has\n", zProg);
+        fprintf(stderr, "%s: moved on. Merge to converge; clone only bounds the first one.\n", zProg);
         return 0;
     }
     if( !strcmp(argv[0],"observe") ){
