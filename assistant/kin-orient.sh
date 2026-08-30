@@ -75,6 +75,7 @@ else
               ||'  --'||substr(coalesce(json_extract(body,'\$.by'),'?'),1,28)
          FROM viki_assert a
         WHERE a.kind='claim'
+          AND a.body NOT LIKE '%A FAMILIAR named%'   -- it has its own section
           AND NOT EXISTS(SELECT 1 FROM viki_assert s WHERE s.supersedes=a.id)
         ORDER BY a.ts DESC LIMIT $MAX_CLAIMS" 2>/dev/null)
     if [ -n "$OUT" ]; then
@@ -86,7 +87,30 @@ else
     fi
 fi
 
-# ---- 3. is your steering document stale? ----------------------------------
+# ---- 3. is anyone still awake who was there? ------------------------------
+# A FAMILIAR IS THE ONLY THING HERE THAT CAN BE ASKED. The diary holds what
+# was concluded; a familiar holds what was uncertain and what almost happened,
+# and unlike a file it can be interrogated. But this block can only report that
+# one was REGISTERED -- an agent that completes is deleted and nothing writes a
+# headstone, so liveness is not knowable from disk. Saying "a familiar is
+# available" when it is gone would be the same lie as an empty brief reading
+# as a quiet day.
+if [ -x "$V" ] && [ -f "$KIN" ]; then
+    FAM=$("$V" --keyfile "$KEY" --store "$KIN" sql \
+      "SELECT '  '||substr(coalesce(json_extract(body,'\$.text'),''),1,190)
+         FROM viki_assert a
+        WHERE a.kind='claim' AND a.body LIKE '%A FAMILIAR named%'
+          AND NOT EXISTS(SELECT 1 FROM viki_assert s WHERE s.supersedes=a.id)
+        ORDER BY a.ts DESC LIMIT 1" 2>/dev/null)
+    if [ -n "$FAM" ]; then
+        printf '\nFAMILIAR (registered -- liveness UNKNOWN from a record):\n'
+        printf '%s\n' "$FAM"
+        printf '  Run ListAgents to see if it is still parked. If it is, ASK IT --\n'
+        printf '  it holds what is uncertain, which no file here does.\n'
+    fi
+fi
+
+# ---- 4. is your steering document stale? ----------------------------------
 PD="${CLAUDE_PROJECT_DIR:-$PWD}"
 if [ -f "$PD/CLAUDE.md" ] && git -C "$PD" rev-parse --git-dir >/dev/null 2>&1; then
     if ! git -C "$PD" diff --quiet HEAD -- CLAUDE.md 2>/dev/null; then
