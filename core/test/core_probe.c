@@ -63,6 +63,39 @@ static int chainCb(void *pApp, const VikiChainRow *r){
     return 0;
 }
 
+/* ---- S-series helpers: read the clock THROUGH the API (C8) ----------- */
+static char gSeq[32];
+static int seqRow(void *pApp, int nCol, const char *const *az){
+    if( nCol>0 && az[0] ) snprintf(gSeq, sizeof gSeq, "%s", az[0]);
+    return 0;
+}
+static void seqOf(char *zOut, size_t n){
+    gSeq[0]=0;
+    viki_sql("SELECT coalesce(max(seq),0) FROM viki_arrival", seqRow, 0);
+    snprintf(zOut, n, "%s", gSeq[0]?gSeq:"0");
+}
+static int gCount;
+static int cntRow(void *pApp, int nCol, const char *const *az){ gCount++; return 0; }
+static int countAfter(int nSeq){
+    char *z = sqlite3_mprintf("SELECT id FROM viki_arrival WHERE seq > %d", nSeq);
+    gCount = 0;
+    if( z ){ viki_sql(z, cntRow, 0); sqlite3_free(z); }
+    return gCount;
+}
+/* The id must NOT depend on local order: putting the same content into two
+** diaries must yield the same id. Checked by construction elsewhere; here we
+** assert the arrival number is simply not a column of viki_assert. */
+static int gHasCol;
+static int colRow(void *pApp, int nCol, const char *const *az){
+    if( nCol>0 && az[0] && strstr(az[0],"seq") ) gHasCol = 1;
+    return 0;
+}
+static int hasArrivalColumn(void){
+    gHasCol = 0;
+    viki_sql("SELECT sql FROM sqlite_master WHERE name='viki_assert'", colRow, 0);
+    return gHasCol;
+}
+
 /* ---- a stub embedder ------------------------------------------------
 ** TOPIC vectors, deliberately built so a query can hit a chunk it shares NO
 ** WORD with. That is what makes E2 a real test of the vector leg rather than
@@ -1577,6 +1610,58 @@ int main(void){
               RETAIN_END(g3); }
         }
         sqlite3_close(dbF1); sqlite3_close(dbF2);
+    }
+
+    /* ---- L: EACH DIARY'S OWN DISCRETE TIME (Local clock) -----------------------------
+    ** L5 is the one that constrains the design: the clock is LOCAL. It orders
+    ** MY receipts, not anyone's writes, so a watermark is sender-side and a
+    ** peer's number is meaningless here. And it lives OUTSIDE the assertion --
+    ** fold it into the id and the same row gets different ids per diary,
+    ** taking content-addressing and union-merge with it. */
+    {
+        sqlite3 *dbS1 = 0, *dbS2 = 0; VikiDiaries q1, q2; VikiDiary y1, y2;
+        sqlite3_open(":memory:", &dbS1); y1.zName="s1"; y1.db=dbS1; y1.mFlags=0;
+        sqlite3_open(":memory:", &dbS2); y2.zName="s2"; y2.db=dbS2; y2.mFlags=0;
+        viki_diaries_one(&q1,&y1); viki_diaries_one(&q2,&y2);
+        viki_attach(dbS1); viki_attach(dbS2);
+        {
+            VikiNote nt; int i;
+            char zSeq1[32], zSeq2[32];
+            RETAIN_BEGIN(VikiDiaries, &q1, g);
+            for(i=0;i<3;i++){
+                char zT[40]; snprintf(zT,sizeof zT,"2026-08-30T00:00:0%dZ",i);
+                memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
+                nt.zText = i==0?"one":(i==1?"two":"three"); nt.zTs=zT;
+                viki_put((VikiAssert*)&nt);
+            }
+            seqOf(zSeq1, sizeof zSeq1);
+            check(atoi(zSeq1)==3, "L1 the clock advances once per new assertion", zSeq1);
+
+            /* a re-put of identical bytes is a no-op and MUST NOT tick, or a
+            ** watermark would step over real arrivals */
+            memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
+            nt.zText="one"; nt.zTs="2026-08-30T00:00:00Z";
+            viki_put((VikiAssert*)&nt);
+            seqOf(zSeq2, sizeof zSeq2);
+            check(atoi(zSeq2)==3, "L2 a re-put of stored bytes does NOT tick", zSeq2);
+
+            check(countAfter(2)==1 && countAfter(0)==3,
+                  "L3 --after returns only what arrived later", "wrong window");
+            RETAIN_END(g);
+        }
+        {   char zS[32];
+            RETAIN_BEGIN(VikiDiaries, &q2, g);
+            viki_merge(dbS1, 0);
+            seqOf(zS, sizeof zS);
+            check(atoi(zS)==3, "L4 a merge advances the RECEIVER's clock", zS);
+            /* L5: same three assertions, and this diary numbered them itself.
+            ** Equal counts here are fine; what matters is that the numbering
+            ** is this store's own and never travelled with the rows. */
+            check(!hasArrivalColumn(),
+                  "L5 arrival order is NOT part of the assertion",
+                  "local time leaked into content-addressed rows");
+            RETAIN_END(g); }
+        sqlite3_close(dbS1); sqlite3_close(dbS2);
     }
 
     printf("\n%d passed, %d failed\n", nPass, nFail);

@@ -140,6 +140,30 @@ static const char zSchema[] =
   "CREATE INDEX IF NOT EXISTS viki_assert_key ON viki_assert(akey, arank);"
   "CREATE INDEX IF NOT EXISTS viki_assert_sup ON viki_assert(supersedes);"
 
+  /* EACH DIARY HAS ITS OWN DISCRETE TIME, and it must live OUTSIDE the
+  ** assertion. An id is sha256 of (kind, key, ts, supersedes, canon) and
+  ** deliberately NOT of anything local -- that is exactly what makes one
+  ** assertion the SAME assertion on every peer. Fold a local sequence into it
+  ** and the same row gets a different id on each diary; content-addressing,
+  ** union-merge and the whole 2P-Set property go with it.
+  **
+  ** So arrival order is a SIDE TABLE, local, and NEVER merged. `seq` answers
+  ** "what reached me after this point", which viki_assert alone cannot --
+  ** it is WITHOUT ROWID and keeps no arrival order at all.
+  **
+  ** MY seq IS MEANINGLESS TO A PEER. It orders MY receipts, not their writes,
+  ** and a row that reached me at 40 may have reached you at 3 or not at all.
+  ** So a watermark is SENDER-SIDE: "I have given P everything up to my N."
+  ** And it is an OPTIMISATION over the manifest diff, never a substitute:
+  ** `observe --lacking` stays ground truth and is the falsifier.
+  **
+  ** ROUND IT DOWN, NEVER UP. Too low costs bandwidth and merge is idempotent;
+  ** too high silently skips rows and calls it done. */
+  "CREATE TABLE IF NOT EXISTS viki_arrival("
+  "  seq INTEGER PRIMARY KEY AUTOINCREMENT,"
+  "  id  TEXT NOT NULL UNIQUE"
+  ");"
+
   /* A CHUNK IS A RANGE OVER AN ASSERTION, AND STORES NO TEXT.
   **
   ** The predecessor keyed chunks on (content_hash, model_id, chunk_ix) and
@@ -635,6 +659,10 @@ static void tx_end(sqlite3 *db, const char *zName, int bOk){
     sqlite3_free(z);
 }
 
+/* Defined with the redaction sweep, far below; declared here because
+** viki_put is the first caller and C wants to know. */
+static void stamp_arrivals(sqlite3 *db);
+
 VikiStatus viki_put(VikiAssert *p){
     sqlite3 *db = db_or_null();
     sqlite3_stmt *st = 0;
@@ -713,6 +741,10 @@ VikiStatus viki_put(VikiAssert *p){
         return VIKI_OK;                 /* already stored: not a new event */
     }
     sign_if_able(db, p->zId);
+    /* THIS DIARY'S CLOCK TICKS ON RECEIPT, and only for a row that is new
+    ** here -- a re-put of bytes already stored returns above and must not
+    ** advance the clock, or a watermark would skip real arrivals. */
+    stamp_arrivals(db);
     emit(db, p->zSupersedes ? VIKI_EV_SUPERSEDED : VIKI_EV_PUT,
          p->zId, p->vftbl->key(p), p->zSupersedes, 1);
     return VIKI_OK;
@@ -840,6 +872,7 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
     ** runs after the signature union so a tombstone also takes the signatures
     ** that were just handed over with the thing it kills. */
     apply_redactions(db, 0);
+    stamp_arrivals(db);
     tx_end(db, "viki_merge", 1);
     emit(db, VIKI_EV_MERGED, 0, 0, 0, n);
     if( pnAdded ) *pnAdded = n;
@@ -1059,6 +1092,22 @@ static int drop_chunks(sqlite3 *db, const char *zSql1, const char *zSql2,
 ** WHAT IT CANNOT PROMISE: a peer that never merges again keeps its copy.
 ** Erasure across a gossip network is best-effort by construction and any
 ** stronger claim would be false. */
+/* Give every assertion not yet stamped its arrival number. Idempotent, and it
+** BACKFILLS a store written before this table existed -- those rows get an
+** arbitrary but stable order, which is honest: their true arrival is not
+** recoverable and pretending otherwise would be worse. */
+static void stamp_arrivals(sqlite3 *db){
+    sqlite3_exec(db,
+        "INSERT OR IGNORE INTO viki_arrival(id)"
+        " SELECT id FROM viki_assert"
+        "  WHERE id NOT IN (SELECT id FROM viki_arrival)", 0, 0, 0);
+    /* A redacted row leaves viki_assert; its arrival number goes with it, or
+    ** the clock would advertise something the store cannot produce. */
+    sqlite3_exec(db,
+        "DELETE FROM viki_arrival WHERE id NOT IN (SELECT id FROM viki_assert)",
+        0, 0, 0);
+}
+
 static void apply_redactions(sqlite3 *db, int *pnRemoved){
     sqlite3_stmt *q = 0;
     int n = 0;

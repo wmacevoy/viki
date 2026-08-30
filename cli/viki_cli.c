@@ -93,7 +93,9 @@ static int usage(void){
 "                        arrival; it bounds the first merge, never replaces it.\n"
 "  observe               every assertion id here, sorted -- a MANIFEST.\n"
 "                        --lacking FILE   ids here that FILE does not list.\n"
-"                        This is anti-entropy, not a log tail: the store\n"
+"                        --after N        ids that reached HERE after seq N\n"
+"                        --seq            this diary's own arrival clock\n"
+"                        Anti-entropy, not a log tail: the store\n"
 "                        keeps no arrival order and a peer's rows carry the\n"
 "                        peer's clock, so set difference is the only correct\n"
 "                        question. Ids are content hashes; no clock needed.\n"
@@ -807,8 +809,32 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         ** viki_watch() is the OTHER door and is not this: it is per-connection
         ** and cannot see another process's writes, so it serves a host that is
         ** doing the writing, never a peer. */
-        const char *zLack = 0; int i;
-        for(i=1;i+1<argc;i++) if(!strcmp(argv[i],"--lacking")) zLack = argv[++i];
+        const char *zLack = 0, *zAfter = 0; int i, bSeq = 0;
+        for(i=1;i<argc;i++){
+            if(!strcmp(argv[i],"--lacking") && i+1<argc) zLack = argv[++i];
+            else if(!strcmp(argv[i],"--after") && i+1<argc) zAfter = argv[++i];
+            else if(!strcmp(argv[i],"--seq")) bSeq = 1;
+        }
+        if( bSeq ){
+            /* THIS DIARY'S CLOCK. Meaningless to a peer -- it orders MY
+            ** receipts, not their writes. Keep it as a SENDER-side watermark:
+            ** "I have given P everything up to my N." */
+            if( viki_sql("SELECT coalesce(max(seq),0) FROM viki_arrival", prRaw, out)
+                !=VIKI_OK ){ fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+            return 0;
+        }
+        if( zAfter ){
+            /* ROUND DOWN, NEVER UP. Too low costs bandwidth and merge is
+            ** idempotent; too high skips rows and reports success. */
+            char *zSql = sqlite3_mprintf(
+                "SELECT id FROM viki_arrival WHERE seq > %Q ORDER BY seq", zAfter);
+            VikiStatus rc;
+            if( !zSql ) return 1;
+            rc = viki_sql(zSql, prRaw, out);
+            sqlite3_free(zSql);
+            if( rc!=VIKI_OK ){ fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+            return 0;
+        }
         if( !zLack ){
             /* the manifest: every id here, sorted, one per line */
             if( viki_sql("SELECT id FROM viki_assert ORDER BY id", prRaw, out)!=VIKI_OK ){
