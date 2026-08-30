@@ -29,6 +29,11 @@
 # "I could not look" must not render the same.
 
 set -u
+# `set -u` plus an unset HOME kills the script before it can report anything --
+# which is how the first "always exit 0" fix failed its own control. Default it
+# so every path below resolves to something that simply is not there, and the
+# script reports that in TEXT rather than dying.
+: "${HOME:=/nonexistent}"
 V="${VIKI_BIN:-$HOME/projects/viki/core/build/viki}"
 KIN="${VIKI_KIN_DIARY:-$HOME/.viki/kin.diary}"
 KEY="${VIKI_KIN_KEY:-$HOME/.viki/kin.key}"
