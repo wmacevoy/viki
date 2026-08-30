@@ -94,3 +94,15 @@ if [ -f "$PD/CLAUDE.md" ] && git -C "$PD" rev-parse --git-dir >/dev/null 2>&1; t
     printf '  behind. Re-read the file before trusting your context about direction.\n'
 fi
 printf '=== END KIN ORIENTATION ===\n'
+
+# ALWAYS EXIT 0. Claude Code treats a nonzero hook exit as an error, so a
+# script that merely *reports* would announce a failure every session. This is
+# the THIRD instance of that bug in this repo in one day: assistant/brief.sh
+# exited 1 on every good run (a bare `test && printf` under `set -e`) and
+# stamped "*** THE BRIEF FAILED" onto correct output for weeks.
+#
+# This script's failure modes are already printed as TEXT -- "no kin diary",
+# "could not read this session transcript". Those are the report. The exit
+# status is not a second channel for them, and using it as one trains the
+# reader to ignore the channel that matters.
+exit 0

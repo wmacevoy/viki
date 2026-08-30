@@ -66,6 +66,11 @@ script only reads.
 - **It is too big.** 2 KB now. If the kin diary grows and the block does too, it
   is eating the context it exists to protect. `KIN_MAX_CLAIMS` caps the claim
   count; lower it.
+- **It reports a failure.** It always exits 0 on purpose. A nonzero hook exit
+  is an error to Claude Code, and a script that only *reports* must not use the
+  exit status as a second channel — `assistant/brief.sh` did exactly that and
+  stamped "THE BRIEF FAILED" onto correct output for weeks. Its failure modes
+  are printed as text instead.
 - **It is silently blind.** It must never print nothing. A missing diary or
   missing binary each say so explicitly, because *"no corrections"* and *"I could
   not look"* rendering the same is the exact failure this repo keeps hitting.
