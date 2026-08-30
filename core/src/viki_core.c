@@ -12,6 +12,28 @@
 #include "viki_core.h"
 #include "sha256.h"
 
+/* strdup IS POSIX, NOT ISO C, and this cost a segfault.
+**
+** Under -std=c11 glibc does not declare strdup (no _POSIX_C_SOURCE), so gcc
+** assumed it returns int and TRUNCATED THE POINTER TO 32 BITS. The result was
+** a garbage address like 0x3f50 that survived every NULL guard and blew up in
+** the caller's strcmp. Measured on Debian 12 / gcc 12.2, 2026-08-30: core
+** built and ran, and core-probe segfaulted 9 assertions in. macOS headers
+** expose strdup regardless of -std, which is why this was invisible for the
+** entire life of the file -- and why the build log said 0 warnings on the only
+** platform anyone had built on.
+**
+** A local helper rather than a feature-test macro: core is headed for wasm and
+** should not acquire a POSIX dependency to copy a string. */
+static char *dup_str(const char *z){
+    size_t n; char *p;
+    if( !z ) return 0;
+    n = strlen(z) + 1;
+    p = (char*)malloc(n);
+    if( p ) memcpy(p, z, n);
+    return p;
+}
+
 RETAIN_DEFINE(VikiDiaries);
 RETAIN_DEFINE(VikiEmbed);
 RETAIN_DEFINE(VikiIdentity);
@@ -764,7 +786,7 @@ VikiStatus viki_get(const char *zId, char **pzBody){
     if( rc==SQLITE_ROW && pzBody ){
         const char *z = (const char*)sqlite3_column_text(st, 0);
         if( z ){
-            *pzBody = strdup(z);
+            *pzBody = dup_str(z);
             if( !*pzBody ){ sqlite3_finalize(st); return fail(VIKI_ENOMEM,"viki_get: out of memory%s",""); }
         }
     }
@@ -789,7 +811,7 @@ VikiStatus viki_current(const char *zKey, char *zIdOut, char **pzBody){
     rc = sqlite3_step(st);
     if( rc==SQLITE_ROW ){
         if( zIdOut ) snprintf(zIdOut, VIKI_ID_HEX+1, "%s", sqlite3_column_text(st,0));
-        if( pzBody ){ const char *z=(const char*)sqlite3_column_text(st,1); *pzBody = z?strdup(z):0; }
+        if( pzBody ){ const char *z=(const char*)sqlite3_column_text(st,1); *pzBody = z?dup_str(z):0; }
     }
     sqlite3_finalize(st);
     return rc==SQLITE_ROW ? VIKI_OK : VIKI_ENOTFOUND;
@@ -1433,7 +1455,7 @@ VikiStatus viki_ask_in(const char *zDiary, const char *zQuery, int k, VikiHits *
             pH->a[pH->n].lo    = loC;
             pH->a[pH->n].hi    = hiC;
             pH->a[pH->n].score = pool[i].score;
-            pH->a[pH->n].zText = zT ? strdup(zT) : 0;
+            pH->a[pH->n].zText = zT ? dup_str(zT) : 0;
             snprintf(pH->a[pH->n].zChunking, sizeof(pH->a[pH->n].zChunking), "%s", zCh?zCh:"");
             pH->n++;
         }

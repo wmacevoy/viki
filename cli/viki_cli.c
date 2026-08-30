@@ -1,3 +1,8 @@
+/* strdup is POSIX. Under -std=c11 glibc hides it, gcc assumes int, and the
+** returned pointer is truncated to 32 bits -- a segfault that macOS never
+** shows because its headers expose strdup regardless. The host is allowed
+** POSIX; it just has to ask. */
+#define _POSIX_C_SOURCE 200809L
 /*
 ** viki_cli.c -- the CLI face. A BINDING, not an implementation.
 **
