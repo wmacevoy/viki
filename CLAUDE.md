@@ -1032,7 +1032,10 @@ scoping -- are history.
   measured facts drive it: `uv` is latest-wins by mtime across peers whose
   clocks disagree, and **encrypting the same database twice with the same key
   produces different bytes** (SQLCipher salts per database) — so encrypted blobs
-  cannot be diffed, deduped or delta-synced, and every sync is a full transfer.
+  cannot be diffed, deduped or delta-synced BETWEEN PEERS, and every such
+  transfer is a full one. **Over time within ONE file this is false** — a write
+  touches 13 of 16 pages' worth of nothing (measured 2026-08-30), so pushing a
+  single lineage to a hub deltas fine. See SYNC.md's refinement.
   That is the strongest argument for keeping truth in Fossil artifacts, which
   merge and carry history, rather than in blobs. `identity.db` is `private` and
   `viki_cache_refuse_private()` enforces it in code rather than in prose.

@@ -73,6 +73,29 @@ The distinction worth keeping:
 | a **member** | nothing at the viki layer. They have SQL. |
 | an **accident** | policy like §2. Worth having, worth naming correctly. |
 
+**REFINED 2026-08-30, and the claim above is only half true.** It holds
+*between peers* and not *over time*. Measured with 4096-byte pages:
+
+| | pages byte-identical |
+|---|---|
+| one file, three rows added | **13 of 16** — a write is LOCAL |
+| two independently created stores, same content | **0 of 16** |
+
+SQLCipher salts per database, so two peers' page layouts diverge immediately
+and block-level diff between them is worthless. But a *single lineage* over
+time deltas fine, which is exactly the case that matters for pushing to a dumb
+hub. So there are two mechanisms and neither replaces the other:
+
+- **row-level manifest diff** (`viki observe --lacking`) — merging BETWEEN
+  peers. Semantic; works across independently created stores.
+- **block-level delta / Merkle over pages** — shipping ONE lineage to a hub.
+  Syntactic; same-file only.
+
+Sizing, before anyone builds the second: it earns its keep at the same
+threshold the wasm page codec does — when the store is too large to simply
+send. At `~/.viki/personal` = 90KB the manifest diff moves less than a Merkle
+tree's own metadata would.
+
 ### And the asymmetry that makes artifacts the defensible layer
 
 This is the technical content of Warren's point, and it is not a preference:
