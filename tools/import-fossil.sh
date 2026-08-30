@@ -19,6 +19,15 @@
 #   check-in    -> checkin, grouping the files it brought, superseding its
 #                  parent so `viki why` walks commit history
 #
+# CAST(content(...) AS TEXT) IS NOT COSMETIC. content() returns a BLOB and
+# `fossil sql` renders blobs as an X'...' hex literal. Without the cast this
+# script imports every wiki page as hex, reports success, and the corruption is
+# invisible until someone reads a page. It did exactly that on the first run
+# here -- 14 artifacts "imported", all of them hex -- and the check written to
+# detect it ALSO failed, because it globbed for a leading hex digit while the
+# value starts with X'. Verify imported content by reading one page, not by
+# counting rows.
+#
 # WHAT IS PRESERVED: content, name, author, timestamp, and the version chain.
 # WHAT IS NOT, stated here rather than discovered later: a ticket's FIELD
 # STRUCTURE collapses to text, and file renames are not detected. If either
@@ -58,7 +67,7 @@ nw=0; nt=0
    GROUP BY 1" 2>/dev/null | tr -d "'" | while IFS= read -r name; do
     [ -n "$name" ] || continue
     "$FOSSIL" sql -R "$REPO" "
-      SELECT content(b.uuid) FROM tag, tagxref, blob b
+      SELECT CAST(content(b.uuid) AS TEXT) FROM tag, tagxref, blob b
        WHERE tag.tagname = 'wiki-$name' AND tagxref.tagid = tag.tagid
          AND b.rid = tagxref.rid ORDER BY tagxref.mtime DESC LIMIT 1" \
       2>/dev/null | sed "s/^'//;s/'$//" > "$TMP/body"
