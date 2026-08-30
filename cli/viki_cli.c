@@ -53,6 +53,7 @@
 #include "viki_core.h"
 #include "viki_task.h"
 #include "viki_trace.h"
+#include "viki_vcs.h"
 #include "viki_cal.h"
 #include "sha256.h"
 #include <dlfcn.h>
@@ -86,6 +87,14 @@ static int usage(void){
 "                        that merges. IRREVERSIBLE -- the id can never be\n"
 "                        re-added. Unlike forget, which the next merge undoes.\n"
 "                        The tombstone carries the id only, never the content.\n"
+"  file PATH             a VERSION of a document. akey=path, so this\n"
+"                        supersedes the current version of PATH; storing\n"
+"                        unchanged content is a no-op.  --content TEXT |\n"
+"                        --content-from FILE | stdin.  --who --ts\n"
+"  checkin --comment C [--who W] [--branch B] [--parent ID] ID...\n"
+"                        GROUP file versions atomically. Supersedes its\n"
+"                        PARENT check-in, so `why` walks commit history.\n"
+"                        Two children of one parent is a branch.\n"
 "  clone DEST            checkpointed snapshot to a NEW file (VACUUM INTO).\n"
 "                        A plain cp is WRONG -- journal_mode=wal means a copy\n"
 "                        taken while anything holds the store drops committed\n"
@@ -797,6 +806,60 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         fprintf(out, "%s\n", argv[1]);
         fprintf(stderr, "%s: cloned. It is HISTORICAL already -- the source has\n", zProg);
         fprintf(stderr, "%s: moved on. Merge to converge; clone only bounds the first one.\n", zProg);
+        return 0;
+    }
+    if( !strcmp(argv[0],"file") && argc>=2 ){
+        VikiFile f; char zId[VIKI_ID_HEX+1]; int i;
+        char *zBuf = 0; long nBuf = 0; FILE *in = 0;
+        memset(&f,0,sizeof f);
+        f.zPath = argv[1]; f.zTs = isoNow();
+        for(i=2;i+1<argc;i++){
+            if(!strcmp(argv[i],"--content-from")) { in = fopen(argv[++i],"rb");
+                if(!in){ fprintf(stderr,"%s: cannot read %s\n",zProg,argv[i]); return 1; } }
+            else if(!strcmp(argv[i],"--content")) f.zContent = argv[++i];
+            else if(!strcmp(argv[i],"--who"))     f.zWho = argv[++i];
+            else if(!strcmp(argv[i],"--ts"))      f.zTs = argv[++i];
+            else if(!strcmp(argv[i],"--supersedes")) f.zSupersedes = argv[++i];
+        }
+        if( !f.zContent ){
+            /* stdin when no --content given, so a pipeline can feed it */
+            FILE *src = in ? in : stdin;
+            size_t cap = 1<<16, got = 0; zBuf = malloc(cap);
+            if( !zBuf ) return 1;
+            while( !feof(src) ){
+                size_t r;
+                if( got+4096 > cap ){ char *t = realloc(zBuf, cap*=2); if(!t){free(zBuf);return 1;} zBuf=t; }
+                r = fread(zBuf+got, 1, 4096, src); got += r; if( r==0 ) break;
+            }
+            zBuf[got] = 0; nBuf = (long)got; f.zContent = zBuf;
+        }
+        if( in ) fclose(in);
+        if( viki_file(&f, zId)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); free(zBuf); return 1; }
+        free(zBuf);
+        fprintf(out, "%s\n", zId);
+        (void)nBuf;
+        return 0;
+    }
+    if( !strcmp(argv[0],"checkin") && argc>=2 ){
+        VikiCheckin c; char zId[VIKI_ID_HEX+1]; int i, n = 0;
+        const char *az[512];
+        memset(&c,0,sizeof c);
+        c.zTs = isoNow();
+        for(i=1;i<argc;i++){
+            if(!strcmp(argv[i],"--comment") && i+1<argc) c.zComment = argv[++i];
+            else if(!strcmp(argv[i],"--who") && i+1<argc) c.zWho = argv[++i];
+            else if(!strcmp(argv[i],"--branch") && i+1<argc) c.zBranch = argv[++i];
+            else if(!strcmp(argv[i],"--ts") && i+1<argc) c.zTs = argv[++i];
+            else if(!strcmp(argv[i],"--parent") && i+1<argc) c.zSupersedes = argv[++i];
+            else if(argv[i][0] != '-' && n < 512) az[n++] = argv[i];
+        }
+        c.azMember = az; c.nMember = n;
+        if( viki_checkin(&c, zId)!=VIKI_OK ){
+            fprintf(stderr,"%s: refused -- --comment is required.\n",zProg);
+            fprintf(stderr,"%s: a check-in with no message is a group nobody can read later.\n",zProg);
+            return 1; }
+        fprintf(out, "%s\n", zId);
         return 0;
     }
     if( !strcmp(argv[0],"observe") ){
