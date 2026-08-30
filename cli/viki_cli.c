@@ -82,6 +82,12 @@ static int usage(void){
 "                        this replaced.  Newest first, so a reader meets the\n"
 "                        correction before the thing corrected\n"
 "  pending               captures never structured into a task\n"
+"  observe               every assertion id here, sorted -- a MANIFEST.\n"
+"                        --lacking FILE   ids here that FILE does not list.\n"
+"                        This is anti-entropy, not a log tail: the store\n"
+"                        keeps no arrival order and a peer's rows carry the\n"
+"                        peer's clock, so set difference is the only correct\n"
+"                        question. Ids are content hashes; no clock needed.\n"
 "  ask QUERY [-k N]      hybrid retrieval\n"
 "  forget ID             withdraw an assertion (local; peers keep theirs)\n"
 "  merge PATH            union another store into this one\n"
@@ -573,6 +579,13 @@ static int whyRow(void *pApp, const VikiChainRow *r){
     return 0;
 }
 
+
+/* one column, one line -- for manifests, where anything else is a parse risk */
+static int prRaw(void *pApp, int nCol, const char *const *az){
+    if( nCol>0 && az[0] ) fprintf((FILE*)pApp, "%s\n", az[0]);
+    return 0;
+}
+
 /* ---- the verbs, executed against a retained store --------------------- */
 static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
     int n = 0;
@@ -713,6 +726,51 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         if( c.nFwd==0 )
             fprintf(out, "  nothing has superseded this. It still stands.\n");
         return 0;
+    }
+    if( !strcmp(argv[0],"observe") ){
+        /* OBSERVE IS A SET DIFFERENCE, NOT A LOG TAIL, and the schema decides
+        ** that rather than taste. viki_assert is WITHOUT ROWID, so the store
+        ** keeps NO local arrival order -- "what reached me since I last
+        ** looked" is a question it cannot answer. And a ts-ordered tail would
+        ** be wrong anyway: an assertion merged from a peer carries the PEER'S
+        ** timestamp, which is routinely older than any watermark you hold, so
+        ** a tail would silently skip exactly the rows gossip exists to move.
+        **
+        ** What anti-entropy needs is different and cheaper: ids are content
+        ** hashes, so "what do you lack" is a set difference over hex strings
+        ** and needs no clock, no watermark, and no agreement about time.
+        **
+        ** viki_watch() is the OTHER door and is not this: it is per-connection
+        ** and cannot see another process's writes, so it serves a host that is
+        ** doing the writing, never a peer. */
+        const char *zLack = 0; int i;
+        for(i=1;i+1<argc;i++) if(!strcmp(argv[i],"--lacking")) zLack = argv[++i];
+        if( !zLack ){
+            /* the manifest: every id here, sorted, one per line */
+            if( viki_sql("SELECT id FROM viki_assert ORDER BY id", prRaw, out)!=VIKI_OK ){
+                fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+            return 0;
+        }
+        {   /* ids I hold that the given manifest does not */
+            char *zSql; VikiStatus rc; FILE *f = fopen(zLack,"r");
+            char zLine[256]; sqlite3_str *pIn;
+            if( !f ){ fprintf(stderr,"%s: cannot read %s\n",zProg,zLack); return 1; }
+            pIn = sqlite3_str_new(0);
+            sqlite3_str_appendall(pIn, "SELECT id FROM viki_assert WHERE id NOT IN (''");
+            while( fgets(zLine,sizeof(zLine),f) ){
+                size_t n=strlen(zLine);
+                while( n && (zLine[n-1]=='\n'||zLine[n-1]=='\r') ) zLine[--n]=0;
+                if( n ) sqlite3_str_appendf(pIn, ",%Q", zLine);
+            }
+            fclose(f);
+            sqlite3_str_appendall(pIn, ") ORDER BY id");
+            zSql = sqlite3_str_finish(pIn);
+            if( !zSql ) return 1;
+            rc = viki_sql(zSql, prRaw, out);
+            sqlite3_free(zSql);
+            if( rc!=VIKI_OK ){ fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+            return 0;
+        }
     }
     if( !strcmp(argv[0],"ask") && argc>=2 ){
         VikiHits *h = 0; int k = 5, i;
