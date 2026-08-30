@@ -35,3 +35,9 @@ edge/vendor-wasm/
 # only the built/pulled artefacts stay out.
 core/build/
 .claude/
+
+# The CLI's default store when --store is omitted. An invocation in the repo
+# root creates an empty viki.db here; it is not source and must never be
+# committed. A diary belongs in ~/.viki or wherever the caller says.
+viki.db
+*.diary
