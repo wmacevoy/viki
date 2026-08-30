@@ -1383,13 +1383,13 @@ int main(void){
             check(viki_claim(&c,idA)==VIKI_OK, "Y1 a claim with a valid status is stored", viki_errmsg());
 
             memset(&c,0,sizeof c);
-            c.zText="nonsense"; c.zStatus="probably"; c.zTs="2026-08-01T00:00:01Z";
+            c.zText="nonsense"; c.zStatus="probably"; c.zTs="2026-08-01T00:00:01Z"; c.zBy="probe";
             check(viki_claim(&c,idC)==VIKI_EINVAL,
                   "Y2 a status outside k0..k4 is REFUSED", "it was stored");
 
             memset(&c,0,sizeof c);
             c.zText="asserted as knowledge, with no way to be wrong";
-            c.zStatus="k0"; c.zTs="2026-08-01T00:00:02Z";
+            c.zStatus="k0"; c.zTs="2026-08-01T00:00:02Z"; c.zBy="probe";
             check(viki_claim(&c,idC)==VIKI_EINVAL,
                   "Y3 a k0 with NO FALSIFIER is REFUSED", "a confident error got in as knowledge");
 
@@ -1397,7 +1397,7 @@ int main(void){
             ** falsifiers -- a k1 IS the admission of a gap and owes nothing. */
             memset(&c,0,sizeof c);
             c.zText="I do not know whether this holds on iOS";
-            c.zStatus="k1"; c.zTs="2026-08-01T00:00:03Z";
+            c.zStatus="k1"; c.zTs="2026-08-01T00:00:03Z"; c.zBy="probe";
             check(viki_claim(&c,idC)==VIKI_OK,
                   "Y3b CONTROL: a k1 with no falsifier is fine (Y3 is about k0)", viki_errmsg());
 
@@ -1406,9 +1406,18 @@ int main(void){
             memset(&c,0,sizeof c);
             c.zText="this one was actually checked"; c.zStatus="k0";
             c.zFalsifier="a run of the probe that comes out the other way";
-            c.zTs="2026-08-01T00:00:04Z";
+            c.zTs="2026-08-01T00:00:04Z"; c.zBy="probe";
             check(viki_claim(&c,idC)==VIKI_OK,
                   "Y3c CONTROL: a k0 WITH a falsifier is stored", viki_errmsg());
+
+            /* Y9: THE ENVELOPE LOSES THE SENDER, so the content must carry it.
+            ** Measured in this session's own transcript: the compaction summary
+            ** is stored as type "user" with model null, which is why a trace
+            ** says "I decided X" about a thing the human decided. */
+            memset(&c,0,sizeof c);
+            c.zText="nobody said this"; c.zStatus="k1"; c.zTs="2026-08-01T00:00:05Z";
+            check(viki_claim(&c,idC)==VIKI_EINVAL,
+                  "Y9 an UNATTRIBUTED claim is REFUSED", "it got in with no --by");
 
             memset(&c,0,sizeof c);
             c.zText="the correction"; c.zStatus="k0";

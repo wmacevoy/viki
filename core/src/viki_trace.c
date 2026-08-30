@@ -69,15 +69,29 @@ VikiStatus viki_claim(VikiClaim *p, char *zIdOut){
     **     the confident error this file exists to make visible, so the one
     **     claim class that asserts correctness has to say how it could fail.
     **     Every other level may leave it empty: a k1 IS the admission, a k3
-    **     is already known false, a k4 is held knowingly. */
+    **     is already known false, a k4 is held knowingly.
+    **   - AN UNATTRIBUTED CLAIM IS REFUSED, and this one is not symmetry
+    **     with the others -- it is a measurement. The compaction boundary
+    **     that carries a trace's own account across the gap stores it as
+    **     `type: "user"` with `model: null` (measured 2026-08-29 in this
+    **     session's own transcript: five boundaries, 4,521,748 tokens
+    **     dropped, every summary unattributed). So a trace's conclusions
+    **     arrive at its successor wearing the HUMAN'S voice, which is why
+    **     "I decided X" gets said about things the human decided.
+    **
+    **     THE ENVELOPE LOSES THE SENDER. Therefore the content must carry
+    **     it: attribution that lives in metadata is attribution that will
+    **     be stripped. `--by` is not bookkeeping, it is the field that
+    **     survives the transition. */
     zSql = sqlite3_mprintf(
-      "WITH c(st,fa) AS (SELECT %Q,%Q) SELECT"
+      "WITH c(st,fa,by) AS (SELECT %Q,%Q,%Q) SELECT"
       " CASE WHEN (SELECT st FROM c) NOT IN ('k0','k1','k2','k3','k4') THEN 0"
       "      WHEN (SELECT st FROM c)='k0' AND (SELECT fa FROM c)='' THEN 0"
+      "      WHEN (SELECT by FROM c)='' THEN 0"
       "      ELSE 1 END,"
       " json_object('kind','claim','text',%Q,'status',(SELECT st FROM c),"
       "             'falsified_by',(SELECT fa FROM c),'because',%Q,'by',%Q)",
-      zStatus, zFals, zText, zBec, zBy);
+      zStatus, zFals, zBy, zText, zBec, zBy);
     if( !zSql ) return VIKI_ENOMEM;
 
     memset(&ctx, 0, sizeof(ctx));
