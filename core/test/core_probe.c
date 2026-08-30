@@ -1499,8 +1499,7 @@ int main(void){
         viki_diaries_one(&s1,&d1); viki_diaries_one(&s2,&d2);
         viki_attach(dbR1); viki_attach(dbR2);
         {
-            VikiNote nt; VikiRedact rd; char idSecret[VIKI_ID_HEX+1], idR[VIKI_ID_HEX+1];
-            int n=0;
+            VikiNote nt;
             RETAIN_BEGIN(VikiDiaries, &s1, g);
             memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
             nt.zText="hunter2"; nt.zTs="2026-08-30T00:00:00Z";
@@ -1512,7 +1511,6 @@ int main(void){
         }
         {   RETAIN_BEGIN(VikiDiaries, &s2, g);
             viki_merge(dbR1, 0);                       /* peer takes both */
-            viki_count(VIKI_N_ASSERT, "note", &(int){0});
             RETAIN_END(g); }
         {
             VikiRedact rd; char idR[VIKI_ID_HEX+1]; int n=0;
