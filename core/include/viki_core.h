@@ -172,7 +172,15 @@ VikiStatus viki_current(const char *zKey, char *zIdOut, char **pzBody);
 ** arrived -- HTTP, iCloud, AirDrop, a USB stick -- is the host's business,
 ** which is why there is no network in this header. Chunks are NOT merged:
 ** they are a projection and are rebuilt (D-10). */
-VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded);
+VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded);   /* pull: theirs -> mine */
+
+/* PUSH: mine -> theirs. The same operation with the ends swapped, and the
+** asymmetry matters: the redaction sweep and the arrival stamp land on the
+** DESTINATION. So a push carries tombstones that destroy content over there,
+** and their clock ticks for what they received; mine does not move, because I
+** learned nothing. A dumb hub is the case this exists for -- it cannot be
+** asked what it lacks, so you pull, merge, and push back. */
+VikiStatus viki_push(sqlite3 *pDest, int *pnAdded);
 
 /* ---- withdrawal ------------------------------------------------------
 ** THE STORE IS GROW-ONLY AND THESE ARE THE DELIBERATE EXCEPTIONS. Neither is

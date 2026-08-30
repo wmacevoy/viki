@@ -101,7 +101,13 @@ static int usage(void){
 "                        question. Ids are content hashes; no clock needed.\n"
 "  ask QUERY [-k N]      hybrid retrieval\n"
 "  forget ID             withdraw an assertion (local; peers keep theirs)\n"
-"  merge PATH            union another store into this one\n"
+"  pull PATH             union a peer's store into this one\n"
+"  push PATH             union this one into a peer's. REFUSES to create it:\n"
+"                        first contact is `clone`. For a dumb hub the round\n"
+"                        trip is PULL then PUSH -- push alone drops whatever\n"
+"                        another peer left there since.\n"
+"                        --source-keyfile PATH  if the peer uses another key\n"
+"  merge PATH            same as pull, kept for the older spelling\n"
 "  reindex               (re)project ranges; repeat with --lines/--overlap\n"
 "                        to add a SECOND chunking over the same assertions\n"
 "  cal ingest FILE       jsCalendar (RFC 8984) in\n"
@@ -874,6 +880,53 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         VikiStatus rc = viki_forget(argv[1]);
         if( rc==VIKI_ENOTFOUND ){ fprintf(stderr,"%s: no such assertion\n",zProg); return 1; }
         if( rc!=VIKI_OK ){ fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        return 0;
+    }
+    if( (!strcmp(argv[0],"push") || !strcmp(argv[0],"pull")) && argc>=2 ){
+        /* PUSH AND PULL ARE ONE OPERATION WITH THE ENDS SWAPPED, over a PATH.
+        ** There is no protocol here and there is nothing to negotiate: ids are
+        ** content hashes and the merge is a union, so the only question is
+        ** which store receives.
+        **
+        ** PUSH REFUSES TO CREATE THE DESTINATION, and that is what makes
+        ** `clone` a real primitive rather than a convenience. First contact
+        ** needs a checkpointed snapshot (a plain cp is wrong under WAL);
+        ** afterwards you push. Silently creating an empty peer here would let
+        ** a typo look like a successful sync to nowhere.
+        **
+        ** FOR A DUMB HUB -- a file in a folder something else syncs, holding
+        ** no key and running no code -- the round trip is PULL then PUSH, in
+        ** that order. Push alone would hand the hub your rows while dropping
+        ** whatever another peer left there since. */
+        /* strcmp, NOT a character trick. The first version tested
+        ** argv[0][1]=='u' -- and "push"[1] and "pull"[1] are BOTH 'u', so
+        ** `pull` silently PUSHED. Both commands reported success and the
+        ** rows went the wrong way; only a convergence check caught it. */
+        int bPush = !strcmp(argv[0],"push");
+        sqlite3 *peer = 0;
+        const char *zPeerKey = zSrcKeyFile ? zSrcKeyFile : zKeyFile;
+        FILE *f = fopen(argv[1], "rb");
+        if( !f ){
+            fprintf(stderr,"%s: no diary at %s\n",zProg,argv[1]);
+            if( bPush ) fprintf(stderr,
+                "%s: push does not create one -- first contact is:  viki clone %s\n",
+                zProg, argv[1]);
+            return 1;
+        }
+        fclose(f);
+        if( sqlite3_open_v2(argv[1], &peer,
+                bPush ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY, 0)!=SQLITE_OK ){
+            fprintf(stderr,"%s: cannot open %s\n",zProg,argv[1]); return 1; }
+        if( apply_key(peer, argv[1], zPeerKey) < 0 ){ sqlite3_close(peer); return 1; }
+        if( sqlite3_exec(peer,"SELECT count(*) FROM sqlite_master",0,0,0)!=SQLITE_OK ){
+            fprintf(stderr,"%s: cannot read %s -- wrong key, or not a diary\n",zProg,argv[1]);
+            sqlite3_close(peer); return 1; }
+        if( (bPush ? viki_push(peer,&n) : viki_merge(peer,&n))!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); sqlite3_close(peer); return 1; }
+        sqlite3_close(peer);
+        fprintf(out, "%d assertion(s) %s\n", n, bPush ? "pushed" : "pulled");
+        if( bPush && n )
+            fprintf(stderr,"%s: their clock moved, mine did not -- I learned nothing.\n",zProg);
         return 0;
     }
     if( !strcmp(argv[0],"merge") && argc>=2 ){

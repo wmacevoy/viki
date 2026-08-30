@@ -798,8 +798,11 @@ VikiStatus viki_current(const char *zKey, char *zIdOut, char **pzBody){
 /* ---- merge ----------------------------------------------------------- */
 static void apply_redactions(sqlite3 *db, int *pnRemoved);
 
-VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
-    sqlite3 *db = db_or_null();
+/* THE DIRECTION IS A PARAMETER, because push and pull are the same operation
+** with the ends swapped and duplicating the loop is how they drift apart.
+** Everything that must happen to a store on receipt -- the redaction sweep,
+** the arrival stamp -- happens to DST, whichever end that is. */
+static VikiStatus merge_into(sqlite3 *db, sqlite3 *pOther, int *pnAdded){
     sqlite3_stmt *st = 0, *ins = 0;
     int n = 0, rc, rcEnd;
     if( !db ) return VIKI_ENOCTX;
@@ -877,6 +880,22 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
     emit(db, VIKI_EV_MERGED, 0, 0, 0, n);
     if( pnAdded ) *pnAdded = n;
     return VIKI_OK;
+}
+
+/* PULL: their rows into mine. */
+VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
+    return merge_into(db_or_null(), pOther, pnAdded);
+}
+
+/* PUSH: mine into theirs, and the asymmetry is real rather than cosmetic --
+** the redaction sweep and the arrival stamp land on the DESTINATION, so
+** pushing a tombstone destroys content over there, and their clock ticks for
+** what they received. Mine does not move; I learned nothing. */
+VikiStatus viki_push(sqlite3 *pDest, int *pnAdded){
+    sqlite3 *db = db_or_null();
+    if( !db ) return VIKI_ENOCTX;
+    if( !pDest ) return VIKI_EINVAL;
+    return merge_into(pDest, db, pnAdded);
 }
 
 /* ---- projection: ranges, FTS, vectors --------------------------------

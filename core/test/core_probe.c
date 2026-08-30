@@ -1664,6 +1664,55 @@ int main(void){
         sqlite3_close(dbS1); sqlite3_close(dbS2);
     }
 
+    /* ---- P: PUSH IS PULL WITH THE ENDS SWAPPED -------------------------
+    ** P2 exists because the first CLI version got the direction wrong in a
+    ** way nothing reported: it discriminated on argv[0][1]=='u', and "push"
+    ** and "pull" share that character, so `pull` silently PUSHED. Both
+    ** commands printed success and the rows went the wrong way. Only a
+    ** convergence check caught it, so there is now an assertion that a pull
+    ** leaves the peer alone. */
+    {
+        sqlite3 *dbP1 = 0, *dbP2 = 0; VikiDiaries m1, m2; VikiDiary v1, v2;
+        sqlite3_open(":memory:", &dbP1); v1.zName="p1"; v1.db=dbP1; v1.mFlags=0;
+        sqlite3_open(":memory:", &dbP2); v2.zName="p2"; v2.db=dbP2; v2.mFlags=0;
+        viki_diaries_one(&m1,&v1); viki_diaries_one(&m2,&v2);
+        viki_attach(dbP1); viki_attach(dbP2);
+        {   VikiNote nt; int n=0; char zMine[32];
+            RETAIN_BEGIN(VikiDiaries, &m1, g);
+            memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
+            nt.zText="mine only"; nt.zTs="2026-08-30T00:00:00Z";
+            viki_put((VikiAssert*)&nt);
+            seqOf(zMine, sizeof zMine);
+
+            check(viki_push(dbP2, &n)==VIKI_OK && n==1,
+                  "P1 push moves rows to the DESTINATION", "nothing crossed");
+
+            {   char zAfter[32]; seqOf(zAfter, sizeof zAfter);
+                check(!strcmp(zMine, zAfter),
+                      "P3 pushing does NOT advance MY clock -- I learned nothing",
+                      zAfter); }
+            RETAIN_END(g);
+        }
+        {   int n=0;
+            RETAIN_BEGIN(VikiDiaries, &m2, g);
+            viki_count(VIKI_N_ASSERT, "note", &n);
+            check(n==1, "P2a the destination really received it", "empty");
+            {   char zTheirs[32]; seqOf(zTheirs, sizeof zTheirs);
+                check(atoi(zTheirs)==1,
+                      "P4 the DESTINATION's clock ticks for what it received", zTheirs); }
+            /* P2: a pull must leave the peer alone. Pull from p1 while p1 has
+            ** nothing new -- p1's count must not change. */
+            viki_merge(dbP1, &n);
+            RETAIN_END(g); }
+        {   int n=0;
+            RETAIN_BEGIN(VikiDiaries, &m1, g);
+            viki_count(VIKI_N_ASSERT, "note", &n);
+            check(n==1, "P2 a pull leaves the PEER unchanged (pull is not push)",
+                  "the peer gained rows during a pull -- direction is inverted");
+            RETAIN_END(g); }
+        sqlite3_close(dbP1); sqlite3_close(dbP2);
+    }
+
     printf("\n%d passed, %d failed\n", nPass, nFail);
     sqlite3_close(dbA); sqlite3_close(dbB);
     return nFail ? 1 : 0;
