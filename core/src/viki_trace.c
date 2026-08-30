@@ -226,3 +226,61 @@ VikiStatus viki_why(const char *zId, viki_chain_row xRow, void *pApp){
     ** difference between "nothing superseded it" and "I could not see it". */
     return c.nSeen ? VIKI_OK : VIKI_ENOTFOUND;
 }
+
+
+/* ---- the tombstone ---------------------------------------------------
+** A redaction is an ASSERTION, so it merges like everything else and needs no
+** protocol of its own. Its body names a target id and nothing about the
+** target's content -- an id is a hash, so this propagates the instruction to
+** destroy without propagating what is destroyed. */
+static const VikiType vikiRedactType = { "redact", 0, sizeof(VikiRedact) };
+static const char *rdKey (const VikiAssert *p){
+    const VikiRedact *r = (const VikiRedact*)p;
+    return r->zTarget ? r->zTarget : p->zId;   /* keyed to what it kills */
+}
+static const char *rdRank (const VikiAssert *p){ return p->zTs ? p->zTs : ""; }
+static const char *rdText (const VikiAssert *p){
+    const VikiRedact *r = (const VikiRedact*)p;
+    return r->zCompose ? r->zCompose : "";
+}
+static const char *rdCanon(const VikiAssert *p){
+    const VikiRedact *r = (const VikiRedact*)p;
+    return r->zJson ? r->zJson : "";
+}
+const struct VikiAssertVftbl vikiRedactVftbl = {
+    &vikiRedactType, rdKey, rdRank, rdText, rdCanon
+};
+
+VikiStatus viki_redact(VikiRedact *p, char *zIdOut){
+    struct buildCtx ctx;
+    char *zSql; VikiStatus rc;
+    const char *zWhy, *zBy;
+    if( !p || !p->zTarget || !p->zTarget[0] ) return VIKI_EINVAL;
+    p->vftbl = &vikiRedactVftbl; p->zJson = 0; p->zCompose = 0;
+    zWhy = p->zWhy ? p->zWhy : "";
+    zBy  = p->zBy  ? p->zBy  : "";
+    /* WHY IS REQUIRED. A tombstone is irreversible and propagates; an
+    ** unexplained one is indistinguishable from an accident, and the peer who
+    ** receives it can never recover what it took. */
+    zSql = sqlite3_mprintf(
+      "SELECT CASE WHEN trim(%Q)='' OR trim(%Q)='' THEN 0 ELSE 1 END,"
+      " json_object('kind','redact','target',%Q,'why',%Q,'by',%Q)",
+      zWhy, zBy, p->zTarget, zWhy, zBy);
+    if( !zSql ) return VIKI_ENOMEM;
+    memset(&ctx,0,sizeof ctx);
+    rc = viki_sql(zSql, buildRow, &ctx);
+    sqlite3_free(zSql);
+    if( rc!=VIKI_OK ){ free(ctx.zJson); return rc; }
+    if( !ctx.zJson || !ctx.bOk ){ free(ctx.zJson); return VIKI_EINVAL; }
+    p->zJson = ctx.zJson;
+    /* The TEXT carries no trace of what was redacted -- only that it was. */
+    p->zCompose = sqlite3_mprintf("redacted %s\nwhy: %s\nby: %s",
+                                  p->zTarget, zWhy, zBy);
+    if( !p->zCompose ){ free(p->zJson); p->zJson=0; return VIKI_ENOMEM; }
+    rc = viki_put((VikiAssert*)p);
+    if( rc==VIKI_OK && zIdOut ) memcpy(zIdOut, p->zId, VIKI_ID_HEX+1);
+    free(p->zJson); p->zJson=0;
+    sqlite3_free(p->zCompose); p->zCompose=0;
+    if( rc==VIKI_OK ) rc = viki_redact_apply(0);   /* bite here, not later */
+    return rc;
+}

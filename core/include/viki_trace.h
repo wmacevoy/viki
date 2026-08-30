@@ -73,6 +73,32 @@ extern const struct VikiAssertVftbl vikiClaimVftbl;
 ** is worse than a write that fails. */
 VikiStatus viki_claim(VikiClaim *p, char *zIdOut);
 
+/* ---- redaction -------------------------------------------------------
+** The tombstone. Stores an assertion naming a target id, then destroys the
+** target locally and everywhere it later merges. IRREVERSIBLE: the store
+** becomes a 2P-Set, so a redacted id can never be re-added -- which is the
+** requirement rather than a defect, since viki_forget alone is undone by the
+** next merge (measured 2026-08-30: 4 -> forget -> 3 -> merge -> 4).
+**
+** zWhy and zBy are REQUIRED. An unexplained tombstone cannot be told from an
+** accident by the peer it reaches, and nothing it took can be recovered.
+**
+** The body names an id and nothing else -- an id is a sha256 OF the content,
+** so this propagates the instruction to destroy without propagating what is
+** destroyed. */
+typedef struct {
+    const struct VikiAssertVftbl *vftbl;
+    char        zId[VIKI_ID_HEX+1];
+    const char *zTs;
+    const char *zSupersedes;
+    const char *zTarget;      /* the id to destroy */
+    const char *zWhy;         /* REQUIRED */
+    const char *zBy;          /* REQUIRED */
+    char       *zJson, *zCompose;
+} VikiRedact;
+extern const struct VikiAssertVftbl vikiRedactVftbl;
+VikiStatus viki_redact(VikiRedact *p, char *zIdOut);
+
 /* ---- walking the chain ----------------------------------------------- */
 typedef struct {
     const char *zId, *zKind, *zTs, *zText, *zStatus, *zBecause, *zBy;

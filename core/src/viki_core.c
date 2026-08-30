@@ -764,6 +764,8 @@ VikiStatus viki_current(const char *zKey, char *zIdOut, char **pzBody){
 }
 
 /* ---- merge ----------------------------------------------------------- */
+static void apply_redactions(sqlite3 *db, int *pnRemoved);
+
 VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
     sqlite3 *db = db_or_null();
     sqlite3_stmt *st = 0, *ins = 0;
@@ -834,6 +836,10 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded){
             sqlite3_finalize(q);
         }
     }
+    /* A REDACTION THAT ARRIVES IN THIS MERGE MUST BITE IN THIS MERGE, and it
+    ** runs after the signature union so a tombstone also takes the signatures
+    ** that were just handed over with the thing it kills. */
+    apply_redactions(db, 0);
     tx_end(db, "viki_merge", 1);
     emit(db, VIKI_EV_MERGED, 0, 0, 0, n);
     if( pnAdded ) *pnAdded = n;
@@ -1031,6 +1037,63 @@ static int drop_chunks(sqlite3 *db, const char *zSql1, const char *zSql2,
         sqlite3_finalize(st);
     }
     return n;
+}
+
+/* ---- redaction: the one thing that is NOT grow-only -------------------
+**
+** Warren, 2026-08-30: "from a legality and privacy point of view, i think
+** redaction is necessary... it is ok to eventually forget; most of history is
+** lost, and we muddle forward anyway."
+**
+** WHAT IT COSTS, plainly: the store stops being a G-Set and becomes a 2P-Set.
+** Merge stays associative, commutative and idempotent -- still conflict-free,
+** still convergent -- but a redacted id can never be re-added. That is the
+** requirement rather than a defect: a redaction gossip can undo is not one.
+** viki_forget alone was exactly that, measured 2026-08-30 -- forget took a
+** store 4 -> 3 and the very next merge put it back at 4.
+**
+** WHAT MAKES IT SAFE TO PROPAGATE: an id is a sha256 OF the content, so the
+** tombstone names what to destroy without carrying it. A peer learns that
+** something is withdrawn and learns nothing at all about what it said.
+**
+** WHAT IT CANNOT PROMISE: a peer that never merges again keeps its copy.
+** Erasure across a gossip network is best-effort by construction and any
+** stronger claim would be false. */
+static void apply_redactions(sqlite3 *db, int *pnRemoved){
+    sqlite3_stmt *q = 0;
+    int n = 0;
+    if( sqlite3_prepare_v2(db,
+        "SELECT json_extract(body,'$.target') FROM viki_assert"
+        " WHERE kind='redact' AND json_valid(body)"
+        "   AND json_extract(body,'$.target') IN (SELECT id FROM viki_assert)",
+        -1, &q, 0)!=SQLITE_OK ) return;
+    while( sqlite3_step(q)==SQLITE_ROW ){
+        const char *zT = (const char*)sqlite3_column_text(q, 0);
+        sqlite3_stmt *d = 0;
+        if( !zT ) continue;
+        drop_chunks(db,
+            "SELECT seq, text FROM viki_chunk_text WHERE seq IN"
+            " (SELECT seq FROM viki_chunk WHERE id=?1)",
+            "DELETE FROM viki_chunk WHERE id=?1", zT);
+        if( sqlite3_prepare_v2(db,"DELETE FROM viki_sig WHERE id=?1",-1,&d,0)==SQLITE_OK ){
+            sqlite3_bind_text(d,1,zT,-1,SQLITE_TRANSIENT); sqlite3_step(d); sqlite3_finalize(d); }
+        if( sqlite3_prepare_v2(db,"DELETE FROM viki_assert WHERE id=?1",-1,&d,0)==SQLITE_OK ){
+            sqlite3_bind_text(d,1,zT,-1,SQLITE_TRANSIENT); sqlite3_step(d); sqlite3_finalize(d); }
+        n++;
+    }
+    sqlite3_finalize(q);
+    if( pnRemoved ) *pnRemoved = n;
+}
+
+/* Public door: store the tombstone, then sweep. Both halves, or a redaction
+** that never leaves this machine. */
+VikiStatus viki_redact_apply(int *pnRemoved){
+    sqlite3 *db = db_or_null();
+    if( !db ) return VIKI_ENOCTX;
+    if( tx_begin(db, "viki_redact")!=SQLITE_OK ) return VIKI_ESQL;
+    apply_redactions(db, pnRemoved);
+    tx_end(db, "viki_redact", 1);
+    return VIKI_OK;
 }
 
 VikiStatus viki_forget(const char *zId){

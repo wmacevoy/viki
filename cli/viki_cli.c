@@ -82,6 +82,10 @@ static int usage(void){
 "                        this replaced.  Newest first, so a reader meets the\n"
 "                        correction before the thing corrected\n"
 "  pending               captures never structured into a task\n"
+"  redact ID --why W --by WHO   destroy an assertion HERE and on every peer\n"
+"                        that merges. IRREVERSIBLE -- the id can never be\n"
+"                        re-added. Unlike forget, which the next merge undoes.\n"
+"                        The tombstone carries the id only, never the content.\n"
 "  observe               every assertion id here, sorted -- a MANIFEST.\n"
 "                        --lacking FILE   ids here that FILE does not list.\n"
 "                        This is anti-entropy, not a log tail: the store\n"
@@ -725,6 +729,23 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
                 c.nFwd, c.nBack);
         if( c.nFwd==0 )
             fprintf(out, "  nothing has superseded this. It still stands.\n");
+        return 0;
+    }
+    if( !strcmp(argv[0],"redact") && argc>=2 ){
+        VikiRedact r; char zId[VIKI_ID_HEX+1]; int i;
+        memset(&r,0,sizeof r);
+        r.zTarget = argv[1]; r.zTs = isoNow();
+        for(i=2;i+1<argc;i++){
+            if(!strcmp(argv[i],"--why")) r.zWhy=argv[++i];
+            else if(!strcmp(argv[i],"--by")) r.zBy=argv[++i];
+        }
+        if( viki_redact(&r, zId)!=VIKI_OK ){
+            fprintf(stderr,"%s: refused. --why and --by are both required.\n",zProg);
+            fprintf(stderr,"%s: a redaction is IRREVERSIBLE and it PROPAGATES:\n",zProg);
+            fprintf(stderr,"%s:   the content dies here and on every peer that merges,\n",zProg);
+            fprintf(stderr,"%s:   the id can never be re-added, and nothing recovers it.\n",zProg);
+            return 1; }
+        fprintf(out, "%s\n", zId);
         return 0;
     }
     if( !strcmp(argv[0],"observe") ){

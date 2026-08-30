@@ -185,6 +185,13 @@ VikiStatus viki_merge(sqlite3 *pOther, int *pnAdded);
 ** people stop telling things to. */
 VikiStatus viki_forget(const char *zId);
 
+/* Destroys the content of everything a stored 'redact' assertion names, and
+** is run automatically at the end of every merge. Exposed so a host can
+** sweep after writing a tombstone locally. See apply_redactions() for what
+** redaction costs (the store is a 2P-Set, not a G-Set) and what it cannot
+** promise (a peer that never merges again keeps its copy). */
+VikiStatus viki_redact_apply(int *pnRemoved);
+
 /* Drops a dead model's ranges. The assertions are untouched -- this is
 ** reclaiming space from a model that is no longer pinned. */
 VikiStatus viki_prune_model(const char *zModel, int *pnDropped);

@@ -1488,6 +1488,99 @@ int main(void){
         sqlite3_close(dbY);
     }
 
+    /* ---- X: REDACTION, the one thing that is not grow-only -------------
+    ** X4b is the control that gives R4 its meaning: forget alone is UNDONE by
+    ** the next merge, which is why redaction had to exist at all. */
+    {
+        sqlite3 *dbR1 = 0, *dbR2 = 0;
+        VikiDiaries s1, s2; VikiDiary d1, d2;
+        sqlite3_open(":memory:", &dbR1); d1.zName="r1"; d1.db=dbR1; d1.mFlags=0;
+        sqlite3_open(":memory:", &dbR2); d2.zName="r2"; d2.db=dbR2; d2.mFlags=0;
+        viki_diaries_one(&s1,&d1); viki_diaries_one(&s2,&d2);
+        viki_attach(dbR1); viki_attach(dbR2);
+        {
+            VikiNote nt; VikiRedact rd; char idSecret[VIKI_ID_HEX+1], idR[VIKI_ID_HEX+1];
+            int n=0;
+            RETAIN_BEGIN(VikiDiaries, &s1, g);
+            memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
+            nt.zText="hunter2"; nt.zTs="2026-08-30T00:00:00Z";
+            viki_put((VikiAssert*)&nt); memcpy(idSecret, nt.zId, sizeof idSecret);
+            memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
+            nt.zText="keep me"; nt.zTs="2026-08-30T00:00:01Z";
+            viki_put((VikiAssert*)&nt);
+            RETAIN_END(g);
+        }
+        {   RETAIN_BEGIN(VikiDiaries, &s2, g);
+            viki_merge(dbR1, 0);                       /* peer takes both */
+            viki_count(VIKI_N_ASSERT, "note", &(int){0});
+            RETAIN_END(g); }
+        {
+            VikiRedact rd; char idR[VIKI_ID_HEX+1]; int n=0;
+            char idSecret[VIKI_ID_HEX+1];
+            RETAIN_BEGIN(VikiDiaries, &s1, g);
+            /* recover the id by content -- the probe may not name tables, so
+            ** go through the API: current() on an unkeyed note is its own id. */
+            {   VikiNote t; memset(&t,0,sizeof t); t.vftbl=&vikiNoteVftbl;
+                t.zText="hunter2"; t.zTs="2026-08-30T00:00:00Z";
+                viki_put((VikiAssert*)&t);            /* idempotent re-put */
+                memcpy(idSecret, t.zId, sizeof idSecret); }
+
+            memset(&rd,0,sizeof rd); rd.zTarget=idSecret; rd.zTs="2026-08-30T01:00:00Z";
+            rd.zBy="probe";
+            check(viki_redact(&rd, idR)==VIKI_EINVAL,
+                  "X1 a redaction with no --why is REFUSED", "an unexplained tombstone got out");
+
+            memset(&rd,0,sizeof rd); rd.zTarget=idSecret; rd.zTs="2026-08-30T01:00:01Z";
+            rd.zWhy="credential pasted by mistake"; rd.zBy="probe";
+            check(viki_redact(&rd, idR)==VIKI_OK, "X2a the tombstone is stored", viki_errmsg());
+            viki_count(VIKI_N_ASSERT, "note", &n);
+            check(n==1, "X2 the target is destroyed HERE", "content survived locally");
+            RETAIN_END(g);
+        }
+        {   int n=0;
+            RETAIN_BEGIN(VikiDiaries, &s2, g);
+            viki_merge(dbR1, 0);
+            viki_count(VIKI_N_ASSERT, "note", &n);
+            check(n==1, "X3 merging the tombstone destroys it ON THE PEER", "peer kept it");
+            RETAIN_END(g); }
+        {   int n=0;
+            RETAIN_BEGIN(VikiDiaries, &s1, g);
+            viki_merge(dbR2, 0);
+            viki_count(VIKI_N_ASSERT, "note", &n);
+            check(n==1, "X4 it STAYS dead after merging back -- 2P-Set", "gossip revived it");
+            viki_count(VIKI_N_ASSERT, "redact", &n);
+            check(n==1, "X5 the tombstone itself survives, and is the reason", "no record of why");
+            RETAIN_END(g); }
+        sqlite3_close(dbR1); sqlite3_close(dbR2);
+    }
+    /* X4b -- THE CONTROL. forget alone does NOT hold, which is the whole
+    ** reason redaction exists. Measured before it was built: 4 -> 3 -> 4. */
+    {
+        sqlite3 *dbF1 = 0, *dbF2 = 0; VikiDiaries f1, f2; VikiDiary e1, e2;
+        sqlite3_open(":memory:", &dbF1); e1.zName="f1"; e1.db=dbF1; e1.mFlags=0;
+        sqlite3_open(":memory:", &dbF2); e2.zName="f2"; e2.db=dbF2; e2.mFlags=0;
+        viki_diaries_one(&f1,&e1); viki_diaries_one(&f2,&e2);
+        viki_attach(dbF1); viki_attach(dbF2);
+        {   VikiNote nt; char id[VIKI_ID_HEX+1]; int n=0;
+            RETAIN_BEGIN(VikiDiaries, &f1, g);
+            memset(&nt,0,sizeof nt); nt.vftbl=&vikiNoteVftbl;
+            nt.zText="forgettable"; nt.zTs="2026-08-30T00:00:00Z";
+            viki_put((VikiAssert*)&nt); memcpy(id, nt.zId, sizeof id);
+            RETAIN_END(g);
+            { RETAIN_BEGIN(VikiDiaries, &f2, g2); viki_merge(dbF1,0); RETAIN_END(g2); }
+            { RETAIN_BEGIN(VikiDiaries, &f1, g3);
+              viki_forget(id);
+              viki_count(VIKI_N_ASSERT, "note", &n);
+              check(n==0, "X4b1 forget removes it locally", "still there");
+              viki_merge(dbF2, 0);
+              viki_count(VIKI_N_ASSERT, "note", &n);
+              check(n==1, "X4b CONTROL: forget alone is UNDONE by the next merge",
+                    "it stayed gone -- then redaction is redundant, check why");
+              RETAIN_END(g3); }
+        }
+        sqlite3_close(dbF1); sqlite3_close(dbF2);
+    }
+
     printf("\n%d passed, %d failed\n", nPass, nFail);
     sqlite3_close(dbA); sqlite3_close(dbB);
     return nFail ? 1 : 0;
