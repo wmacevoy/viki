@@ -1,3 +1,9 @@
+/* strdup is POSIX. Under -std=c11 glibc hides it, gcc assumes it returns
+** int, and the pointer is truncated to 32 bits -- which segfaulted this
+** probe on Linux while passing on macOS, whose headers expose strdup
+** regardless. The probe is a host program and may use POSIX; it has to
+** say so. core itself does NOT: see dup_str() in viki_core.c. */
+#define _POSIX_C_SOURCE 200809L
 /*
 ** core_probe.c -- viki-core's proof.
 **
