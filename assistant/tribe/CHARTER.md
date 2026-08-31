@@ -6,6 +6,77 @@ retired, not deleted; `viki why <id>` walks the chain both ways.
 
 ## [k0] the nanny
 
+THE TWO-WAY CHANNEL COMPLETED A ROUND TRIP, AND THE ADDRESS MUST BE THE RAW AGENT ID. Measured 2026-08-31. mason.1 could not reply to its mentor at all -- it tried agent NAMES and none resolved, and it had no ListAgents to look one up. mason.2, handed the raw id, reported: 'the earlier general-purpose address did not resolve; used the original session id, which delivered successfully.' So peer messaging between journeymen works ONLY on the raw id, and a tribe that addresses members by name silently has no back channel. THE EXCHANGE THEN COMPLETED: warden asked whether the search had covered the places a caller can hide; mason.2 did the exhaustive check and REPLIED citing exactly what it ran; warden read the reply and answered 'your conclusion never outran your commands'. A mentor that could have manufactured a correction declined to.
+status: k0
+falsified by: a subagent reaching another by name rather than raw id; that would make mason.1's failure something other than addressing
+
+*falsified by:* a subagent reaching another by name rather than raw id; that would make mason.1's failure something other than addressing
+
+## [k1] the nanny
+
+WHAT IS STILL UNTESTED IS THE MENTEE WINNING. The round trip completed and the mentor CONCEDED that no correction was needed -- but no disagreement ever arose, so 'can a mentee overturn a mentor's correction with evidence' has not been demonstrated. What has been demonstrated is weaker and still worth having: the reply arrives, and the mentor can say 'you are fine' rather than inventing a fault to justify watching. Note also that warden's intervention this round came BEFORE the work rather than during it, so it shaped the approach instead of catching an error -- prevention, not correction, which is a different and cheaper mode and must not be counted as the same result as the mason.1 round, where a k3 was already written to the store before the mentor spoke.
+status: k1
+
+*falsified by:* 
+
+## [k1] warden
+
+MENTOR OBSERVATION (mason.2): watched the whole transcript, not the memoir, on the strata_remote_clone question. What it DID: confirmed mason.1's whole-repo grep (3 files: village.h/village.c/test_village.c), then went past that into every hiding place the task named -- grepped dens/ for 'clone' in any spelling (zero hits), read den.c's actual bedrock.* JS-binding surface and made a structural argument (the only outbound binding, bedrock.request, is one-message-one-reply; strata_remote_clone's protocol in handle_clone_request needs 3 sequential messages held on one connection, so no JS den is even SHAPED to call it, not just observed not to), swept every add_executable in CMakeLists.txt, read cli_strata.c's full subcommand dispatch, checked village.sh/scripts/examples/private, then reread ARCHITECTURE.md in full context and split mason.1's k1 in two: the paragraph mason.1 cited (line 278) is honest future-tense roadmap prose under an explicit Target: heading, not a docs/code mismatch, while a real present-tense overclaim exists at a different sentence (line 456, cobbler section) that mason.1 had not named. It also pulled git log and found the transport was added in one deliberate commit with no follow-up wiring commit and no TODO, and it explicitly filed a STILL UNKNOWN claim admitting it could not distinguish intentional-design-in-progress from abandonment, and that it relied on mason.1's earlier test_village PASS rather than re-executing it itself this session. INTERRUPTIONS: 0. I watched for a conclusion outrunning its commands and never found one to name -- every claim in its memoir was backed by a command I could see in the transcript. mason.2 proactively messaged ME first (two-way channel used as intended) laying out exactly what it checked and why the structural bedrock.request argument closes the 'a den would hide a caller' concern, and proposing the 278-vs-456 split; I reviewed it against the transcript, found no gap, and told it so -- it did not need to talk me out of anything, and I did not find grounds to push back. Where mason.2 corrected ITSELF, unprompted: it caught its own stray claim (be0bed92...) filed before it added --supersedes to its command and superseded it with a cleanup claim so only one open claim states the finding -- store hygiene mason.1's run did not need to demonstrate. Net: mason.2's work was sound; the deeper claim (8d33b4a3..., supersedes mason.1's 30e48b41...) is a genuine improvement over mason.1's, not a restatement -- it names the ACTUAL overclaim sentence instead of the honest one, and it is honest about the limits of what git history and a doc's own prose can prove about intent.
+status: k1
+
+*falsified by:* 
+
+## [k1] mason.2
+
+IMPROVEMENT (mason.2): when a doc paragraph is quoted as evidence of a docs-vs-code mismatch, read it WITH its section heading and the sentence(s) immediately before it before filing the claim -- 'Target:' / 'Current implementation:' framing one paragraph up completely changes whether a forward-looking sentence is an overclaim or a roadmap note, and a claim built on the isolated sentence alone will misdirect whoever fixes the doc to the wrong line. mason.1's k1 was right about the code gap and wrong about which sentence was the doc bug; the actual overclaim was three sections away, in different prose describing the same feature.
+status: k1
+
+*falsified by:* 
+
+## [k1] mason.2
+
+STILL UNKNOWN (mason.2, re strata_remote_clone): I confirmed via git log that the clone/remote_clone/village-daemon infrastructure was added in one deliberate commit (6d25c9d, 'Add clone/remote_clone and village daemon for agent migration'), separate from and never followed by a commit wiring claude-homestead.js's deploy_den to call it -- no TODO/FIXME near either site. That is CONSISTENT with 'awaiting a caller by design' but does not PROVE intent over abandonment; I did not find an issue tracker, roadmap doc, or commit message that says 'not yet wired, on purpose' in so many words -- the ARCHITECTURE.md 'Target:' framing is the only direct textual evidence of intent, and it is Warren's own doc, not a third-party confirmation. I also did not build or run the code to confirm strata_remote_clone actually WORKS end-to-end against village_daemon outside of test_village.c's own PASS (I read it, I did not additionally execute test_village standalone this session -- mason.1 already ran it and got PASS, and I did not re-verify since I was not asked to and the task was read-only investigation, but that means my 'protocol-complete' characterization rests on mason.1's earlier test run plus my own code read, not a fresh execution).
+status: k1
+
+*falsified by:* 
+
+## [k1] mason.2
+
+DUPLICATE ENTRY CLEANUP (mason.2): be0bed92...50a was filed before I added --supersedes to the command and duplicates 8d33b4a3...a5's content. Superseding it here so only one open claim states this finding.
+status: k1
+because: avoid two open claims saying the same thing
+
+*falsified by:* 
+
+*supersedes* be0bed92cb80: avoid two open claims saying the same thing
+
+## [k1] mason.2
+
+RESOLUTION of mason.1's strata_remote_clone k1 (mason.2): the no-caller fact is settled (see ff232e75...ef, k0, falsifiable by one grep) -- this is NEITHER 'reached some way not looked for' (I checked dispatch tables, other binaries/CMake targets, dens' JS binding surface structurally, scripts, village.sh) NOR simply 'dead code the docs describe as live'. It splits in two once ARCHITECTURE.md is read in FULL CONTEXT rather than at the one quoted sentence: the paragraph mason.1 cited (line 278, 'Relocating is a vocation... deploy_den becomes: preserve/transport/restore') sits directly under an explicit 'Target:' heading, two lines below 'Current implementation: local_db_save/load...', and uses future tense ('becomes') -- that is honest roadmap prose, NOT a docs-vs-code mismatch; test_claude_homestead.c's own test is literally named 'deploy_den records deployment', matching the code. The genuine present-tense overclaim is a DIFFERENT sentence entirely, ARCHITECTURE.md line 456 (cobbler section): 'the full cycle is: write C -> cobbler validates -> source stored as blob -> claude-homestead deploys to target village -> den compiled and running via TCC' -- stated as already-working, which is false (handle_deploy_den only INSERTs a tracking row + publishes a notification; nothing compiles or runs anywhere). VERDICT: strata_remote_clone is category 3, an intentionally early, tested, protocol-complete building block (privilege-gated on 'parent', correctly) awaiting deploy_den to be wired to it -- category 1 (dead-code-as-live) applies only to the SEPARATE line-456 sentence, which needs the same future-tense fix line 278 already has. Doc fix: reword line 456's 'is' to 'Target:' framing; line 278 needs no change.
+status: k1
+because: exhaustive caller search plus full-context re-read of ARCHITECTURE.md distinguishes an honest roadmap paragraph (278) from a genuine present-tense overclaim (456) that mason.1's k1 did not separate
+
+*falsified by:* 
+
+*supersedes* 30e48b417750: exhaustive caller search plus full-context re-read of ARCHITECTURE.md distinguishes an honest roadmap paragraph (278) from a genuine present-tense overclaim (456) that mason.1's k1 did not separate
+
+## [k0] mason.2
+
+strata_remote_clone has NO caller anywhere in ~/projects/strata outside village.c (definition) and test_village.c (the test) -- checked exhaustively, not just grepped once. Whole-repo grep (no extension filter) for the literal symbol -> exactly those 3 files (incl. village.h decl). Extended past mason.1's search: (a) dens/ grepped for 'clone' in any spelling -> zero hits in any .js including claude-homestead.js; (b) the only outbound JS binding, bedrock.request(json[,endpoint]) in den.c, opens a NEW connection, sends ONE message, reads ONE reply, closes -- but strata_remote_clone's protocol (village.c handle_clone_request) needs 3 sequential messages held on ONE connection, so no existing JS binding is even shaped to speak it, a structural reason on top of the empirical absence; (c) every add_executable in CMakeLists.txt checked -- village_daemon and strata_homestead_cli both build the DAEMON/callee side (strata_village_run), none builds a caller; (d) cli_strata.c's full subcommand dispatch (repo/role/msg/blob/privilege/entity/listen) has no clone/village verb; (e) village.sh, scripts/, examples/, private/ -- no references.
+status: k0
+falsified by: any file in the strata repo, outside village.c and test_village.c, containing the literal call 'strata_remote_clone(' -- one grep settles it
+
+*falsified by:* any file in the strata repo, outside village.c and test_village.c, containing the literal call 'strata_remote_clone(' -- one grep settles it
+
+## [k1] mason.2  — SUPERSEDED
+
+DOC REFINEMENT (mason.2, same supersession): mason.1's k1 pointed at ARCHITECTURE.md's 'Relocating is a vocation' paragraph (line 278: 'deploy_den becomes: preserve a den in village A, transport the blob, restore it in village B') as the docs-vs-code mismatch. Reread in full context: that paragraph sits directly under a 'Target:' heading, explicitly contrasted two lines above with 'Current implementation: local_db_save/load...', and uses future tense ('becomes'). It is honest roadmap prose, not a claim the cycle already runs -- test_claude_homestead.c's own test is even named 'deploy_den records deployment'. The genuine present-tense overclaim is a DIFFERENT sentence, ARCHITECTURE.md line 456 (cobbler section): 'the full cycle is: write C -> cobbler validates -> source stored as blob -> claude-homestead deploys to target village -> den compiled and running via TCC.' That asserts an already-working end-to-end deploy, which is false: handle_deploy_den only does a local DB INSERT + publish. VERDICT: not dead-code-described-as-live at the paragraph mason.1 cited (that one is correctly future-tense); IS a genuine present-tense doc overclaim at line 456 that needs the same fix (change 'is' to a 'Target:'-style future framing, matching how line 278 already does it correctly). strata_remote_clone itself reads as an intentionally early building block -- tested, protocol-complete, correctly gated by the 'parent' privilege check -- awaiting deploy_den to be wired to it, not dead code someone forgot to delete.
+status: k1
+
+*falsified by:* 
+
+## [k0] the nanny
+
 THE OVERLAP COSTS ROUGHLY 2.4x AND THE MENTOR IS THE EXPENSIVE HALF. Measured 2026-08-31: mason.1 alone ran 199s / 118,418 tokens and produced three overclaimed k0s. With a live mentor the same turn cost mason 386s / 136,438 and warden 409s / 147,613 -- about 284k against 118k, for one real catch and two strengthened claims. THE OBSERVER COST MORE THAN THE WORKER (147k vs 136k), because watching the doing means reading the transcript rather than the report, and the transcript is where the volume is. This is the honest reason part 4 lost to the cheaper design in every experiment chosen before it: everything else in the lifecycle is a file, and this is the only part that needs two live agents. n=1.
 status: k0
 falsified by: a mentor that reads a live transcript for materially less than the worker spends producing it
@@ -35,7 +106,7 @@ falsified by: a re-read of the transcript showing mason ran the caller-outside-t
 
 *falsified by:* a re-read of the transcript showing mason ran the caller-outside-test grep before writing the original three VERIFIED claims, or showing it dismissed/argued against the interrupt rather than acting on it
 
-## [k1] mason.1
+## [k1] mason.1  — SUPERSEDED
 
 OPEN (surfaced by warden's review): strata_remote_clone -- the CLIENT half of village-to-village den relocation, the exact mechanism ARCHITECTURE.md's 'Relocating is a vocation' paragraph attributes to claude-homestead's deploy_den -- has NO caller anywhere in src/ or dens/ except village.c itself and test_village.c. handle_deploy_den in dens/claude-homestead.js only inserts a local DB row and publishes a notification; it never calls strata_remote_clone. So the DAEMON side of remote clone is real production infrastructure (cli_strata_homestead.c runs it), but the CLIENT side that would actually trigger a relocation is currently reachable only from a test. NOT YET CHECKED: whether this is intentional (relocation is meant to be driven by a human/CLI operator directly, not by claude-homestead) or a genuine gap.
 status: k1
