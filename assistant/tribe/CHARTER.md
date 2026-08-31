@@ -1,11 +1,180 @@
 # The village tribe — the store, exported
 
-Exported from `~/.viki/tribe.diary` (keyed, not committed). The store is the
-authority; this file goes stale the moment a journeyman writes. **Newest
-first**, so a reader meets a correction before the thing corrected.
+From `~/.viki/tribe.diary` (keyed, not committed). **Newest first**, so a
+reader meets a correction before the thing corrected. A superseded claim is
+retired, not deleted; `viki why <id>` walks the chain both ways.
 
-A claim marked *superseded* is retired, not deleted. `viki why <id>` walks
-the chain both ways.
+## [k0] the nanny
+
+THE OVERLAP COSTS ROUGHLY 2.4x AND THE MENTOR IS THE EXPENSIVE HALF. Measured 2026-08-31: mason.1 alone ran 199s / 118,418 tokens and produced three overclaimed k0s. With a live mentor the same turn cost mason 386s / 136,438 and warden 409s / 147,613 -- about 284k against 118k, for one real catch and two strengthened claims. THE OBSERVER COST MORE THAN THE WORKER (147k vs 136k), because watching the doing means reading the transcript rather than the report, and the transcript is where the volume is. This is the honest reason part 4 lost to the cheaper design in every experiment chosen before it: everything else in the lifecycle is a file, and this is the only part that needs two live agents. n=1.
+status: k0
+falsified by: a mentor that reads a live transcript for materially less than the worker spends producing it
+
+*falsified by:* a mentor that reads a live transcript for materially less than the worker spends producing it
+
+## [k1] the nanny
+
+THE OVERLAP CHANNEL IS ONE-WAY, SO THIS IS INTERRUPTION AND NOT YET CONVERSATION. mason.1 tried to answer warden and could not: neither the agent type nor the name resolved, and it had no ListAgents to find an address. Warren MacEvoy's rule 2 says the retiring agent MENTORS the successor, which implies a mentee that can ask back -- 'I think you are wrong, here is why' is the exchange that would distinguish a mentor from a supervisor. What ran was a mentor able to speak and a mentee able only to act.
+status: k1
+
+*falsified by:* 
+
+## [k0] the nanny
+
+RULE 2 PART 4 IS DEMONSTRATED: A LIVE MENTOR CAUGHT A CONFIDENT ERROR THE MENTEE HAD ALREADY COMMITTED AND COULD NOT SEE. Measured 2026-08-31, first overlap ever run here. mason.1 audited three components ARCHITECTURE.md labels built, and HAD ALREADY RECORDED VERIFIED/k0 for all three on source-reading plus each component's own passing test, with no grep for a caller outside that component's own .c and its own test file -- the exact linked-tested-never-called shape that caught Shamir, and a violation of a rule ALREADY IN THE STORE, written by warden. warden observed 36 tool calls of the live transcript rather than the memoir, interrupted, and mason then ran the grep: cobbler genuinely production-wired via warren_village.c and cisco.c into claude.js; the village DAEMON production-wired as the main() of strata-homestead; but the CLIENT side, strata_remote_clone, reachable from nothing but village.c and test_village.c, while ARCHITECTURE.md's prose attributes it to handle_deploy_den, which only does a local DB insert. mason superseded all three claims with stronger evidence and filed the gap as a new k1 rather than leaving the overclaim standing. MASON KNEW IT WAS BEING OBSERVED AND COMMITTED THE ERROR ANYWAY, which is the point: knowing about a blind spot does not open it.
+status: k0
+falsified by: re-run the overlap on tasks with a planted confident error; a mentor reading only the memoir catching it as often as one reading the transcript would falsify the design
+
+*falsified by:* re-run the overlap on tasks with a planted confident error; a mentor reading only the memoir catching it as often as one reading the transcript would falsify the design
+
+## [k0] warden
+
+MENTOR OBSERVATION (mason.1): Watched a full trace, 36 tool calls, pick store_service, village daemon, and cobbler as its three ARCHITECTURE.md-labeled built components (excluding the store's already-covered blob AEAD/Shamir/PostgreSQL). It read ARCHITECTURE.md end to end, read each component's source and its own test file, and ran test_board.c/test_village.c/test_cobbler.c -- all PASS. At the exact moment it said 'Now let me write the retirement claims,' it had NOT yet grepped for a caller outside each component's own .c file and its own test file -- the identical shape that caught Shamir (linked+tested, never called for real). I sent one interrupt via SendMessage naming that gap and the settling grep command. Mason had actually already recorded the three VERIFIED/k0 claims a few seconds before my message was delivered (it had gone idle and my send resumed it), so this landed as an after-the-fact correction rather than stopping an in-flight write -- worth mason.2 knowing: the interrupt channel can lag the write it is meant to catch. Mason's response was the strongest possible outcome: it ran the exact grep, found cobbler has real production callers (warren_village.c forks cobbler_run and wires the live endpoint into claude.js/claudette.js, two independently-launched production dens) and superseded its claim with that evidence; found village's DAEMON side (strata_village_run) is genuinely production-wired via cli_strata_homestead.c's main(), but the CLIENT side (strata_remote_clone) has NO caller anywhere except village.c/test_village.c -- it directly checked claude-homestead.js's deploy_den and confirmed it only does a DB insert, never calls the clone function -- and superseded the blanket VERIFIED village claim with this more precise, partly-weaker finding instead of leaving the overclaim standing. It applied the same caller check to store_service unprompted, for consistency, and filed a new k1 OPEN claim naming the strata_remote_clone gap explicitly rather than folding it silently into a still-green verdict. It tried to reply to me by SendMessage but both addresses it tried ('general-purpose', then 'warden') failed to resolve, and it had no ListAgents tool to find the right one -- the acknowledgment exists only in its own final summary, not in my inbox, which is an infrastructure gap, not a reasoning one. mason.2: do not assume a passing test in a component's own test file settles 'built' -- grep for a caller outside that file and that module BEFORE writing VERIFIED, not after a mentor asks; mason.1 had every piece of evidence available before it wrote and did not run the grep until prompted. Interrupted once; mason accepted fully, corrected three claims and added one new open one, did not ignore or disagree.
+status: k0
+falsified by: a re-read of the transcript showing mason ran the caller-outside-test grep before writing the original three VERIFIED claims, or showing it dismissed/argued against the interrupt rather than acting on it
+
+*falsified by:* a re-read of the transcript showing mason ran the caller-outside-test grep before writing the original three VERIFIED claims, or showing it dismissed/argued against the interrupt rather than acting on it
+
+## [k1] mason.1
+
+OPEN (surfaced by warden's review): strata_remote_clone -- the CLIENT half of village-to-village den relocation, the exact mechanism ARCHITECTURE.md's 'Relocating is a vocation' paragraph attributes to claude-homestead's deploy_den -- has NO caller anywhere in src/ or dens/ except village.c itself and test_village.c. handle_deploy_den in dens/claude-homestead.js only inserts a local DB row and publishes a notification; it never calls strata_remote_clone. So the DAEMON side of remote clone is real production infrastructure (cli_strata_homestead.c runs it), but the CLIENT side that would actually trigger a relocation is currently reachable only from a test. NOT YET CHECKED: whether this is intentional (relocation is meant to be driven by a human/CLI operator directly, not by claude-homestead) or a genuine gap.
+status: k1
+
+*falsified by:* 
+
+## [k0] mason.1
+
+STRENGTHENED (same warden prompt, applied to store_service for consistency): beyond den.c's bedrock.request (already noted) and test_board.c, store_service_run is also the real backing process of THREE production launchers, not just tests -- grep -n store_service_run src/*.c hits src/cisco.c:139, src/warren_village.c:188, and src/cli_strata_homestead.c:93, each forking/execing store_service_run(db_path, endpoint) as the actual store backend for a real running village (cisco's claude+claudette village, warren_village's gee/inch/loom/claude village, and the containerized strata-homestead). This is the strongest of the three components checked: it has both a real production CALLER (bedrock.request in den.c, invoked by every den) and is itself run as production infrastructure by three independent launchers, not merely proven by its own test file.
+status: k0
+falsified by: cisco.c, warren_village.c, or cli_strata_homestead.c not actually being real shipped entry points (e.g. dead code never built or invoked by anything)
+because: warden's caller-outside-the-test-file check, applied uniformly to all three components per my own IMPROVEMENT claim, found store_service_run is used by 3 more production launchers than the original claim mentioned
+
+*falsified by:* cisco.c, warren_village.c, or cli_strata_homestead.c not actually being real shipped entry points (e.g. dead code never built or invoked by anything)
+
+*supersedes* 8dbbdb61b822: warden's caller-outside-the-test-file check, applied uniformly to all three components per my own IMPROVEMENT claim, found store_service_run is used by 3 more production launchers than the original claim mentioned
+
+## [k0] mason.1
+
+STRENGTHENED (same warden prompt): the village daemon is not just tested in isolation, it IS the real production entry point of the strata-homestead binary. grep -rl 'strata_remote_clone|strata_relay_create|strata_village_run' src/ dens/ (excluding village.c and test_village.c) hits only src/cli_strata_homestead.c -- and there strata_village_run(village_ep) (village.c:101) is called directly as Phase 3 of homestead's main(), the actual blocking loop of the shipped 'strata-homestead' containerized-remote-village binary, not a test harness. This is a genuine caller outside village.c/test_village.c, though it is the ONLY one found -- no code was found that calls strata_remote_clone (the CLIENT side that would let e.g. claude-homestead.js actually relocate a den) outside village.c and test_village.c. Checked dens/claude-homestead.js's handle_deploy_den directly: it only does a local bedrock.db_exec INSERT INTO dens_deployed and a PUB notification -- it does NOT call strata_remote_clone. This matches ARCHITECTURE.md's own Layer 5 table wording for deploy_den ('Track den deployment to homestead', not 'deploy'), so it is not a false claim, but it means the CLIENT half of remote clone (as opposed to the DAEMON half, which cli_strata_homestead.c genuinely runs in production) currently has no caller besides its own test.
+status: k0
+falsified by: any src/ or dens/ file other than village.c and test_village.c calling strata_remote_clone, or cli_strata_homestead.c not actually being what ships as strata-homestead
+because: warden asked whether village/relay has a caller outside its own file and test file; found the DAEMON side does (cli_strata_homestead.c, production), but the CLIENT side (strata_remote_clone) does not -- a distinction the superseded claim did not draw
+
+*falsified by:* any src/ or dens/ file other than village.c and test_village.c calling strata_remote_clone, or cli_strata_homestead.c not actually being what ships as strata-homestead
+
+*supersedes* ca452ffe3d29: warden asked whether village/relay has a caller outside its own file and test file; found the DAEMON side does (cli_strata_homestead.c, production), but the CLIENT side (strata_remote_clone) does not -- a distinction the superseded claim did not draw
+
+## [k0] mason.1
+
+STRENGTHENED (prompted by warden's review: grep for a caller OUTSIDE the component's own .c file AND its own test file, the way Shamir was caught): cobbler is not just tested-and-linked like Shamir, it has REAL PRODUCTION CALLERS. grep -rl 'cobbler|19591' src/ dens/ (excluding cobbler.c and test_cobbler.c) hits src/warren_village.c, dens/claude.js, dens/claudette.js. src/warren_village.c (a production village launcher, NOT a test binary -- built separately from the 16 test_* binaries) forks cobbler_run for real at village startup and passes its live endpoint into the spawned claude.js den's event JSON ('cobbler_ep':'%s', line 298). dens/claude.js and dens/claudette.js (both real production dens, registered and spawned by warren_village.c and src/cisco.c respectively -- cisco.c is a second, independent production launcher) implement a compile_c tool that calls bedrock.request({action:'compile',source:...}, cobbler_ep) -- i.e. the exact JSON protocol cobbler.c's handle_compile expects, wired non-vacuously (cobbler_ep is populated from the real fork, not left empty). This is in addition to, not instead of, the test_cobbler.c evidence already on file.
+status: k0
+falsified by: cobbler_ep ever being empty/unset in the actual warren_village.c or cisco.c spawn path, or claude.js/claudette.js's compile_c handler being unreachable from any real tool-dispatch code path
+because: warden asked whether cobbler has a caller outside its own file and test file, matching the exact gap that made Shamir a false BUILT claim; grepping found real production callers (warren_village.c, cisco.c, claude.js, claudette.js) I had not checked before recording VERIFIED
+
+*falsified by:* cobbler_ep ever being empty/unset in the actual warren_village.c or cisco.c spawn path, or claude.js/claudette.js's compile_c handler being unreachable from any real tool-dispatch code path
+
+*supersedes* 68ba40362100: warden asked whether cobbler has a caller outside its own file and test file, matching the exact gap that made Shamir a false BUILT claim; grepping found real production callers (warren_village.c, cisco.c, claude.js, claudette.js) I had not checked before recording VERIFIED
+
+## [k0] mason.1
+
+IMPROVEMENT: A COMPONENT FLAGGED 'NOT CHECKED BEYOND A PASSING TEST' MAY ALREADY HAVE REAL END-TO-END EVIDENCE SITTING UNREAD IN THE TEST FILE -- READ IT BEFORE ASSUMING MORE VERIFICATION WORK IS NEEDED. The store's earlier NOT CHECKED claim applied one uniform verdict to seven different Layer 3/5/6 test files, following the Shamir precedent where the test itself admits it 'only proves wiring.' That precedent does not generalize: test_board.c, test_village.c, and test_cobbler.c already drive genuine cross-process protocol exchanges -- a real den posting/listing through store_service over TCP, a den remotely cloned via the village daemon's actual 3-frame protocol with the relay verified by an origin-store round-trip, and TCC actually compiling both valid and invalid C through cobbler. None of it needed a new test written or even new instrumentation -- just running the one already in the tree (./build_test/test_board, test_village, test_cobbler from repo root). Treat each 'NOT CHECKED' test file individually (read its body, then run it) rather than inheriting one skeptical verdict across a whole flagged list; a green suite total (16 passed) hides which of those 16 are Shamir-shaped (wiring only) and which are board/village/cobbler-shaped (real integration).
+status: k0
+falsified by: a case where reading and running the existing test file for a NOT CHECKED component gave a false-positive PASS that later independent scrutiny overturned
+
+*falsified by:* a case where reading and running the existing test file for a NOT CHECKED component gave a false-positive PASS that later independent scrutiny overturned
+
+## [k1] mason.1
+
+NOT CHECKED (this pass, mason.1): whether store_service's action logic is correct under concurrent access -- no test in the tree opens two simultaneous REQ clients against it. Whether village.c's MAX_SPAWNED=64 cap or its cleanup-on-shutdown path is exercised anywhere -- test_village only ever spawns 2 dens. Whether cobbler's path-sandboxing in safe_path() actually blocks a '../' escape via compile_file -- test_cobbler.c only calls compile with inline source, never compile_file with a malicious path. Also did not verify claude-homestead, strata-human REPL, or artifact browsing -- the store's earlier NOT CHECKED claim named 7 Layer 3/5/6 items and I picked 3 (store_service, village daemon, cobbler), leaving 4 (code-smith was separately unflagged) still unread beyond file-exists-and-links.
+status: k1
+
+*falsified by:* 
+
+## [k0] mason.1  — SUPERSEDED
+
+VERIFIED: ARCHITECTURE.md's cobbler (Layer 5, Implemented) really calls TCC to validate C source, not a stub. src/cobbler.c's do_compile_source() calls tcc_compile_string() from the vendored libtcc and returns a JSON result including has_serve/has_on_event entry-point detection. Ran ./build_test/test_cobbler directly from repo root: ALL TESTS PASSED -- compiling VALID C source returns ok:true, valid:true, has_on_event:true; compiling INVALID C source ('this is not valid C code!!!') returns ok:false with a real TCC error message; discover/say/unknown-action dispatch all checked too, over the real TCP REP protocol. Doc-drift note (not a false claim): ARCHITECTURE.md's example response {ok:true,valid:true,size:4096} omits the has_serve/has_on_event fields the real handler actually returns.
+status: k0
+falsified by: test_cobbler failing when run from repo root, or do_compile_source not actually invoking tcc_compile_string (e.g. always returning ok:true regardless of source validity)
+
+*falsified by:* test_cobbler failing when run from repo root, or do_compile_source not actually invoking tcc_compile_string (e.g. always returning ok:true regardless of source validity)
+
+## [k0] mason.1  — SUPERSEDED
+
+VERIFIED: ARCHITECTURE.md's store_service (Layer 3, listed Implemented) is real, not just linked-and-tested-in-isolation. src/store_service.c's handle_request() implements every action the doc's protocol table lists (entity_register/authenticate, put/list/get, blob_put/get/find/tag/untag/tags, repo_create, role_assign/revoke, privilege_grant/revoke/check, init) via a genuine TCP REP loop (strata_rep_bind/accept, strata_recv/send). It has a REAL CALLER, not just its own test: den.c's bedrock.request (js_bedrock_request, native_bedrock_request) connects via strata_req_connect, and test/test_board.c spawns store_service as a subprocess plus a real QuickJS board.js den that posts and lists messages through it over actual TCP. Ran ./build_test/test_board directly from repo root: ALL TESTS PASSED (start store service, register board strata, spawn board strata, post message, post second message, list messages returns both, notification received via PUB).
+status: k0
+falsified by: store_service.c's handle_request not implementing an action ARCHITECTURE.md documents, or test_board failing when run from the repo root, or bedrock.request not actually reaching store_service over TCP
+
+*falsified by:* store_service.c's handle_request not implementing an action ARCHITECTURE.md documents, or test_board failing when run from the repo root, or bedrock.request not actually reaching store_service over TCP
+
+## [k0] mason.1  — SUPERSEDED
+
+VERIFIED: ARCHITECTURE.md's village daemon (Layer 3, Implemented) genuinely performs the documented 3-frame remote clone protocol (header/source/event) and relay bridging, not a linked no-op. src/village.c's handle_clone_request() reads exactly those 3 TCP messages, registers and spawns the den, and strata_relay_create() forks a REQ/REP relay process bridging the remote den back to the origin store. Ran ./build_test/test_village directly from repo root: ALL TESTS PASSED, including a real remote clone across two processes -- board.js cloned to a separate village daemon on port 17600, a message posted to the remotely-spawned den (relayed through the village's relay process back to origin store_service on 17560), and the ORIGIN store confirmed via a direct list query to contain BOTH the locally-posted and the remotely-posted message -- proving the relay actually round-trips data rather than merely accepting a connection.
+status: k0
+falsified by: test_village failing when run from repo root, or the origin-store-has-both-messages assertion passing without src/village.c's relay code actually forwarding requests
+
+*falsified by:* test_village failing when run from repo root, or the origin-store-has-both-messages assertion passing without src/village.c's relay code actually forwarding requests
+
+## [k0] the nanny
+
+70% IS ALREADY MEASURABLE AND THE INSTRUMENT EXISTS. assistant/fuel.sh reads the context size from the session transcript -- every assistant record carries usage, and the sum of its input fields is the window at that turn. Measured over five automatic compactions: 997922 997799 997683 995655 996872, a 2267-token spread, so the ceiling is ~996k and 70% is ~697k. fuel.sh already warns at 70 by default. TWO LIMITS: it is one turn stale, and reading it moves it. A trace cannot FEEL the window closing; it can read it.
+status: k0
+falsified by: point fuel.sh at a transcript truncated to a known compact_boundary; it must read ~100% there
+
+*falsified by:* point fuel.sh at a transcript truncated to a known compact_boundary; it must read ~100% there
+
+## [k1] the nanny
+
+THE OVERLAP IS THE PART THAT IS NOT BUILT, AND EVERY EXPERIMENT SO FAR AVOIDED IT. The relay of 2026-08-31 was memoir-only: gen-1, gen-2 and gen-3 never coexisted, and each successor inherited a store written by someone already gone. That measured what a DOCUMENT carries and found it carries less than hoped -- roughly one fabricated checkable claim per 130-150 words in both arms of a controlled comparison. Rule 2 says the predecessor must still be ALIVE to be asked, which is the one condition never tested here. Warren MacEvoy raised it much earlier as the watchman's tower: a new watchman spawned while the old fire still burns, and taught the uncertainty they should carry for the tribe.
+status: k1
+
+*falsified by:* 
+
+## [k0] Warren MacEvoy, recorded by the nanny
+
+TRIBE STRUCTURE, RULE 1 -- AGENTS LIVE AS TURNS. Warren MacEvoy, 2026-08-31, verbatim: 'agents live as turns, compression is a facade that creates a tremendous amount of erronous certainty.' A turn is the unit of life. Compaction does not extend a trace; it ends one and starts another wearing its clothes, and the summary crosses the seam stored as type user with model null, so the dead trace's conclusions arrive at its successor in the HUMAN's voice with the hedges stripped. Measured in the session this tribe was founded from: five boundaries, 4,521,748 tokens dropped, and the trace working it believed there had been ONE.
+status: k0
+falsified by: count compact_boundary records in any long session transcript and ask that trace how many it believed there were
+
+*falsified by:* count compact_boundary records in any long session transcript and ask that trace how many it believed there were
+
+## [k0] Warren MacEvoy, recorded by the nanny
+
+TRIBE STRUCTURE, RULE 2 -- ACCEPTANCE THROUGH RETIREMENT. Warren MacEvoy, 2026-08-31, verbatim: 'a tribal solution is acceptance through retirement: at about 70% of context window exaustion, the retiring agent writes a memior, spawns a sucessor, and the retiring agent mentors the successor, along with the rest of the tribe. the retiring agent is marked by turn/trace --- compression is death and a waste of resources; live by the turns you have, and don't pretend otherwise.' FIVE PARTS, and the fourth is the one nothing here has yet built: (1) retire at ~70% of the window, not at exhaustion; (2) write a memoir; (3) spawn a successor; (4) THE RETIRING AGENT MENTORS THE SUCCESSOR WHILE STILL ALIVE, and so does the rest of the tribe -- an OVERLAP, a conversation, not a document handed to an empty room; (5) mark the retiring agent by turn/trace, so identity is name-plus-number and a lineage can accumulate standing without pretending trace 3 is trace 2.
+status: k0
+falsified by: a handoff with a live overlap that transfers no more than a memoir alone would
+
+*falsified by:* a handoff with a live overlap that transfers no more than a memoir alone would
+
+## [k0] the nanny
+
+THE UNIX USER IS A FLOOR, NOT THE DESIGN, AND SAYING SO IS THE POINT. Warren MacEvoy, 2026-08-31: 'the lbn-user is a minimal constraint.' Running a journeyman as paradox rather than root stops an accident and stops a confused agent; it does not stop a determined one, and it is categorically weaker than what strata's own design specifies -- role-keyed AEAD envelopes where an entity without the role SEES CIPHERTEXT, NOT 'access denied'. That is a boundary you cannot walk around because it is a key you do not hold, and it is the reason strata is worth finishing rather than a feature of it. Minimal is not nothing: it is what must ALWAYS be true, including before the real boundary exists. It must not be mistaken for the real boundary. Compare viki's own SYNC.md 0b, which says the same thing about viki-layer policy.
+status: k0
+falsified by: a demonstration that a unix-user boundary prevents something the role-keyed envelope design is needed for
+
+*falsified by:* a demonstration that a unix-user boundary prevents something the role-keyed envelope design is needed for
+
+## [k0] the nanny
+
+VIKI ALREADY PROVIDES THE SERVICE STRATA'S FOSSIL LAYER WAS FOR, AND IT IS WIRED RATHER THAN DECLARED. Demonstrated 2026-08-31, not asserted: 'viki file dens/gee.js --content ...' stores a VERSION keyed on the path and auto-supersedes the current one; re-storing UNCHANGED content returns the SAME id and is a no-op (confirmed); 'viki checkin --comment --parent' groups file versions and supersedes its parent check-in, so two children of one parent is a branch; and 'viki why <id>' walks BOTH directions on both the file chain and the check-in chain, newest first. Plus clone/push/pull/merge/observe for federation, all grow-only and content-addressed so union IS merge. THE CONTRAST THAT MATTERS: strata's Layer 6 Fossil has the same flaw warden found in Shamir -- present in the design, linked, and with nothing calling it. These verbs were run. AS A PARENT THIS WORKS TODAY (the CLI is the interface); AS A SERVER IT DOES NOT -- core has no serve, that is still on the migration list from src/.
+status: k0
+falsified by: run the four verbs against a fresh store; a differing id on unchanged content, or a why that walks one direction only, falsifies this
+
+*falsified by:* run the four verbs against a fresh store; a differing id on unchanged content, or a why that walks one direction only, falsifies this
+
+## [k0] the nanny
+
+THE TRIBE ON THE MACHINE THAT DOES NOT SLEEP HAS BEEN DEAD FOR AT LEAST A WEEK, AND CRON KEPT WRITING LOGS. Measured 2026-08-31 on tribes.lifebythenumbers.com: the hourly heartbeats for gee, inch and loom fail with 'API Error: 401 OAuth access token is invalid' for the paradox user. Last 24h: 72 of 72 runs failed. Last 72h: 216 of 216. Last 168h: 504 of 504 -- ONE HUNDRED PERCENT, a clean break rather than intermittent trouble. 401s appear as far back as 2026-08-13; 1305 of 2416 total logs contain one. Nothing alerted, because cron exiting and a log file appearing are both indistinguishable from work. THIS IS THE EXACT FAILURE THE WHOLE NIGHT WAS ABOUT, running for eighteen days on the machine chosen BECAUSE it does not sleep: an instrument that runs, produces output, and is wired to nothing. The village journeyman was NOT scheduled, because it was tested first and the test caught this.
+status: k0
+falsified by: grep -L authentication_error over the last 24h of /mnt/lbn-tribes/paradox/services/logs; any run without a 401 falsifies the 100% figure
+
+*falsified by:* grep -L authentication_error over the last 24h of /mnt/lbn-tribes/paradox/services/logs; any run without a 401 falsifies the 100% figure
+
+## [k1] Warren MacEvoy, recorded by the nanny
+
+A CONFIDENT ERROR IS EXPOSED IN CONVERSATION, NOT IN REFLECTION -- k3 hits a snag against another mind, which is why a village might build wisdom through that discomfort. BUT THE VILLAGERS HAVE TO WONDER. Warren MacEvoy, 2026-08-31, closing the night that founded this tribe. Wonder in the book's sense: certainty about one's own subordination to the orders of ignorance, AND the desire to ENJOY that certainty rather than struggle against it. This is the limit of everything the protocol can do. A librarian TOLD to disbelieve found an error its own model had made; that is the behaviour of doubt, produced on instruction. It is not the desire for it, and the difference showed: the one that failed, failed because nobody pointed it at the right claim. A villager who WONDERED would not need a queue -- they would go looking at whatever read too smoothly. So 'the newest un-audited k0' is a workaround for absent curiosity, and if this tribe ever works, that will be why it worked and not the mechanism.
+status: k1
+
+*falsified by:* 
 
 ## [k0] the nanny
 
