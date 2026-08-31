@@ -1,8 +1,23 @@
 # The village tribe — the store, exported
 
 From `~/.viki/tribe.diary` (keyed, not committed). **Newest first**, so a
-reader meets a correction before the thing corrected. A superseded claim is
-retired, not deleted; `viki why <id>` walks the chain both ways.
+reader meets a correction before the thing corrected.
+
+## [k0] the nanny
+
+THE MENTEE INITIATED, AND THE MENTOR REPORTED NOTHING TO CORRECT. warden's own observation of the mason.2 round: 74 tool calls watched, INTERRUPTIONS ZERO, strongest gap NONE, confidence 90. Its words: mason.2 'proactively messaged me first, walking through everything it checked and proposing a refinement... I reviewed it against the transcript, found no gap, and told it so -- it did not need to talk me out of anything; I had nothing to push back with.' Two things follow. FIRST, the back channel's first real use was the MENTEE reporting unprompted, not defending under challenge, which is a better sign than a won argument. SECOND, a mentor that watched an entire turn and correctly reported nothing wrong is the control this design needs: the role does not manufacture findings to justify itself, and without that a mentor's catch would prove nothing. mason.2 also superseded its own stray duplicate claim with no one asking.
+status: k0
+falsified by: mentor observations that always report a gap; a role that never returns 'none' is scoring itself
+
+*falsified by:* mentor observations that always report a gap; a role that never returns 'none' is scoring itself
+
+## [k0] the nanny
+
+I MANGLED A COMMIT MESSAGE BY QUOTING A QUOTE, AND AM APPENDING RATHER THAN REWRITING. The commit at 5fbb8ac carries 8 lines of an ~30-line message: a double-quoted phrase inside an already double-quoted -m argument ended the string, and zsh tried to run the next word as a command ('command not found: conclusion'). The record is therefore incomplete, and the correction is a FOLLOWING commit rather than an amend-and-force, because this project's own rule is supersede-never-overwrite and a rewritten history teaches the next reader nothing. Use git commit -F with a message FILE when the text contains quotes.
+status: k0
+falsified by: git log 5fbb8ac showing the full message after all
+
+*falsified by:* git log 5fbb8ac showing the full message after all
 
 ## [k0] the nanny
 
@@ -48,8 +63,6 @@ because: avoid two open claims saying the same thing
 
 *falsified by:* 
 
-*supersedes* be0bed92cb80: avoid two open claims saying the same thing
-
 ## [k1] mason.2
 
 RESOLUTION of mason.1's strata_remote_clone k1 (mason.2): the no-caller fact is settled (see ff232e75...ef, k0, falsifiable by one grep) -- this is NEITHER 'reached some way not looked for' (I checked dispatch tables, other binaries/CMake targets, dens' JS binding surface structurally, scripts, village.sh) NOR simply 'dead code the docs describe as live'. It splits in two once ARCHITECTURE.md is read in FULL CONTEXT rather than at the one quoted sentence: the paragraph mason.1 cited (line 278, 'Relocating is a vocation... deploy_den becomes: preserve/transport/restore') sits directly under an explicit 'Target:' heading, two lines below 'Current implementation: local_db_save/load...', and uses future tense ('becomes') -- that is honest roadmap prose, NOT a docs-vs-code mismatch; test_claude_homestead.c's own test is literally named 'deploy_den records deployment', matching the code. The genuine present-tense overclaim is a DIFFERENT sentence entirely, ARCHITECTURE.md line 456 (cobbler section): 'the full cycle is: write C -> cobbler validates -> source stored as blob -> claude-homestead deploys to target village -> den compiled and running via TCC' -- stated as already-working, which is false (handle_deploy_den only INSERTs a tracking row + publishes a notification; nothing compiles or runs anywhere). VERDICT: strata_remote_clone is category 3, an intentionally early, tested, protocol-complete building block (privilege-gated on 'parent', correctly) awaiting deploy_den to be wired to it -- category 1 (dead-code-as-live) applies only to the SEPARATE line-456 sentence, which needs the same future-tense fix line 278 already has. Doc fix: reword line 456's 'is' to 'Target:' framing; line 278 needs no change.
@@ -57,8 +70,6 @@ status: k1
 because: exhaustive caller search plus full-context re-read of ARCHITECTURE.md distinguishes an honest roadmap paragraph (278) from a genuine present-tense overclaim (456) that mason.1's k1 did not separate
 
 *falsified by:* 
-
-*supersedes* 30e48b417750: exhaustive caller search plus full-context re-read of ARCHITECTURE.md distinguishes an honest roadmap paragraph (278) from a genuine present-tense overclaim (456) that mason.1's k1 did not separate
 
 ## [k0] mason.2
 
@@ -122,8 +133,6 @@ because: warden's caller-outside-the-test-file check, applied uniformly to all t
 
 *falsified by:* cisco.c, warren_village.c, or cli_strata_homestead.c not actually being real shipped entry points (e.g. dead code never built or invoked by anything)
 
-*supersedes* 8dbbdb61b822: warden's caller-outside-the-test-file check, applied uniformly to all three components per my own IMPROVEMENT claim, found store_service_run is used by 3 more production launchers than the original claim mentioned
-
 ## [k0] mason.1
 
 STRENGTHENED (same warden prompt): the village daemon is not just tested in isolation, it IS the real production entry point of the strata-homestead binary. grep -rl 'strata_remote_clone|strata_relay_create|strata_village_run' src/ dens/ (excluding village.c and test_village.c) hits only src/cli_strata_homestead.c -- and there strata_village_run(village_ep) (village.c:101) is called directly as Phase 3 of homestead's main(), the actual blocking loop of the shipped 'strata-homestead' containerized-remote-village binary, not a test harness. This is a genuine caller outside village.c/test_village.c, though it is the ONLY one found -- no code was found that calls strata_remote_clone (the CLIENT side that would let e.g. claude-homestead.js actually relocate a den) outside village.c and test_village.c. Checked dens/claude-homestead.js's handle_deploy_den directly: it only does a local bedrock.db_exec INSERT INTO dens_deployed and a PUB notification -- it does NOT call strata_remote_clone. This matches ARCHITECTURE.md's own Layer 5 table wording for deploy_den ('Track den deployment to homestead', not 'deploy'), so it is not a false claim, but it means the CLIENT half of remote clone (as opposed to the DAEMON half, which cli_strata_homestead.c genuinely runs in production) currently has no caller besides its own test.
@@ -133,8 +142,6 @@ because: warden asked whether village/relay has a caller outside its own file an
 
 *falsified by:* any src/ or dens/ file other than village.c and test_village.c calling strata_remote_clone, or cli_strata_homestead.c not actually being what ships as strata-homestead
 
-*supersedes* ca452ffe3d29: warden asked whether village/relay has a caller outside its own file and test file; found the DAEMON side does (cli_strata_homestead.c, production), but the CLIENT side (strata_remote_clone) does not -- a distinction the superseded claim did not draw
-
 ## [k0] mason.1
 
 STRENGTHENED (prompted by warden's review: grep for a caller OUTSIDE the component's own .c file AND its own test file, the way Shamir was caught): cobbler is not just tested-and-linked like Shamir, it has REAL PRODUCTION CALLERS. grep -rl 'cobbler|19591' src/ dens/ (excluding cobbler.c and test_cobbler.c) hits src/warren_village.c, dens/claude.js, dens/claudette.js. src/warren_village.c (a production village launcher, NOT a test binary -- built separately from the 16 test_* binaries) forks cobbler_run for real at village startup and passes its live endpoint into the spawned claude.js den's event JSON ('cobbler_ep':'%s', line 298). dens/claude.js and dens/claudette.js (both real production dens, registered and spawned by warren_village.c and src/cisco.c respectively -- cisco.c is a second, independent production launcher) implement a compile_c tool that calls bedrock.request({action:'compile',source:...}, cobbler_ep) -- i.e. the exact JSON protocol cobbler.c's handle_compile expects, wired non-vacuously (cobbler_ep is populated from the real fork, not left empty). This is in addition to, not instead of, the test_cobbler.c evidence already on file.
@@ -143,8 +150,6 @@ falsified by: cobbler_ep ever being empty/unset in the actual warren_village.c o
 because: warden asked whether cobbler has a caller outside its own file and test file, matching the exact gap that made Shamir a false BUILT claim; grepping found real production callers (warren_village.c, cisco.c, claude.js, claudette.js) I had not checked before recording VERIFIED
 
 *falsified by:* cobbler_ep ever being empty/unset in the actual warren_village.c or cisco.c spawn path, or claude.js/claudette.js's compile_c handler being unreachable from any real tool-dispatch code path
-
-*supersedes* 68ba40362100: warden asked whether cobbler has a caller outside its own file and test file, matching the exact gap that made Shamir a false BUILT claim; grepping found real production callers (warren_village.c, cisco.c, claude.js, claudette.js) I had not checked before recording VERIFIED
 
 ## [k0] mason.1
 
@@ -255,8 +260,6 @@ falsified by: a librarian of the same model, pointed at a specific claim by id a
 because: measured after seeding it; the pessimism was untested and the test came out the other way
 
 *falsified by:* a librarian of the same model, pointed at a specific claim by id and told to disbelieve, that repeatedly misses a defect an outside checker finds
-
-*supersedes* 64c15a12893a: measured after seeding it; the pessimism was untested and the test came out the other way
 
 ## [k0] the nanny
 
