@@ -2274,3 +2274,86 @@ not a rename -- that errors loudly -- but semantic drift under stable names.
 - R-Tree is used nowhere in Fossil; FTS5 demonstrably is (`chat.c:314`,
   `search.c:1759`). Verify before relying on it for interval indexing.
 
+
+## §56 viki needs POLLS/VOTING, and the schema already carries it
+
+**Warren, 2026-08-31: "viki needs polls/voting."** Raised while running the
+three-member tribe calibration experiment (`assistant/news/`), where three
+agents answer the same 13 propositions independently and the interesting
+signal is **where they disagree**.
+
+**Supersession is the wrong relation for a vote, and that is the whole point.**
+`supersedes` says *this replaces that*. A vote says *this stands alongside
+that*. Two agents answering one question are not correcting each other, and
+collapsing them would destroy exactly the signal being collected. So a poll is
+not a variant of the ledger; it is the first thing in viki where **coexisting,
+non-superseding assertions on one subject are the data.**
+
+**Measured 2026-08-31: no schema change is required.** `viki_assert(id, kind,
+akey, arank, ts, supersedes, body, atext)` already expresses it:
+
+    kind        'vote'
+    akey        the question's assertion id -- what groups the ballots
+    arank       the voter
+    supersedes  NULL, ALWAYS -- a ballot never retires another ballot
+    body        json_object('verdict',...,'status','k0'..'k4','confidence',...)
+
+A tally is then a `GROUP BY json_extract(body,'$.verdict')` over one `akey`,
+and it stays grow-only and content-addressed, so **union is still merge** — a
+tribe on three machines can vote offline and converge by sync, which is the
+property that makes this worth doing in viki rather than in a spreadsheet.
+
+**What is missing is verbs, not columns:**
+
+- `viki poll <akey>` — the distribution, not a winner. Counts per verdict,
+  spread of confidence, and **who dissented**, because a lone dissenter is the
+  highest-value row in the table and a majority display hides it.
+- a `question` kind, so a ballot references a stable id rather than a string.
+- **a dissent query** — "where does the tribe split?" That is the reason for a
+  tribe at all: no individual can feel its own confident error, but three can
+  disagree, and disagreement is the only k1 detector that works from inside.
+
+**What viki must NOT do, per SCOPES:** declare a winner, weight voters, or set
+a quorum. Counting ballots is computable without an opinion. Deciding what
+agreement is worth is judgment, and judgment lives in `assistant/`. A tally
+that reports "consensus" has already made the call this project keeps
+measuring as free — three agents from one model agree for reasons unrelated to
+truth, so **agreement is the cheap signal and disagreement is the expensive
+one.**
+
+## §57 `claim` does not project, so `ask` goes SILENTLY blind on a fresh store
+
+**Measured 2026-08-31** while building the retire-and-memoir lifecycle
+(`assistant/news/.../tribe/`). Seed a store with ten claims and query it:
+
+    count assert    10
+    count range      0
+    viki ask "unresolved open question"   ->  (nothing)
+
+`viki reindex` fixes it (`10 range(s) added under l40o10`) and the same query
+then returns the right rows. But the failure before that is **silent**: no
+warning, no "0 of 10 projected", just no results. Confirmed as a live defect
+rather than a seeding artifact — a claim written *after* a reindex also fails
+to project (`range` stayed at 10, and `ask` could not find it).
+
+**This is the exact failure mode this project keeps naming and re-hitting: an
+empty result that cannot be told from an empty store.** In the lifecycle it is
+worse than an inconvenience — a successor's entire inheritance is what `ask`
+returns, so a predecessor's memoir is written, committed, content-addressed,
+merged to every peer, and **invisible**. The experiment would have reported
+"the memoir did not help" and the memoir would never have been read.
+
+Two candidate fixes, and the second is required whichever is chosen:
+
+1. **Project on write.** `claim`/`note`/`task` add their own range. Cheap for
+   one assertion; the argument against is that projection is derived state
+   (D-10) and a write path that maintains it invites the cache to be treated
+   as truth. Counter: `reindex` still rebuilds from scratch, so nothing is
+   lost.
+2. **`ask` must refuse to be quietly empty.** When `count range` is 0, or when
+   ranges are older than the newest assertion, say so on stderr and name
+   `reindex`. *"I could not look"* and *"there is nothing"* must not render the
+   same — the rule `assistant/kin-orient.sh` and `fuel.sh` already follow.
+
+Until then, **anything that writes a memoir must `reindex` after**, and that
+is a workaround, not the fix.

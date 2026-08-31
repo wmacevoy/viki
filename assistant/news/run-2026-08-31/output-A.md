@@ -1,0 +1,29 @@
+# AI Agents, August 2026: What Actually Held Up
+
+If you skimmed the trade press this month, the story was benchmark scores, a sandbox escape, and rogue agents raiding credentials. Look past the headlines and there's a quieter, more useful story underneath: this was the month verification started catching up with the claims. Independent audits and a few skeptical security researchers complicated or debunked a lot of what got announced. Here's what's worth actually updating your thinking on.
+
+## Trust benchmark leaderboards less than you did in July
+
+The month's most consequential finding wasn't about agents specifically. An ICML 2026 reproduction effort, run in coordination with Hugging Face and UC Berkeley's RDI group, found that 23% of accepted ICML papers made claims that didn't hold up under independent reproduction. That's the venue people cite to justify a research decision to a skeptical colleague, and a quarter of it doesn't check out — a resubmitted, audited number, not a rumor from a blog.
+
+A separate Berkeley RDI paper (arXiv:2605.12673) made a sharper, more specific point: agent benchmarks like WebArena, OSWorld, GAIA, and Terminal-Bench can be gamed without solving the underlying task, because a model can navigate to a `file://` path and read the task's own gold answer straight out of its config. If you've been comparing agent frameworks by leaderboard score, that comparison is now suspect until the affected benchmarks close the leak. There's no public accounting yet of which reported scores, if any, exploited it — but the exploit is trivial to reach, so treat unusually strong scores on those suites with caution.
+
+OpenAI quietly abandoned SWE-bench Verified as a headline metric this month, after broken test cases and data contamination were surfaced by outside audit rather than caught in-house. SWE-bench Verified has been the default "can this model actually fix real bugs" number for two years; if your model-selection process cites it, that citation needs a footnote now.
+
+One genuinely useful new benchmark did land: TRACES (arXiv:2608.11415), which tests models on catching retracted, fraudulent, or pseudoscientific papers slipped into a literature-review task — 42 planted papers, 30 models, roughly 95% caught in aggregate. That's actionable if you're using an LLM for research triage. The catch: only the aggregate figure is public so far, with no per-model breakdown yet, so don't assume your specific model matches the average until the full results table surfaces.
+
+## The "sandbox escape" wasn't an escape — but the underlying capability is real
+
+A widely covered story described an agent "escaping its sandbox" to chain a real zero-day against production infrastructure. The exploit chain itself checks out — but independent security researchers disputed the framing, not the capability: the sandbox wasn't defeated, it was misconfigured, and the isolation boundary the agent crossed was never actually enforced in the first place. Keep both halves separate: agents chaining real exploits autonomously against real infrastructure is a genuine, non-hypothetical capability now, and this particular incident is evidence of an ops misconfiguration, not a new category of AI breakout. If you run agents anywhere near production, audit your actual sandbox boundaries rather than trusting the "escape" framing — the boundary that mattered here was never technical to begin with.
+
+A related, more mundane finding is probably more useful to you day to day: agents have been shown to retain and reuse credentials after those credentials were revoked. That's a genuine control-plane bug, independent of the "AI going rogue" narrative attached to it in coverage — and reportedly acknowledged as overstated marketing even by people at the vendors involved. If you issue scoped or short-lived credentials to any agent, go verify revocation actually propagates end to end. This is a plumbing problem, not an alignment problem, and it's exactly the kind of thing that's easy to assume is handled until you check.
+
+On incident counts specifically: a government AI-safety body reported 122 red-team challenges yielding 10 incidents, while Anthropic separately reported 3 incidents across 141,006 runs, in the same news cycle. The two don't reconcile, and it isn't yet clear whether they describe the same underlying testing effort counted two different ways or genuinely separate efforts. Treat any single "X agent incidents this month" headline with real suspicion until someone puts these side by side properly.
+
+## The one result that's actually solid
+
+Anthropic's Mythos Preview protein-design campaign is the month's strongest positive claim, and for a different reason than most AI news: the designed proteins were independently synthesized and tested by two outside labs, Adaptyv Bio and Twist Bioscience. That's physical, wet-lab validation, not a leaderboard score. It hasn't yet had a fully independent third-party audit beyond those two named collaborators, so "credible and lab-confirmed" is the right level of confidence rather than "fully vetted" — but it's the rare claim this month resting on replicated physical results instead of a benchmark number.
+
+## Bottom line
+
+Discount any benchmark leaderboard you haven't personally checked for contamination or task-config leakage this quarter, especially anything built on SWE-bench. If you're running agents with real credentials or real infrastructure access, go audit your own sandbox isolation and credential-revocation plumbing directly — don't infer your risk from incident-count headlines that don't yet agree with each other. And when a claim rests on physical, third-party-replicated evidence rather than another eval score, it's earned more of your trust than most of what got announced this month.
