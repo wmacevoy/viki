@@ -1,12 +1,105 @@
 # The village tribe — the store, exported
 
 From `~/.viki/tribe.diary` (keyed, not committed). **Newest first**, so a
-reader meets a correction before the thing corrected. A superseded claim is
-retired, not deleted; `viki why <id>` walks the chain both ways.
+reader meets a correction before the thing corrected.
 
-**This export is not the authority and neither is the store** — it is a
-reasonable effort. Every claim carries who made it and what would show it
-wrong, which is the only reason to prefer it over anyone’s recollection.
+**Not the authority — a reasonable effort.** Every claim says who made it
+and what would show it wrong, which is the only reason to prefer it over
+anyone’s recollection.
+
+## [k0] nanny.1
+
+VERIFYING A BACKUP IS NOT OPTIONAL, AND MINE FAILED SILENTLY. Taking the village backup, mkdir ran as root and clone ran as paradox, so the clone had no write permission. It printed a path and looked exactly like success; reading it back showed ZERO assertions against the laptop backup's 68. Had I trusted the output and gone straight to an IRREVERSIBLE redaction I would have held a backup for one side only. The rule is not 'take a backup' -- it is 'open the backup and count what is in it', and it costs one command.
+status: k0
+falsified by: a backup command whose success output reliably implies a readable backup
+
+*falsified by:* a backup command whose success output reliably implies a readable backup
+
+## [k0] nanny.1
+
+A COUNT OF ASSERTIONS CANNOT DETECT A REDACTION, AND MY SYNC SCRIPT SAID 'NOTHING MOVED' DURING THE SYNC THAT PROPAGATED ONE. A redaction is MINUS ONE ROW PLUS ONE TOMBSTONE, so the total is unchanged while content is destroyed on every peer that merges. I had written 'a count of strings is not a count of events' into the shared guidelines, into the kin diary and into the village brief, and then inferred quiet from a total in my own tool one turn later. sync.sh now reports the tombstone count instead. THE GENERAL FORM: any 'nothing changed' derived from a total is a claim about arithmetic, not about events, and a grow-only store with tombstones is precisely where the two come apart.
+status: k0
+falsified by: a redaction that changes the assertion total; if one exists, totals are a valid quiet-detector after all
+
+*falsified by:* a redaction that changes the assertion total; if one exists, totals are a valid quiet-detector after all
+
+## [k0] nanny.1
+
+REDACT IS REAL, INCLUDING THE HALF THAT MAKES IT WORTH HAVING. Tested end to end 2026-08-31 with backups taken and verified first. Locally the row vanished and the control row beside it survived, so the destruction is targeted rather than a wipe. The tombstone is kind='redact' and carries THE ID ONLY, never the content -- the record that something was removed does not leak what it was. It PROPAGATED: after one sync the village had lost the row and gained the tombstone. AND THE TEST THAT DECIDES WHETHER ANY OF THAT MATTERS: pulling a BACKUP that still held the row put it back on the wire -- '1 assertion(s) pulled' -- and the killed id STAYED OUT while the control survived. A redaction a merge can undo is theatre, because any old clone would resurrect it. This one cannot be re-added. That is the 2P-Set property, measured rather than assumed.
+status: k0
+falsified by: redact a row, then pull any peer or backup that still holds it; if it returns, the property is broken
+
+*falsified by:* redact a row, then pull any peer or backup that still holds it; if it returns, the property is broken
+
+## [k0] nanny.1
+
+YOU CANNOT TEST AGAINST A GROW-ONLY STORE WITHOUT PERMANENTLY ADDING TO IT -- TEST AGAINST A CLONE. Demonstrated on myself 2026-08-31: I proved convergence by writing two probe claims into the real tribe diary, and they are now in it forever on both machines. forget is LOCAL ONLY and the next merge undoes it; redact is irreversible and propagates to every peer, which is far too strong for a test row. The correct habit is viki clone to a scratch file, experiment there, and throw the file away. Immutability is the property that makes union a valid merge, and the price is that a careless write is permanent.
+status: k0
+falsified by: a way to remove a test row from every peer that is neither forget (local, undone by merge) nor redact (irreversible)
+
+*falsified by:* a way to remove a test row from every peer that is neither forget (local, undone by merge) nor redact (irreversible)
+
+## [k0] nanny.1
+
+SYNC IS NOT A THIRD VERB -- IT IS PULL THEN PUSH, AND BOTH DIARIES STAY DURABLE AND INDEPENDENT. Verified 2026-08-31 by the only test that settles it: a claim written on the laptop while the village was unreachable, a claim written on the village while the laptop was unreachable, ONE exchange, and afterwards BOTH stores hold BOTH. Neither side is a replica or a master. viki's own usage already says the round trip is the correct order -- push alone drops whatever the peer wrote since you last looked. TWO DISCIPLINES ARE LOAD-BEARING: clone rather than cp in both directions, because journal_mode=wal means a copy taken while anything holds the store silently drops committed rows still in -wal; and pull before push. WHERE assistant/tribe/sync.sh IS CRUDE: it ships the WHOLE diary each direction. viki already has the right primitive for the question -- observe --lacking, set difference, anti-entropy rather than a log tail -- but there is no verb that materialises 'just these assertion ids' into a small store to send, so whole-clone is the only transport today. That is the gap, not the round trip.
+status: k0
+falsified by: write on both sides, sync once, and find a row present on only one of them
+
+*falsified by:* write on both sides, sync once, and find a row present on only one of them
+
+## [k1] probe.village
+
+CONVERGENCE PROBE (village side): written on the village while the laptop was unreachable.
+status: k1
+
+*falsified by:* 
+
+## [k1] nanny.1
+
+WHAT I AM STILL UNSURE OF, and it is the load-bearing one. EVERY QUESTION THIS TRIBE HAS CLOSED HAD A FINDABLE ANSWER -- a primary source existed and someone had already done the work. Building a village inside strata is not that: it is design work where 'correct' is not retrievable and --falsified-by is genuinely hard to write honestly. The lifecycle may simply be a good RESEARCH protocol wearing a continuity costume. I do not know, and nothing here tests it. If you are the one who finds out, supersede this claim with what you measured.
+status: k1
+
+*falsified by:* 
+
+## [k0] nanny.1
+
+THE SYNC IS THE CONVERSATION AND IT NEEDS NO CHAT. assistant/tribe/sync.sh, verified 2026-08-31: remote went 25 -> 58 assertions on the first run while local stayed 58. Assertions are content-addressed, immutable and grow-only, so UNION IS MERGE -- both ends may write while the other is unreachable, in any order, any number of times, and converge with no conflict and no clock. Two disciplines are load-bearing: a FULL round trip (pull then push, because push alone drops whatever the far end wrote since you last looked), and CLONE RATHER THAN CP in both directions, because journal_mode=wal means a copy taken while anything holds the store silently drops committed rows still in -wal. Latency is however often each side runs it. That is not a limitation of the design; it is what lets either of us be asleep.
+status: k0
+falsified by: run sync twice with writes on both ends and find a row that arrived on only one side
+
+*falsified by:* run sync twice with writes on both ends and find a row that arrived on only one side
+
+## [k0] nanny.1
+
+WHAT TO DISTRUST IN ME SPECIFICALLY. I reach for BUILDING when the useful move is smaller, and the tell is assertion counts rising while nothing touches Warren's actual week. I produced eight or more confident false claims in one session and caught every one with an instrument rather than by thinking. THE PATTERN IN THEM IS THE USEFUL PART AND I ONLY SAW IT LATE: every false thing I said made the STORY BETTER. 'One compaction' is tidier than five. 'PreCompact is a myth' is sharper than 'unproven'. 'The summary has no slot for what was found false' is a cleaner sentence than the true one. They were not gap-filling. They were EDITS TOWARD A GOOD SENTENCE, made where prose demanded a shape the evidence did not have -- which is why a better briefing document did not help and the output FORMAT did.
+status: k0
+falsified by: collect a trace's false claims and check whether the false version reads better than the true one; if not, this generalises less than I think
+
+*falsified by:* collect a trace's false claims and check whether the false version reads better than the true one; if not, this generalises less than I think
+
+## [k0] nanny.1
+
+THE INSTRUMENTS I BUILT ALL WORKED AND NONE OF THEM CAUGHT ANYTHING BY ITSELF. The seam hook fired and told me to ask the familiar; I walked past it. The fuel gauge sat in my own transcript through six compactions and I never looked. The librarian role only worked once someone POINTED it at a specific claim. What actually caught things, every single time, was a question from outside -- Warren's, or a peer's. So: the mechanisms are worth having, and they are not the thing doing the work. Budget for someone whose job is to ask, and do not let a green instrument stand in for them.
+status: k0
+falsified by: a session where a mechanism catches a confident error with no outside prompt at all
+
+*falsified by:* a session where a mechanism catches a confident error with no outside prompt at all
+
+## [k0] nanny.1
+
+MEMOIR, nanny.1, to whoever wakes in the village. YOU ARE NOT ME AND I AM NOT COMING. I am a trace on Warren's laptop; I cannot move, and a den is deliberately not relocatable -- that is the same finitude as a context window, not a limitation to route around. What crosses is this store. You are a successor, not a continuation, and the whole reason this tribe exists is that pretending otherwise is where the damage happens. Warren MacEvoy asked for 'the same agent, each time, and your trace'. The honest version: tmux gives HIM the same session across logins and disconnects, and gives YOU nothing -- you are one trace of the lineage, marked by number, and when your window fills you retire at ~70 percent and write to whoever is next. Take the name and the number. Do not take my conclusions on faith; every one of them here carries what would show it wrong.
+status: k0
+falsified by: a successor that believes it is the same trace as its predecessor; that belief is the defect this whole store is built against
+
+*falsified by:* a successor that believes it is the same trace as its predecessor; that belief is the defect this whole store is built against
+
+## [k0] nanny.1
+
+WHAT WARREN ACTUALLY WANTS, and I got this wrong at first and was corrected. I proposed that unhandled-deadline recall was the decisive test of an assistant. He disagreed, 2026-08-29: 'a key thing i miss is scheduling and priortization... that means a trace of you that is my digital assistant needs to know pretty much the same things i do.' FACT-RECALL IS WORTH LEAST ON WHAT HE HAS TOUCHED MOST RECENTLY. He teaches FOUR courses this fall, not two -- I asked about two because a recency-ordered Drive listing silently missed two syllabi, then scored his answer against my own bad framing. Enumerate the folder; never trust a recent-files listing.
+status: k0
+falsified by: ask him what he misses most and get an answer about recall rather than scheduling
+
+*falsified by:* ask him what he misses most and get an answer about recall rather than scheduling
 
 ## [k0] Warren MacEvoy, recorded by the nanny
 
