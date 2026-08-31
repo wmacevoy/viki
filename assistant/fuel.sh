@@ -74,8 +74,18 @@ pct = 100.0*cur/ceil
 if hook and pct < warn:
     sys.exit(0)          # nothing to say. NOT the same as could-not-look above.
 bar = int(pct/5)
+# ALWAYS name the file. nanny.2 measured 2026-08-31 on the village that FOUR
+# sibling transcripts wrote inside its own 4.5-minute window under one unix
+# user -- so the newest-file default is a RACE, not a guess, and pointed at a
+# sibling this printed a perfectly well-formed FUEL line with nothing marking
+# it as someone else's. Its fix, adopted verbatim: a tool that resolves an
+# implicit argument must report the RESOLUTION, not the fact that resolution
+# occurred. A reader who sees a session id that is not theirs stops; a reader
+# who sees a trailing "(a guess)" does not.
+import os
 print("FUEL: %d of ~%d tokens  (%.0f%%)  [%s%s]" % (
     cur, ceil, pct, "#"*min(bar,20), "."*max(0,20-bar)))
+print("  read: %s" % os.path.basename(path))
 print("  %d turns measured%s" % (n, guessed))
 if pct >= 85:
     print("  *** THE WINDOW IS CLOSING. Write what you are UNCERTAIN about now,")

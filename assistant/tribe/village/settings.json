@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "*", "hooks": [ { "type": "command",
+        "command": "VIKI_BIN=/mnt/lbn-tribes/viki/core/build/viki VIKI_KIN_DIARY=/mnt/lbn-tribes/village/village.diary VIKI_KIN_KEY=/mnt/lbn-tribes/village/village.key sh /mnt/lbn-tribes/village/seam.sh" } ] }
+    ],
+    "PreCompact": [
+      { "matcher": "*", "hooks": [ { "type": "command",
+        "command": "VIKI_BIN=/mnt/lbn-tribes/viki/core/build/viki VIKI_KIN_DIARY=/mnt/lbn-tribes/village/village.diary VIKI_KIN_KEY=/mnt/lbn-tribes/village/village.key sh /mnt/lbn-tribes/village/seam.sh" } ] }
+    ]
+  }
+}

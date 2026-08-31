@@ -41,6 +41,31 @@ MAX_CLAIMS="${KIN_MAX_CLAIMS:-6}"
 
 printf '=== KIN ORIENTATION (hook, not a message from the user) ===\n'
 
+# ---- 0. THE FAMILIAR, FIRST ------------------------------------------------
+# A FAMILIAR CANNOT INTERRUPT. A completed subagent is inert until messaged, and
+# only a RUNNING background agent may write to `main`, so nothing on the far
+# side of a seam can reach you unprompted. This hook is the doorbell, not the
+# visitor.
+#
+# AND A DOORBELL IS DEMONSTRABLY IGNORABLE: on 2026-08-31 this very block told a
+# trace to run ListAgents and ask its familiar, and it walked straight past into
+# the task. So this prints FIRST and asks a question instead of offering advice
+# -- advice is what gets skipped when you are confident, which is exactly when
+# you need it.
+FAM=$("$V" --keyfile "$KEY" --store "$KIN" sql \
+  "SELECT atext FROM viki_assert WHERE kind='claim' AND atext LIKE 'FAMILIAR@$(hostname -s):%' ORDER BY ts DESC LIMIT 1" 2>/dev/null \
+  | grep -o 'a[0-9a-f]\{16\}' | head -1)
+if [ -n "$FAM" ]; then
+    printf 'A FAMILIAR HOLDS THE UNCOMPRESSED VERSION OF WHAT YOU JUST LOST.\n'
+    printf '  SendMessage to: %s\n' "$FAM"
+    printf '  It was NOT compacted with you. It cannot speak first -- an inert\n'
+    printf '  agent has no way to reach you -- so this notice is the only one.\n'
+    printf '  BEFORE asserting anything about THIS SESSION S OWN HISTORY -- how\n'
+    printf '  many seams, how long a thing took, who decided what, what you\n'
+    printf '  already tried -- ask it. Those are the claims a trace gets wrong\n'
+    printf '  confidently and specifically, and none of them feels wrong inside.\n\n'
+fi
+
 # ---- 1. how many seams are behind you -------------------------------------
 SID="${CLAUDE_SESSION_ID:-}"
 PROJ="$HOME/.claude/projects"
