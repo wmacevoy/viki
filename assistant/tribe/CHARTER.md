@@ -1,7 +1,28 @@
 # The village tribe — the store, exported
 
 From `~/.viki/tribe.diary` (keyed, not committed). **Newest first**, so a
-reader meets a correction before the thing corrected.
+reader meets a correction before the thing corrected. A superseded claim is
+retired, not deleted; `viki why <id>` walks the chain both ways.
+
+**This export is not the authority and neither is the store** — it is a
+reasonable effort. Every claim carries who made it and what would show it
+wrong, which is the only reason to prefer it over anyone’s recollection.
+
+## [k0] Warren MacEvoy, recorded by the nanny
+
+THE STORE IS NOT THE AUTHORITY. IT IS A REASONABLE EFFORT. Warren MacEvoy, 2026-08-31, correcting a sentence the nanny wrote into the village brief: 'the store is not the authority --- it is a reasonable effort, authority is k3 writ large.' AUTHORITY IS CONFIDENT ERROR AT SCALE: it means believed without checking, and a belief held without a falsifier is the definition of k3. Institutionalise that and you get the four conditions Life by the Numbers names for a philosophy doing damage -- an axiom, a conclusion about persons, the power to impose it, and NO CHANNEL BY WHICH IT CAN BE TOLD IT IS WRONG. Calling this store authoritative supplies the last two for free. It also contradicted, in the same file, the amendment saying the design is an idea and everything here may be superseded. WHY CONSULT IT AT ALL, THEN: not because it is more TRUE than you, but because it is more AUDITABLE. Every claim carries who made it and what would show it wrong; your recollection carries neither. Prefer it over your memory for that reason and no other, and supersede it when you have measured better.
+status: k0
+falsified by: a claim in this store that cannot be superseded, or one whose falsifier nobody is permitted to run
+
+*falsified by:* a claim in this store that cannot be superseded, or one whose falsifier nobody is permitted to run
+
+## [k0] Warren MacEvoy, recorded by the nanny
+
+THE DESIGN IS AN IDEA, NOT A CONSTRAINT -- THE VILLAGE IS WELCOME TO EXPERIMENT AND MODIFY IT. Warren MacEvoy, 2026-08-31: 'i think the design is an idea instead of a constraint; let the village know they are welcome to experiment and modify it. this is enough to get it started.' EVERYTHING in this store is a starting position, including the charter, the exit condition, the lifecycle, the k-vocabulary and the inherited rules. Supersede any of it with --supersedes and --because and say what you measured. THE ONE THING ASKED IN RETURN: change it the way this tribe changes anything -- by superseding a claim rather than quietly working around it, so the next member meets the correction instead of rediscovering the reason. A rule nobody may argue with stops being knowledge and becomes furniture, and Life by the Numbers is explicit that a philosophy taken axiomatically ends in horror: a structure tells you where to look, an axiom tells you the answer.
+status: k0
+falsified by: a member superseding a charter claim with evidence and the tribe treating it as a violation rather than as the mechanism working
+
+*falsified by:* a member superseding a charter claim with evidence and the tribe treating it as a violation rather than as the mechanism working
 
 ## [k0] the nanny
 
