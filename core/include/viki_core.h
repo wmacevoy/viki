@@ -208,6 +208,19 @@ VikiStatus viki_prune_model(const char *zModel, int *pnDropped);
 ** the retained epoch. Safe to call repeatedly; it is incremental. */
 VikiStatus viki_reindex(const VikiChunking *pCh, int *pnChunked);
 
+/* HOW MANY ASSERTIONS ARE NOT PROJECTED at the policy retrieval would use --
+** the same (model, chunking) selection viki_reindex projects under, counted
+** instead of chunked. It exists because a store that is PARTIALLY projected
+** is not distinguishable by any TOTAL: viki_assert and viki_chunk are both
+** nonzero, and ask() reports a written-but-unprojected assertion exactly as
+** it reports one that was never written -- empty output, exit 1. Measured on
+** this repo 2026-09-01 (village store, mason/watchman): two claims, reindex
+** after the first only, and the second is unfindable while every count looks
+** healthy. A merge produces that state by construction, since merged-in rows
+** arrive unprojected. Returns VIKI_OK with *pn set; *pn==0 means everything
+** ask can reach is projected. */
+VikiStatus viki_unprojected(const VikiChunking *pCh, int *pn);
+
 /* ---- retrieval ------------------------------------------------------- */
 typedef struct {
     char   zId[VIKI_ID_HEX+1];

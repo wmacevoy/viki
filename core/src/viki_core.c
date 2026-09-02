@@ -947,6 +947,33 @@ static int range_at(const char *zText, const VikiChunking *pCh, int ix,
     return 1;
 }
 
+VikiStatus viki_unprojected(const VikiChunking *pCh, int *pn){
+    sqlite3 *db = db_or_null();
+    const VikiEmbed *pe = RETAINED(VikiEmbed) ? RECALL(VikiEmbed) : 0;
+    const char *zModel = pe ? pe->zModel : "";
+    sqlite3_stmt *st = 0;
+    int nUn = 0;
+    if( pn ) *pn = 0;
+    if( !db ) return VIKI_ENOCTX;
+    if( !pCh ) pCh = &vikiChunkDefault;
+    if( !pCh->zName ) return fail(VIKI_EINVAL, "viki_unprojected: bad chunking policy%s","");
+    /* THE SAME SELECTION viki_reindex USES, counted rather than chunked. It
+    ** MUST stay (model, chunking)-qualified: an unqualified anti-join agrees
+    ** only while a store has exactly one policy, and reindex ADDS a policy
+    ** rather than replacing one. */
+    if( sqlite3_prepare_v2(db,
+        "SELECT count(*) FROM viki_assert a WHERE NOT EXISTS("
+        "  SELECT 1 FROM viki_chunk c WHERE c.id=a.id AND c.model=?1 AND c.chunking=?2)",
+        -1, &st, 0)!=SQLITE_OK )
+        return fail(VIKI_ESQL, "viki_unprojected: %s", sqlite3_errmsg(db));
+    sqlite3_bind_text(st, 1, zModel,     -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 2, pCh->zName, -1, SQLITE_STATIC);
+    if( sqlite3_step(st)==SQLITE_ROW ) nUn = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    if( pn ) *pn = nUn;
+    return VIKI_OK;
+}
+
 VikiStatus viki_reindex(const VikiChunking *pCh, int *pnChunked){
     sqlite3 *db = db_or_null();
     const VikiEmbed *pe = RETAINED(VikiEmbed) ? RECALL(VikiEmbed) : 0;
