@@ -129,6 +129,7 @@ static int usage(void){
 "                        --source-keyfile PATH  if the peer uses another key\n"
 "  merge PATH            same as pull, kept for the older spelling\n"
 "  reindex               (re)project ranges; repeat with --lines/--overlap\n"
+"  prune-model MODEL     drop a dead model's ranges. Assertions untouched.\n"
 "                        to add a SECOND chunking over the same assertions\n"
 "  cal ingest FILE       jsCalendar (RFC 8984) in\n"
 "  model import DIR      ingest model.onnx, vocab.txt and the pinned dim\n"
@@ -350,6 +351,17 @@ static int   g_nHeld = 0;
 /* ACROSS EVERY OPEN DIARY, via core. The model belongs in `core` and the
 ** notes in `private`, so a resolver that knew one connection could only ever
 ** find a model sitting beside the notes -- which is not where it goes. */
+/* THE MODEL ID MUST NOT BE A PATH. embedder_open used to label chunks with
+** the .so's FILESYSTEM PATH, which makes a vector non-portable: the same model
+** on two machines yields two model ids, so merged chunks are foreign, the peer
+** re-embeds under a third policy, and viki_unprojected reports everything
+** unprojected until it does. Caught 2026-09-02 after the relay published 140
+** vectors keyed to /mnt/lbn-tribes/viki/core/build/viki-embed-onnx.so into a
+** shared repo that cameo pulls, where that path does not exist. A model is its
+** BYTES, so the id is their sha256 -- identical wherever the same model is
+** imported, which is what makes vectors survive a merge. */
+static char zModelSha[65];
+
 static const void *cli_blob(void *pApp, const char *zName, size_t *pn){
     const void *p = 0; sqlite3_int64 n = 0; const char *zWhich = 0;
     (void)pApp;
@@ -366,6 +378,8 @@ static const void *cli_blob(void *pApp, const char *zName, size_t *pn){
       if( !z ) return 0;
       memcpy(z, p, (size_t)n); z[n] = 0;
       g_aHeld[g_nHeld++] = z; *pn = (size_t)n;
+      /* The WEIGHTS name the model; vocab.txt does not. */
+      if( strstr(zName, "model.onnx") ) viki_sha256_hex(z, (size_t)n, zModelSha);
       return z; }
 }
 
@@ -389,7 +403,11 @@ static int embedder_open(const char *zPath, Embedder *e, VikiEmbed *pOut,
     }
     pOut->xEmbed = embed_thunk;
     pOut->pApp   = e;
-    pOut->zModel = zModelId;
+    /* Falls back to the library path only when the embedder asked for no
+    ** model.onnx -- i.e. a library that knows where its own weights are, as
+    ** viki_grep.h's seam contract allows. Then the id is all we have, and it
+    ** is honestly machine-local. */
+    pOut->zModel = zModelSha[0] ? zModelSha : zModelId;
     return 0;
 }
 static void embedder_close(Embedder *e){
@@ -1296,6 +1314,19 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
         n = prHit(out, h); viki_hits_free(h);
         sqlite3_free(sd.zId); sqlite3_free(sd.zText);
         return n ? 0 : 1;
+    }
+    if( !strcmp(argv[0],"prune-model") && argc>=2 ){
+        /* RECLAIM A DEAD MODEL'S RANGES. Assertions are untouched -- this drops
+        ** projections only. Needed because reindex ADDS a (model, chunking)
+        ** policy rather than replacing one, so every model change otherwise
+        ** doubles the vector weight the store carries and, if the store is
+        ** published, the weight a peer downloads. viki_prune_model has been in
+        ** core with no way to call it. */
+        int nDropped = 0;
+        if( viki_prune_model(argv[1], &nDropped)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        fprintf(out, "%d range(s) dropped for model %s\n", nDropped, argv[1]);
+        return 0;
     }
     if( !strcmp(argv[0],"sql") && argc>=2 ){
         if( viki_sql(argv[1], prSql, out)!=VIKI_OK ){
