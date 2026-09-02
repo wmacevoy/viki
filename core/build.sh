@@ -50,7 +50,7 @@ fi
 [ -f "$RETAIN/retain.h" ] || { echo "no retain.h (set VIKI_RETAIN_DIR)"; exit 2; }
 mkdir -p "$OUT"
 CFLAGS="-std=c11 -Wall -Wextra -Wno-unused-parameter -O2"
-INC="-I$ROOT/core/include -I$ROOT/core/src -I$SQLITE -I$RETAIN"
+INC="-I$ROOT/core/include -I$ROOT/core/src -I$ROOT/src -I$SQLITE -I$RETAIN"
 # LibreSSL headers, when the SQLCipher path gave us a crypto tree. The CLI's
 # Ed25519 identity costs nothing new because SQLCipher already links it.
 [ -n "$VIKI_CRYPTO" ] && INC="$INC -I$VIKI_CRYPTO/include"
@@ -82,7 +82,10 @@ cc $CFLAGS $INC -c "$ROOT/core/src/viki_trace.c" -o "$OUT/viki_trace.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_vcs.c"   -o "$OUT/viki_vcs.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/viki_ed25519.c" -o "$OUT/viki_ed25519.o"
 cc $CFLAGS $INC -c "$ROOT/core/src/sha256.c"    -o "$OUT/sha256.o"
-ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/viki_task.o" "$OUT/viki_trace.o" "$OUT/viki_vcs.o" "$OUT/viki_ed25519.o" "$OUT/sha256.o"
+# grep: the regex matcher lives in src/, shared with the fossil-derived viki.
+# -I$ROOT/src for viki_grep.h; libc regex, so no new dependency.
+cc $CFLAGS $INC -I"$ROOT/src" -c "$ROOT/src/viki_grep.c" -o "$OUT/viki_grep.o"
+ar rcs "$OUT/libvikicore.a" "$OUT/viki_core.o" "$OUT/viki_cal.o" "$OUT/viki_task.o" "$OUT/viki_trace.o" "$OUT/viki_vcs.o" "$OUT/viki_ed25519.o" "$OUT/sha256.o" "$OUT/viki_grep.o"
 echo "==> cli"
 cc $CFLAGS $INC -I"$ROOT/cli" -o "$OUT/viki" \
    "$ROOT/cli/viki_cli.c" \

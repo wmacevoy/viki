@@ -61,6 +61,7 @@
 #include "viki_vcs.h"
 #include "viki_cal.h"
 #include "sha256.h"
+#include "viki_grep.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 
@@ -114,6 +115,11 @@ static int usage(void){
 "                        peer's clock, so set difference is the only correct\n"
 "                        question. Ids are content hashes; no clock needed.\n"
 "  ask QUERY [-k N]      hybrid retrieval\n"
+"  grep PATTERN [-i]     EXACT and UNRANKED, every match in index order.\n"
+"                        POSIX ERE from libc: [[:digit:]], not \\d, and no\n"
+"                        lookaround. -i for case-insensitive.\n"
+"  muse [-k N]           no query at all -- wander. Seeds at random, then\n"
+"                        shows what sits NEAR the seed.\n"
 "  forget ID             withdraw an assertion (local; peers keep theirs)\n"
 "  pull PATH             union a peer's store into this one\n"
 "  push PATH             union this one into a peer's. REFUSES to create it:\n"
@@ -419,10 +425,55 @@ static sqlite3 *open_store(const char *zPath){
         sqlite3_close(db);
         return 0;
     }
+    /* REGEXP for `grep` AND for `sql`. Registered here rather than inside the
+    ** grep verb so a caller driving the raw rung gets `text REGEXP pat` too;
+    ** src/viki_grep.c caches the compiled pattern per-argument, so a scan
+    ** regcomp()s once and not once a row. */
+    viki_grep_register(db);
     return db;
 }
 
 /* ---- printing -------------------------------------------------------- */
+/* ---- grep and muse --------------------------------------------------
+**
+** WHY grep IS ITS OWN VERB and not a mode of ask, from src/viki_grep.h:
+** ask is fuzzy and RANKED (keyword + vector, rank-fused); grep is exact and
+** UNRANKED -- every chunk whose text matches, in index order. Reach for grep
+** when you know the literal string (a symbol, a uuid, an error message) and
+** for ask when you know only the idea.
+**
+** THE REGEX ENGINE IS THE ONE IN src/viki_grep.c, not a copy of it. Only the
+** QUERY is written here, because that file's SQL is over the fossil cache
+** schema (content_hash, chunk_ix, viki_source) and this store has none of
+** those columns. Splitting it that way keeps one implementation of the
+** matcher and one per-schema query, rather than two matchers.
+*/
+typedef struct { FILE *out; int n; int nMax; } GrepOut;
+
+static int grepRow(void *pApp, int nCol, const char *const *az){
+    GrepOut *g = (GrepOut*)pApp;
+    if( nCol < 5 ) return 0;
+    if( g->nMax > 0 && g->n >= g->nMax ) return 1;   /* nonzero stops the scan */
+    g->n++;
+    /* ask's hit-line SHAPE, so one parser reads both -- but the score column
+    ** is 1.0000 BY CONSTRUCTION and is not a rank. A regex either matched or
+    ** it did not; there is no better and worse match to report. */
+    fprintf(g->out, "[%d] 1.0000  %.12s#%s-%s  (%s)\n",
+            g->n, az[0]?az[0]:"", az[1]?az[1]:"", az[2]?az[2]:"", az[3]?az[3]:"");
+    fprintf(g->out, "    %s\n", az[4]?az[4]:"");
+    return 0;
+}
+
+typedef struct { char *zId; char *zText; } Seed;
+
+static int seedRow(void *pApp, int nCol, const char *const *az){
+    Seed *s = (Seed*)pApp;
+    if( nCol < 2 || s->zText ) return 0;
+    s->zId   = az[0] ? sqlite3_mprintf("%s", az[0]) : 0;
+    s->zText = az[1] ? sqlite3_mprintf("%s", az[1]) : 0;
+    return 0;
+}
+
 static int prHit(FILE *out, VikiHits *h){
     int i;
     if( !h ) return 0;
@@ -938,10 +989,25 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
     }
     if( !strcmp(argv[0],"ask") && argc>=2 ){
         VikiHits *h = 0; int k = 5, i;
+        VikiChunking ch;
+        char zName[32];
+        int nUn = 0;
         for(i=2;i<argc-1;i++) if(!strcmp(argv[i],"-k")) k = atoi(argv[i+1]);
         if( viki_ask(argv[1], k, &h)!=VIKI_OK ){
             fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
         n = prHit(out, h); viki_hits_free(h);
+        /* SAY WHEN THE ANSWER IS INCOMPLETE BY CONSTRUCTION. ask cannot see an
+        ** unprojected assertion, and a partial store's TOTALS look healthy --
+        ** so 'no hits' and 'nothing written' are byte-identical output at the
+        ** same exit status. This is the only line that tells them apart, and
+        ** it is printed on a HIT too: k results out of a store missing rows is
+        ** just as wrong an answer, and quieter. */
+        snprintf(zName,sizeof zName,"l%do%d", nLines, nOverlap);
+        ch.zName = zName; ch.nLines = nLines; ch.nOverlap = nOverlap;
+        if( viki_unprojected(&ch, &nUn)==VIKI_OK && nUn>0 )
+            fprintf(stderr,
+                "%s: %d assertion(s) NOT PROJECTED under %s -- ask cannot see them."
+                "  Run: %s reindex\n", zProg, nUn, zName, zProg);
         return n ? 0 : 1;            /* nothing found is a non-zero status */
     }
     if( !strcmp(argv[0],"forget") && argc>=2 ){
@@ -1152,6 +1218,84 @@ static int do_verb(FILE *out, int argc, char **argv, int nLines, int nOverlap){
             return st2==VIKI_SIG_BAD ? 1 : 0;
         }
         return usage();
+    }
+    if( !strcmp(argv[0],"grep") && argc>=2 ){
+        GrepOut g; char *zSql; int i, bIcase = 0; VikiStatus rc;
+        const char *zPat = 0;
+        g.out = out; g.n = 0; g.nMax = 0;
+        /* FLAGS IN EITHER POSITION. `grep -i PAT` is what anyone types, and
+        ** scanning only from argv[2] silently took "-i" AS THE PATTERN --
+        ** which matched most chunks and returned a well-formed wrong answer,
+        ** not an error. Caught 2026-09-02 by reading WHICH claim came back. */
+        for(i=1;i<argc;i++){
+            if( !strcmp(argv[i],"-i") ) bIcase = 1;
+            else if( !strcmp(argv[i],"-k") && i+1<argc ) g.nMax = atoi(argv[++i]);
+            else if( !zPat ) zPat = argv[i];
+        }
+        if( !zPat ) return usage();
+        /* %Q quotes and escapes -- a pattern containing a single quote is a
+        ** pattern, not an injection. regexp(PATTERN, TEXT) is the argument
+        ** order src/viki_grep.h documents. */
+        zSql = sqlite3_mprintf(
+            "SELECT c.id, c.lo, c.hi, c.chunking, t.text"
+            "  FROM viki_chunk c JOIN viki_chunk_text t ON t.seq = c.seq"
+            " WHERE %s(%Q, t.text) ORDER BY c.seq",
+            bIcase ? "regexpi" : "regexp", zPat);
+        if( !zSql ){ fprintf(stderr,"%s: out of memory\n",zProg); return 1; }
+        rc = viki_sql(zSql, grepRow, &g);
+        sqlite3_free(zSql);
+        if( rc!=VIKI_OK ){
+            /* A BAD PATTERN SURFACES HERE, not at prepare: regcomp runs on the
+            ** first row, so an empty corpus and a broken ERE look the same
+            ** until there is a row to run it against. */
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        return g.n ? 0 : 1;          /* nothing found is a non-zero status, as ask */
+    }
+    if( !strcmp(argv[0],"muse") ){
+        /* WANDER, DO NOT SEARCH. Seed at random, then ask() with the seed's
+        ** OWN TEXT, which is the HyDE move applied to nothing in particular:
+        ** the best query for finding what sits near a claim is that claim.
+        **
+        ** THIS IS AN APPROXIMATION OF src/viki_muse.c AND CARRIES NONE OF ITS
+        ** MEASUREMENTS. That implementation picks by a measured pairwise
+        ** cosine BAND -- related but novel -- and deliberately does NOT use
+        ** random(), because musing there is reproducible. This does use
+        ** random(), so it is nearer the uniform control that file reports
+        ** beating (0.028 relatedness) than the band it settled on. It is the
+        ** shape, not the result. Port the real one and supersede this.
+        **
+        ** With no --embedder it degrades to keyword drift, and prHit says so. */
+        Seed sd; VikiHits *h = 0; int i, k = 5;
+        for(i=1;i<argc-1;i++) if(!strcmp(argv[i],"-k")) k = atoi(argv[i+1]);
+        sd.zId = 0; sd.zText = 0;
+        if( viki_sql("SELECT id, atext FROM viki_assert WHERE kind='claim'"
+                     " ORDER BY random() LIMIT 1", seedRow, &sd)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg()); return 1; }
+        if( !sd.zText ){ fprintf(stderr,"%s: no claims to muse on\n",zProg); return 1; }
+        fprintf(out, "seed %.12s  %.100s\n", sd.zId?sd.zId:"", sd.zText);
+        /* ASK FOR ONE MORE AND DROP THE SEED. The best match for a claim's
+        ** own text is that claim, so without this, hit 1 is always the seed
+        ** and muse echoes instead of wandering. */
+        if( viki_ask(sd.zText, k+1, &h)!=VIKI_OK ){
+            fprintf(stderr,"%s: %s\n",zProg,viki_errmsg());
+            sqlite3_free(sd.zId); sqlite3_free(sd.zText); return 1; }
+        if( h && sd.zId ){
+            /* Compact left, and FREE what we drop: viki_hits_free walks 0..n-1
+            ** and frees zText only, so a skipped element's text would leak and
+            ** a duplicated pointer inside the new n would double-free. Slots
+            ** at or past the new n keep stale copies and are never freed. */
+            int j, w = 0;
+            for(j=0;j<h->n;j++){
+                int bSeed = h->a[j].zId && !strcmp(h->a[j].zId, sd.zId);
+                if( bSeed || w >= k ){ free(h->a[j].zText); h->a[j].zText = 0; continue; }
+                if( w!=j ) h->a[w] = h->a[j];
+                w++;
+            }
+            h->n = w;
+        }
+        n = prHit(out, h); viki_hits_free(h);
+        sqlite3_free(sd.zId); sqlite3_free(sd.zText);
+        return n ? 0 : 1;
     }
     if( !strcmp(argv[0],"sql") && argc>=2 ){
         if( viki_sql(argv[1], prSql, out)!=VIKI_OK ){
