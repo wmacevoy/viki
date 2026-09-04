@@ -5,7 +5,7 @@ goes away. No retrieval, no network, no filesystem.
 
 ## State of this repository
 
-**258 tests. 258 red. Zero green.** That is the finished condition of this round, not a problem to
+**260 tests. 260 red. Zero green.** That is the finished condition of this round, not a problem to
 fix. The tests are the requirements in executable form, written before the code so the first
 implementation has something to be wrong against.
 
@@ -111,10 +111,13 @@ a set-reconciliation sketch — are each ~50 and ~300 lines you should own."
 | --- | --- | --- |
 | Python, test-only | `hypothesis` | The top-line claim is a semilattice law currently checked at a handful of hand-written points |
 | C | SQLCipher-LibreSSL, and the `libcrypto` it already links | SHA-256 and Ed25519 already paid for |
-| C | **libbf** (via `libbfxx`) | Bignum arithmetic for the time-lock (N-10..N-16). The alternative is hand-rolled modular exponentiation |
 | C, conditional | utf8proc | Only if A-4 is not narrowed; there is no libc NFC |
 
-**Refused:** every CRDT library, CBOR and all canonical-serialization libraries, LMDB/RocksDB,
+**Refused:** **libbf / bignum** — a time-lock puzzle was the first choice for the travelling secret
+and was rejected after analysis (N-13): serial work does not defeat parallel attack, because cracking
+parallelizes across guesses rather than within one. A pepper costs the attacker the same per guess,
+lets the *defender* parallelize its one search, keeps the whole cost inside a memory-hard KDF, and
+adds no dependency. Also refused: every CRDT library, CBOR and all canonical-serialization libraries, LMDB/RocksDB,
 git/IPFS/Fossil, migration tools, minisketch, and `oopc` as a *link* — copy the convention, which is
 what `core/` already does.
 

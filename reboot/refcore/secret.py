@@ -1,102 +1,98 @@
-"""The travelling secret: a time-lock puzzle over the copy that leaves the device.
+"""The travelling secret: a pepper over the copy that leaves the device.
 
-Rivest-Shamir-Wagner 1996, adapted. An identity's private key is sealed twice --
-once under a key the owner's own device can derive in milliseconds, and once
-under a key that costs `t` sequential squarings to reach. Only the second copy
-syncs.
+An identity's private key is sealed twice -- once under a key the owner's own
+device derives in one kdf, and once under a key whose nonce carries `b` random
+bits that are never stored. Only the second copy syncs.
 
-    nonce         = p * q            -- p and q DESTROYED, never stored
+    nonce         = random, stored
+    pepper        = b uniform random bits, NEVER STORED
     k_local       = kdf(password, nonce)
-    k_travel      = k_local^(2^t) mod nonce
+    k_travel      = kdf(password, nonce XOR pepper)
     local_secret  = encrypt(secret, k_local)
     travel_secret = encrypt(secret, k_travel)
 
-WHAT THIS ACTUALLY BUYS, stated precisely because the tempting claim is wrong.
-It is NOT that sequential work defeats parallel attack: password cracking
-parallelizes across GUESSES, not within one, so an attacker with N cores runs N
-candidate passwords each with its own chain, and `t` behaves like a KDF cost
-parameter. What it buys is WHEN THE DEFENDER PAYS -- once, at enrolment, rather
-than on every unlock. A KDF slow enough to impose the same per-guess cost would
-be paid by the owner every single time they open the diary. That asymmetry is
-the whole construction (N-13).
+WHAT THIS BUYS: the owner pays the 2^(b-1) expected search ONCE, at enrolment,
+and never again -- everyday unlock uses `local_secret` and one kdf. An attacker
+pays it on every password guess. A kdf slow enough to impose the same per-guess
+cost would be paid by the owner every single time (N-12).
 
-TWO HAZARDS, both structural:
-  - the factors are the trapdoor, so a retained p or q voids everything
-    SILENTLY and unprovably (N-12);
-  - modular squaring is low-memory and ASIC-friendly, the opposite of a
-    memory-hard KDF, so this hardens against TIME and not against AREA and
-    `kdf` must be memory-hard on its own account (N-15).
+WHY NOT A TIME-LOCK PUZZLE, since it is the obvious alternative and was the
+first choice here. RSW-style repeated squaring makes each attempt serial, which
+sounds like it defeats parallel attack and does not: cracking parallelizes
+across GUESSES, not within one, so serial work is a per-guess multiplier exactly
+like this search is. Given that, the pepper wins three ways (N-13):
 
-Bignum arithmetic comes from libbf (via libbfxx). This is the one dependency the
-construction adds, and it is deliberate: the alternative is hand-rolled modular
-exponentiation, which is the last thing anybody should hand-roll.
+  - THE DEFENDER MAY PARALLELIZE ITS SEARCH and the attacker's advantage is
+    unchanged, so for a fixed enrolment wall-clock the attacker's per-guess work
+    is larger by the defender's core count. Sequential work forbids the defender
+    that and gains nothing for it.
+  - The whole search is kdf evaluations, so MEMORY-HARDNESS MULTIPLIES through
+    all 2^b of them. Modular squaring is low-memory and ASIC-friendly, which is
+    the opposite of what constrains cracking hardware.
+  - No dependency. The time-lock needs bignum arithmetic; this needs none.
+
+And no structural break: a pepper is entropy, with no factoring assumption, no
+trapdoor to destroy, and no quantum endgame beyond Grover halving b (N-15).
 """
 
 
-def make_nonce(bits: int) -> int:
-    """N-11, N-12. Generate p and q, return p*q, and DESTROY the factors.
+def seal(secret: bytes, password: str, nonce: bytes, b: int) -> tuple:
+    """N-10, N-11. Returns (local_secret, travel_secret, verifier).
 
-    The factors must not survive this call in any form -- not returned, not
-    logged, not left in a scratch buffer a later allocation can read. With phi(n)
-    an attacker computes 2^t mod phi(n) and collapses the whole chain into one
-    exponentiation, so holding a factor is equivalent to not having built this.
-
-    Nobody may hold them, INCLUDING THE OWNER. There is no legitimate use for
-    the shortcut: the owner already has `local_secret`.
+    Generates `b` random bits, uses them, and DISCARDS them. The pepper must not
+    survive this call in any form -- not returned, not logged, not left in a
+    buffer a later allocation can read. A retained pepper collapses the travel
+    seal to plain kdf strength, silently, and unprovably (K4).
     """
-    raise NotImplementedError("N-11, N-12")
+    raise NotImplementedError("N-10, N-11")
 
 
-def k_local(password: str, nonce: int) -> bytes:
-    """N-15. The fast key. A MEMORY-HARD kdf, on its own account.
+def unlock_local(local_secret: bytes, password: str, nonce: bytes) -> bytes:
+    """The everyday path: one kdf, no search. Milliseconds.
 
-    The time-lock hardens against time; a memory-hard kdf hardens against area.
-    They defend different axes and neither substitutes for the other, so this
-    being slow-and-memory-hungry is not redundant with `t`.
-    """
-    raise NotImplementedError("N-15")
-
-
-def k_travel(k: bytes, nonce: int, t: int) -> bytes:
-    """N-11. `k` squared `t` times mod `nonce`. Sequential by construction.
-
-    There is no way to reach the t-th square without passing through the
-    previous t-1 -- unless you know the factors, which is why N-12 destroys them.
-    """
-    raise NotImplementedError("N-11")
-
-
-def seal(secret: bytes, password: str, nonce: int, t: int) -> tuple:
-    """N-10. Returns (local_secret, travel_secret).
-
-    Only the second one syncs.
+    This is what makes N-12's asymmetry available at all -- if the owner had to
+    search on every unlock, the cost would have to be small enough to be useless.
     """
     raise NotImplementedError("N-10")
 
 
-def unlock_local(local_secret: bytes, password: str, nonce: int) -> bytes:
-    """The everyday path: one memory-hard kdf, no squaring. Milliseconds."""
-    raise NotImplementedError("N-10")
+def unlock_travel(travel_secret: bytes, password: str, nonce: bytes, b: int,
+                  verifier: bytes, workers: int = 1) -> bytes:
+    """The enrolment path: search all 2^b peppers, expected 2^(b-1).
 
+    `workers` is the defender's parallelism and it is the point (N-13): the
+    attacker's per-guess work is unchanged by it, so every core the owner brings
+    to enrolment buys a proportional increase in what an attacker must spend per
+    guess for the same enrolment wall-clock.
 
-def unlock_travel(travel_secret: bytes, password: str, nonce: int,
-                  t: int) -> bytes:
-    """The enrolment path: the kdf plus `t` sequential squarings.
-
-    Paid once, by the owner, on a new device. An attacker pays it on every
-    guess -- which is the entire point (N-13).
+    Checks `verifier` FIRST (N-16a). Without that a wrong password is
+    indistinguishable from a pepper not yet found, so a typo costs the full 2^b
+    -- terrible to use, and a denial of service against yourself.
     """
-    raise NotImplementedError("N-10, N-13")
+    raise NotImplementedError("N-10, N-13, N-16a")
+
+
+def verify_password(verifier: bytes, password: str, nonce: bytes) -> bool:
+    """N-16a. One kdf. Fails a typo fast, before any search begins."""
+    raise NotImplementedError("N-16a")
 
 
 def parameters(store, pubkey: str) -> dict:
-    """N-16. The `t` and nonce size recorded WITH the identity.
+    """N-16. `b` and the kdf parameters, recorded WITH the identity.
 
-    A peer that cannot tell how much work `travel_secret` requires cannot unlock
-    it, and raising `t` later must not orphan identities sealed under the old
-    value.
+    A peer that cannot tell how large the search is cannot perform it, and
+    raising `b` later must not orphan identities sealed under the old value.
     """
     raise NotImplementedError("N-16")
+
+
+def expected_cost(b: int) -> tuple:
+    """N-16b. (expected, worst_case) kdf evaluations: 2^(b-1) and 2^b.
+
+    Exposed because the cost is PROBABILISTIC and enrolment time varies by up to
+    a factor of two. A progress indicator that assumes a fixed cost will lie.
+    """
+    raise NotImplementedError("N-16b")
 
 
 def rekey(store, new_roots: tuple) -> str:

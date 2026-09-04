@@ -1,179 +1,178 @@
-"""N-10..N-17 -- the travelling secret, and what it does and does not buy.
+"""N-10..N-17 -- the travelling secret.
 
-The construction is a time-lock puzzle (Rivest-Shamir-Wagner 1996) over the copy
-of an identity's private key that leaves the device. These tests pin the
-asymmetry that justifies it and the two hazards that come with it.
+A pepper over the copy that leaves the device: `b` random bits mixed into the
+nonce and never stored, so opening the travelled seal costs a search and opening
+the local one does not.
+
+These tests pin the asymmetry that justifies it, the three reasons a sequential
+construction was rejected, and the two hazards that remain.
 """
 
 from refcore import diary, merger, reader, secret, writer
-from refcore.errors import Refused, Unauthorized
+from refcore.errors import Unauthorized
 from tests.support import ALICE, BOB, StateTest, a_store, an_assertion
 
 PASSWORD = "correct horse battery staple"
 SECRET = b"ed25519-seed-32-bytes-goes-here!"
+NONCE = b"\x11" * 16
+B = 12
 
 
 class TwoSeals(StateTest):
     """N-10. Sealed twice; only one copy travels."""
 
     def test_N10_both_seals_recover_the_same_secret(self):
-        nonce = secret.make_nonce(2048)
-        local, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 16)
-        self.assertEqual(secret.unlock_local(local, PASSWORD, nonce), SECRET)
-        self.assertEqual(secret.unlock_travel(travel, PASSWORD, nonce, t=1 << 16),
-                         SECRET)
+        local, travel, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
+        self.assertEqual(secret.unlock_local(local, PASSWORD, NONCE), SECRET)
+        self.assertEqual(
+            secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier), SECRET)
 
     def test_N10_the_two_seals_are_different_ciphertexts(self):
-        """Control. If they were equal the travel copy would be unlockable by
-        the fast path and the whole construction would be decoration."""
-        nonce = secret.make_nonce(2048)
-        local, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 16)
+        """Control. Equal seals would make the travel copy openable by the fast
+        path, and the whole construction decoration."""
+        local, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
         self.assertNotEqual(local, travel)
 
     def test_N10_only_the_travel_seal_syncs(self):
-        laptop = a_store(principal=ALICE)
-        phone = a_store(principal=ALICE)
-        nonce = secret.make_nonce(2048)
-        local, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 16)
+        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
+        local, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
         ident = diary.identity_put(laptop, "alice", ALICE,
                                    secret_wrapped=travel, kdf="argon2id")
         merger.merge(phone, laptop)
         self.assertNotIn(local, reader.get(phone, ident).body)
 
     def test_N10_the_travel_seal_does_sync(self):
-        """Control: it has to arrive, or a new device cannot enrol at all --
-        which is the requirement this whole design exists to serve."""
-        laptop = a_store(principal=ALICE)
-        phone = a_store(principal=ALICE)
-        nonce = secret.make_nonce(2048)
-        _, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 16)
+        """Control: it must arrive, or a new device cannot enrol at all -- which
+        is the requirement this design exists to serve."""
+        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
+        _, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
         ident = diary.identity_put(laptop, "alice", ALICE,
                                    secret_wrapped=travel, kdf="argon2id")
         merger.merge(phone, laptop)
         self.assertIn(travel, reader.get(phone, ident).body)
 
 
-class TheTrapdoorIsDestroyed(StateTest):
-    """N-12. The factors are the shortcut, so nobody holds them -- including the
-    owner, who has no legitimate use for one because they already hold
-    `local_secret`."""
+class ThePepperIsDiscarded(StateTest):
+    """N-11. It must not survive sealing in any form."""
 
-    def test_N12_make_nonce_returns_only_the_modulus(self):
-        """It must not hand back p or q in any form. With phi(n) an attacker
-        computes 2^t mod phi(n) and collapses the chain into one
-        exponentiation."""
-        result = secret.make_nonce(2048)
-        self.assertIsInstance(result, int)
+    def test_N11_seal_returns_no_pepper(self):
+        result = secret.seal(SECRET, PASSWORD, NONCE, B)
+        self.assertEqual(len(result), 3)
 
-    def test_N14_the_modulus_is_the_stated_size(self):
-        """The hardening is bounded by the difficulty of FACTORING this: an
-        attacker who factors the nonce recovers the shortcut and the travel seal
-        falls back to plain kdf strength. So the size is a stated parameter with
-        a review date, not a constant chosen once."""
-        self.assertEqual(secret.make_nonce(2048).bit_length(), 2048)
-
-    def test_N14_a_larger_nonce_is_available(self):
-        """Control on the same point: if the size cannot move, it is not a
-        parameter and the review date means nothing."""
-        self.assertEqual(secret.make_nonce(3072).bit_length(), 3072)
-
-
-class Sequentiality(StateTest):
-    """N-11."""
-
-    def test_N11_more_squarings_give_a_different_key(self):
-        """The chain must actually depend on t, or `t` is a decorative
-        parameter."""
-        nonce = secret.make_nonce(2048)
-        k = secret.k_local(PASSWORD, nonce)
-        self.assertNotEqual(secret.k_travel(k, nonce, t=1 << 10),
-                            secret.k_travel(k, nonce, t=1 << 11))
-
-    def test_N11_the_chain_is_deterministic(self):
-        """Same input, same t, same key -- otherwise no peer could ever unlock
-        what another sealed."""
-        nonce = secret.make_nonce(2048)
-        k = secret.k_local(PASSWORD, nonce)
-        self.assertEqual(secret.k_travel(k, nonce, t=1 << 10),
-                         secret.k_travel(k, nonce, t=1 << 10))
+    def test_N11_a_larger_b_gives_a_larger_search(self):
+        """The cost must actually depend on b, or b is decorative."""
+        self.assertGreater(secret.expected_cost(16)[0],
+                           secret.expected_cost(12)[0])
 
 
 class TheAsymmetry(StateTest):
-    """N-13. THE POINT, and the reason to state what it is not.
+    """N-12. The owner pays once at enrolment; an attacker pays per guess."""
 
-    It is NOT that sequential work defeats parallel attack -- password cracking
-    parallelizes across guesses, not within one, so `t` behaves like a KDF cost
-    parameter. What differs is WHEN THE DEFENDER PAYS.
+    def test_N12_the_everyday_path_does_no_search(self):
+        """A kdf slow enough to impose the same per-guess cost would be paid
+        here, on every single unlock, which is why it is not an alternative."""
+        local, _, _ = secret.seal(SECRET, PASSWORD, NONCE, 24)
+        self.assertEqual(secret.unlock_local(local, PASSWORD, NONCE), SECRET)
+
+    def test_N12_a_wrong_password_fails_on_the_local_path(self):
+        """Control: the pepper is on top of the password, not instead of it."""
+        local, _, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
+        self.assertNotEqual(secret.unlock_local(local, "wrong", NONCE), SECRET)
+
+
+class DefenderParallelism(StateTest):
+    """N-13. The reason the pepper beats a sequential construction, and it is
+    counter-intuitive enough to be worth a test.
+
+    Serial work sounds like it defeats parallel attack and does not: cracking
+    parallelizes across GUESSES, not within one. Given that, what matters is
+    that the defender may parallelize ITS search while the attacker's per-guess
+    advantage is unchanged -- so every core the owner brings to enrolment raises
+    what an attacker must spend per guess, for the same enrolment wall-clock.
     """
 
-    def test_N13_the_everyday_path_does_no_squaring(self):
-        """The owner on their own device pays a kdf and nothing else. A KDF slow
-        enough to impose the same per-guess cost as `t` would be paid here, on
-        every single unlock, which is why it is not an alternative."""
-        nonce = secret.make_nonce(2048)
-        local, _ = secret.seal(SECRET, PASSWORD, nonce, t=1 << 20)
-        self.assertEqual(secret.unlock_local(local, PASSWORD, nonce), SECRET)
+    def test_N13_the_search_accepts_worker_parallelism(self):
+        _, travel, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
+        self.assertEqual(
+            secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier,
+                                 workers=8), SECRET)
 
-    def test_N13_the_enrolment_path_pays_the_lock_once(self):
-        nonce = secret.make_nonce(2048)
-        _, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 12)
-        self.assertEqual(secret.unlock_travel(travel, PASSWORD, nonce, t=1 << 12),
-                         SECRET)
-
-    def test_N13_a_wrong_password_fails_on_both_paths(self):
-        """Control: the lock is on top of the password, not instead of it."""
-        nonce = secret.make_nonce(2048)
-        local, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 12)
-        self.assertNotEqual(secret.unlock_local(local, "wrong", nonce), SECRET)
-        self.assertNotEqual(
-            secret.unlock_travel(travel, "wrong", nonce, t=1 << 12), SECRET)
+    def test_N13_parallelism_does_not_change_the_result(self):
+        """Control: a search that returns different answers on different core
+        counts is not a search."""
+        _, travel, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
+        one = secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier, workers=1)
+        many = secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier, workers=8)
+        self.assertEqual(one, many)
 
 
-class MemoryHardnessIsSeparate(StateTest):
-    """N-15. Modular squaring is low-memory and ASIC-friendly -- the opposite of
-    what constrains parallel cracking hardware. The two defend different axes."""
+class MemoryHardness(StateTest):
+    """N-14. Load-bearing rather than hygiene: the kdf is evaluated 2^(b-1)
+    times per guess, so its resistance to parallel hardware multiplies through
+    the whole search. This is what the rejected construction could not offer --
+    modular squaring is low-memory and ASIC-friendly."""
 
-    def test_N15_the_local_kdf_is_memory_hard_on_its_own_account(self):
-        nonce = secret.make_nonce(2048)
-        diary_store = a_store(principal=ALICE)
-        ident = diary.identity_put(diary_store, "alice", ALICE,
+    def test_N14_the_kdf_is_recorded_and_memory_hard(self):
+        store = a_store(principal=ALICE)
+        ident = diary.identity_put(store, "alice", ALICE,
                                    secret_wrapped=b"sealed", kdf="argon2id")
-        self.assertIn(b"argon2", reader.get(diary_store, ident).body)
+        self.assertIn(b"argon2", reader.get(store, ident).body)
+
+
+class NoStructuralBreak(StateTest):
+    """N-15. A pepper is entropy: no factoring assumption, no trapdoor to
+    destroy, no shortcut for anyone who learns a parameter."""
+
+    def test_N15_the_cost_is_a_function_of_b_alone(self):
+        """Not of a hardness assumption with a review date. Everything an
+        attacker needs to know is public, and it still costs 2^(b-1)."""
+        self.assertEqual(secret.expected_cost(20),
+                         (1 << 19, 1 << 20))
 
 
 class RecordedParameters(StateTest):
-    """N-16. A peer that cannot tell how much work the seal requires cannot
-    unlock it."""
+    """N-16, N-16a, N-16b."""
 
-    def test_N16_t_and_the_nonce_size_travel_with_the_identity(self):
-        laptop = a_store(principal=ALICE)
-        phone = a_store(principal=ALICE)
-        nonce = secret.make_nonce(2048)
-        _, travel = secret.seal(SECRET, PASSWORD, nonce, t=1 << 16)
+    def test_N16_b_and_the_kdf_travel_with_the_identity(self):
+        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
+        _, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
         diary.identity_put(laptop, "alice", ALICE, secret_wrapped=travel,
                            kdf="argon2id")
         merger.merge(phone, laptop)
-        params = secret.parameters(phone, ALICE)
-        self.assertEqual(params["t"], 1 << 16)
-        self.assertEqual(params["nonce_bits"], 2048)
+        self.assertEqual(secret.parameters(phone, ALICE)["b"], B)
 
-    def test_N16_raising_t_does_not_orphan_an_existing_identity(self):
-        """Identities sealed under the old value must stay unlockable, or a
+    def test_N16_raising_b_does_not_orphan_an_existing_identity(self):
+        """Identities sealed under the old value must stay openable, or a
         parameter change silently locks people out of their own keys."""
         store = a_store(principal=ALICE)
-        nonce = secret.make_nonce(2048)
-        _, old = secret.seal(SECRET, PASSWORD, nonce, t=1 << 12)
-        diary.identity_put(store, "alice", ALICE, secret_wrapped=old,
+        _, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, 10)
+        diary.identity_put(store, "alice", ALICE, secret_wrapped=travel,
                            kdf="argon2id")
-        self.assertEqual(secret.parameters(store, ALICE)["t"], 1 << 12)
+        self.assertEqual(secret.parameters(store, ALICE)["b"], 10)
+
+    def test_N16a_a_wrong_password_fails_in_one_kdf(self):
+        """Without the verifier a typo is indistinguishable from a pepper not
+        yet found, so it costs the full 2^b -- terrible to use, and a denial of
+        service against yourself."""
+        _, _, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
+        self.assertFalse(secret.verify_password(verifier, "wrong", NONCE))
+
+    def test_N16a_the_right_password_verifies(self):
+        """Control."""
+        _, _, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
+        self.assertTrue(secret.verify_password(verifier, PASSWORD, NONCE))
+
+    def test_N16b_the_cost_is_probabilistic_and_says_so(self):
+        """Expected 2^(b-1), worst case 2^b, so enrolment varies by up to a
+        factor of two. A progress indicator assuming a fixed cost will lie."""
+        expected, worst = secret.expected_cost(B)
+        self.assertEqual(worst, 2 * expected)
 
 
 class Rekey(StateTest):
     """N-17. Device removal is a re-key, not a delete."""
 
     def test_N17_a_rekey_replaces_the_root_set(self):
-        """Unwrapping a recipient does not un-tell them a key they already
-        hold."""
         store = a_store(principal=ALICE)
         secret.rekey(store, new_roots=(ALICE,))
         self.assertEqual(tuple(diary.roots(store)), (ALICE,))
@@ -181,16 +180,14 @@ class Rekey(StateTest):
     def test_N17_the_removed_device_keeps_what_it_had(self):
         """Forward-only, like every other revocation here. Saying so is the
         difference between a limitation and a false promise."""
-        laptop = a_store(principal=ALICE)
-        lost = a_store(principal=BOB)
+        laptop, lost = a_store(principal=ALICE), a_store(principal=BOB)
         put = writer.put(laptop, an_assertion(author=ALICE))
         merger.merge(lost, laptop)
         secret.rekey(laptop, new_roots=(ALICE,))
         self.assertIsNotNone(reader.get(lost, put.id))
 
     def test_N17_the_removed_device_learns_nothing_after(self):
-        laptop = a_store(principal=ALICE)
-        lost = a_store(principal=BOB)
+        laptop, lost = a_store(principal=ALICE), a_store(principal=BOB)
         merger.merge(lost, laptop)
         secret.rekey(laptop, new_roots=(ALICE,))
         writer.put(laptop, an_assertion(author=ALICE, akey="after"))
