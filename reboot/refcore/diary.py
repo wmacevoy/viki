@@ -76,3 +76,70 @@ def vocabulary(store, diary: str) -> tuple:
     items processed -- stated, not assumed away.
     """
     raise NotImplementedError("D-3b")
+
+
+# ---- N series: the root of authority ---------------------------------------
+#
+# The anchor is the CONTAINER, not the content. A row can claim anything; a row
+# cannot let you open a database. That asymmetry is the whole mechanism.
+
+def roots(store) -> tuple:
+    """N-3. The root-authority public keys: the recipients the database key is
+    wrapped to.
+
+    Read from `dbkey_wrap`, which is container structure and never merged — so a
+    peer cannot promote itself by writing a row, because it would have to wrap a
+    key it does not hold.
+    """
+    raise NotImplementedError("N-3")
+
+
+def add_root(store, recipient: str, wrapped: bytes) -> None:
+    """N-3, N-9. Wrap the database key to another recipient.
+
+    Requires the database key, which means **anyone in the domain can do this.**
+    Stated rather than defended: root authority is exactly as strong as
+    database-key custody and no stronger, which is the same guardrail-not-boundary
+    line the project already draws.
+    """
+    raise NotImplementedError("N-3, N-9")
+
+
+def identity_put(store, name: str, pubkey: str,
+                 secret_wrapped: bytes | None = None, kdf: str = "") -> str:
+    """N-1, N-8. Record an identity.
+
+    `secret_wrapped` is this identity's private key under a PASSWORD, so N-8's
+    slow KDF applies — and must never share a code path with N-7's raw database
+    key. One "unlock" function treating both alike is the single most likely way
+    to get this wrong.
+    """
+    raise NotImplementedError("N-1")
+
+
+def authoritative(store, pubkey: str) -> bool:
+    """N-2. Is this identity's row signed by a root-authority key?
+
+    An unsigned or unrootable identity is stored, readable, and confers nothing.
+    """
+    raise NotImplementedError("N-2")
+
+
+def may_grant(store, issuer: str, diary: str, rights: int) -> bool:
+    """N-4, N-5. May `issuer` confer exactly these rights?
+
+    Only when the issuer's identity is authoritative (N-2) **and the issuer
+    already holds every right being granted**. Delegation narrows; it never
+    escalates. Root authorities hold everything, which is what terminates the
+    chain rather than leaving it circular.
+    """
+    raise NotImplementedError("N-4, N-5")
+
+
+def inert_grants(store) -> tuple:
+    """N-6. Grants stored but not honored for want of a path to a root.
+
+    Kept and counted, not discarded — the same shape as an unauthorized
+    tombstone, and for the same reason: an attempted escalation is evidence.
+    """
+    raise NotImplementedError("N-6")

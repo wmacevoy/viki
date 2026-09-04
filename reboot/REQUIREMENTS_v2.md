@@ -268,8 +268,16 @@ requirement was to clean itself up (C-8).
 - **S-8** **The receiver bounds its own cost.** A sender does not choose how much verification,
   storage or bandwidth a receiver spends, and hitting a bound is reported rather than silent —
   otherwise a truncated sync is indistinguishable from a converged one.
-- **S-9** A hub relays **without holding keys**: it can answer S-1 and carry rows it cannot read.
-  It must still apply tombstones, or it re-serves erased content to every peer that pulls from it.
+- **S-9** **A relay and a peer are different roles, and only one of them can sweep.** A **peer**
+  holds the database key, reads, and applies tombstones. A **relay** holds no key, carries ciphertext,
+  applies nothing, and **must not claim to** — it cannot judge a tombstone's authority (N-2) because
+  it cannot read the identity that signed it.
+- **S-9a** A relay therefore **does** re-serve withdrawn content, and that is inherent rather than a
+  defect to patch: a relay carrying an opaque blob cannot know what is inside it. The mitigation is
+  the container, not the sweep — what a relay carries is superseded wholesale by a later snapshot,
+  which is the `owned` recursion noted below. v1's and v2's "the hub must still sweep" was the wrong
+  demand, and it was the third leg of the contradiction that made the whole authority triangle
+  unsatisfiable (B-4).
 - **S-10** Sync obeys diary scope. No S operation reaches a `never` diary (D-2), and a sync between
   different diary identities is refused (M-8).
 - **S-11** Rows already verified are not re-verified. Without this, incremental *transfer* still
@@ -320,6 +328,41 @@ requirement was to clean itself up (C-8).
 - **I-7** An unsigned assertion does not resolve. It is stored, readable and reported as a claim, and
   it never becomes current. This answers v1's open question 5, which left author-spoofing a supported
   operation that wins by rank (F-10).
+
+## N — The root of authority
+
+The gap every review converged on: v2 said grants confer rights and never said **who may issue
+one**, so the only implementation passing the whole suite was "a relay applies every tombstone it
+receives" — a censorship amplifier for the fleet (`FINDINGS.md` B-4, T-1c).
+
+The anchor is the **container**, not the content. That is what makes it unforgeable by anything
+merged in: a row can claim anything, but a row cannot let you open a database.
+
+- **N-1** An **identity** is a row carrying a name, a public key, and optionally that identity's
+  secret key encrypted under a password. Identities live in the diary and merge like everything else.
+- **N-2** An identity row is **authoritative only when signed by a root-authority key.** An unsigned
+  or unrootable identity is stored, readable, and confers nothing.
+- **N-3** **A root-authority key is one to which the database key is wrapped.** The set of roots is
+  therefore read from the key-wrap table, which is container structure rather than merged content —
+  so a peer cannot promote itself by writing a row, because it would have to wrap a key it does not
+  have.
+- **N-4** A **grant is honored only when** its issuer's identity is authoritative (N-2) **and the
+  issuer already holds the right being granted.** Delegation narrows; it never escalates.
+- **N-5** Root authorities hold every right. That is what root means, and it is what terminates the
+  delegation chain rather than leaving it circular.
+- **N-6** A grant that cannot be traced to a root is **stored and inert, and counted** — the same
+  shape as an unauthorized tombstone (W-5), and for the same reason: an attempted escalation is
+  evidence.
+- **N-7** **The database key is random and full-entropy, so it is used raw with no key derivation.**
+  Stretching exists to compensate for low-entropy input; there is none here, and the cost is not
+  academic — 5.99 ms to open with a raw key versus 345.93 ms with a passphrase, measured.
+- **N-8** **A password-encrypted secret key DOES require a slow KDF**, because its input is a
+  password. N-7 and N-8 must never share a code path: the single most likely way to get this wrong is
+  one "unlock" function that treats both inputs alike.
+- **N-9** **Anyone holding the database key can add a root**, because wrapping the key to a new
+  recipient requires only the key. This is stated rather than defended — it is the same
+  guardrail-not-boundary line the project already draws, and it means root authority is exactly as
+  strong as database-key custody and no stronger.
 
 ## C — Time
 
@@ -395,8 +438,21 @@ ownership rule is decided.
    bound, and does the user get told before something becomes unrecoverable?
 3. **What the cloud PM in U-2 is trusted with.** It receives published summaries, so it is an operator
    adversary with a bounded view — but the bound has never been written down.
-4. **The reference format.** A Gmail message id, a Graph id and a Drive id have different stability
+4. **Does `secret_wrapped` travel?** N-1 lets an identity carry its own
+   password-encrypted secret key. Syncing it is what lets a new device enrol by password alone;
+   it is also **offline password-cracking material for anyone who obtains the database key**, which
+   makes every member's password the weakest link the moment a laptop is lost. Public keys and
+   signatures clearly travel. This column is a separate decision and is currently unmade.
+5. **Is a Postgres hub a peer or a relay?** N-3 anchors root authority in the database key, and
+   SQLCipher has no Postgres analogue. As a **relay** holding opaque blobs, Postgres works and the
+   objection dissolves. As a **peer** it needs the key, which means encrypting `body` at the
+   application layer and accepting that metadata — ids, timestamps, akeys, the shape of the graph —
+   sits in the clear where the operator can read it. `FINDINGS.md` T-12 asked this and it is still
+   the question that decides the G series.
+6. **The reference format.** A Gmail message id, a Graph id and a Drive id have different stability
    and different versioning. X-7 assumes an etag exists everywhere; that needs checking per system
    before it is a requirement.
-5. **How a phone joins a domain.** D-1 names principals; nothing says how a new device is enrolled or
-   how a lost one is removed.
+7. **How a phone joins a domain, and how a lost one is removed.** N-3 gives half an answer —
+   enrolment is being wrapped into `dbkey_wrap` — but removal is not symmetric: unwrapping a
+   recipient does not un-tell them the database key they already hold, so a lost device is a re-key,
+   not a delete. Nothing states that.
