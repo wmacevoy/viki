@@ -410,11 +410,10 @@ secret searches the `2^b` values of those bits, recovers the original salt, and 
   the only time anyone pays. An attacker pays it **on every password guess**, forever — and a `kdf`
   slow enough to impose the same per-guess cost would be paid by the owner on *every* unlock, which
   is exactly why it is not an alternative.
-- **N-12b** **The assertion carries the truncated salt permanently; recovery writes to a local
-  table.** The alternative — shipping the full salt and letting the transport truncate it — would
-  make the shipped row's id disagree with the creator's, so it would arrive as a different assertion,
-  fork the identity's key, and fail A-7's id check. Recovery reconstructing the canonical id is a
-  pretty property and is not worth a transport that mutates content.
+- **N-12b** **The salt is a local column, initialized from the assertion's truncated value and reset
+  to the recovered one after a search.** Nothing forks: the assertion's copy stays truncated and
+  immutable, so its id never moves, and what changes is local state that never syncs. "Reset the row"
+  is an ordinary local write, not an edit to an immutable assertion.
 - **N-13** **A time-lock puzzle was considered and rejected**, and the reason is worth keeping
   because it is counter-intuitive. Rivest–Shamir–Wagner makes each attempt *serial*, which sounds
   like it defeats parallel attack and does not: cracking parallelizes across **guesses**, not within
@@ -439,6 +438,21 @@ secret searches the `2^b` values of those bits, recovers the original salt, and 
 - **N-16b** The search cost is **probabilistic**, expected `2^(b-1)` and worst case `2^b`, so
   enrolment time varies by up to a factor of two. Stated because a progress indicator that assumes a
   fixed cost will lie.
+- **N-16c** **`b` buys `b` bits of password strength**, and that is the honest way to size it. The
+  search multiplies an attacker's per-guess cost by `2^(b-1)`, which is arithmetically the same as
+  lengthening the password — so the question is never "how much search" but "how many bits am I
+  adding, and to what."
+- **N-16d** **`b = 11`, from a one-minute enrolment budget.** With a memory-hard `kdf` tuned to
+  ~0.5 s per evaluation (the most an everyday unlock should cost) and eight workers,
+  `2^(b-1) = 60 × 8 / 0.5 ≈ 960`, so `b ≈ 11`. The parameter moves by one bit per doubling of the
+  budget, the core count, or the `kdf`'s speed — and the `kdf` is the one of those three that must
+  not be sped up, since its memory-hardness is what caps the attacker's parallelism (N-14).
+- **N-16e** **This does not rescue a weak password, and the arithmetic says so.** Eleven bits turns a
+  20-bit password from about six core-days of cracking into about sixteen core-years, which is
+  decisive; against a 40-bit password both numbers are already beyond reach and the search is
+  irrelevant. The construction is worth most exactly where passwords are worst, which is where they
+  usually are — but it is a multiplier, not a floor, and nothing here removes the need for a
+  password that was not going to fall anyway.
 
 ## C — Time
 

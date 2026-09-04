@@ -87,7 +87,7 @@ def enrol(secret_wrapped: bytes, password: str, truncated_salt: bytes, b: int,
     """N-12, N-12a, N-13, N-16a. The new-device path. Returns (secret, salt).
 
     Searches the 2^b values of the dropped bits and RETURNS THE RECOVERED SALT,
-    so the caller can reset its own row and never search again.
+    so the caller can reset its own local salt and never search again.
 
     `workers` is the defender's parallelism and it is the point (N-13): the
     attacker's per-guess work is unchanged by it, so every core the owner brings
@@ -100,18 +100,27 @@ def enrol(secret_wrapped: bytes, password: str, truncated_salt: bytes, b: int,
     raise NotImplementedError("N-12, N-12a, N-13")
 
 
-def remember_salt(store, identity_id: str, salt: bytes) -> None:
-    """N-12, N-12a. Write the recovered salt to `salt_local`. NEVER syncs.
+def reset_salt(store, identity_id: str, salt: bytes) -> None:
+    """N-12, N-12b. Reset the local salt from the truncated one to the recovered
+    one. NEVER syncs.
 
-    It is the answer to the search: a peer that shared it would broadcast the
-    answer and the hardening would evaporate.
+    The recovered salt is the ANSWER to the search: a peer that shared it would
+    broadcast the answer and the hardening would evaporate.
+
+    Nothing forks. The assertion's copy stays truncated and immutable, so its id
+    never moves; this is an ordinary write to local state.
     """
-    raise NotImplementedError("N-12")
+    raise NotImplementedError("N-12, N-12b")
 
 
-def local_salt(store, identity_id: str) -> bytes | None:
-    """The full salt if this device has it, else None -- meaning search first."""
-    raise NotImplementedError("N-12")
+def local_salt(store, identity_id: str) -> bytes:
+    """The salt this device holds -- truncated until a search resets it.
+
+    Never None: an identity's local salt is initialized from the assertion's
+    truncated value on arrival, so there is one place to look and one thing to
+    reset rather than an absent-versus-present case to get wrong.
+    """
+    raise NotImplementedError("N-12b")
 
 
 def verify_password(verifier: bytes, password: str, truncated_salt: bytes) -> bool:
@@ -135,6 +144,25 @@ def expected_cost(b: int) -> tuple:
     factor of two. A progress indicator assuming a fixed cost will lie.
     """
     raise NotImplementedError("N-16b")
+
+
+# N-16d. Sized from a one-minute enrolment budget: with a memory-hard kdf at
+# ~0.5s per evaluation -- the most an everyday unlock should cost -- and eight
+# workers, 2^(b-1) = 60 * 8 / 0.5 ~= 960, so b ~= 11. One bit per doubling of
+# budget, cores, or kdf speed; and the kdf is the one that must NOT be sped up,
+# since its memory-hardness is what caps the attacker's parallelism (N-14).
+DEFAULT_B = 11
+
+
+def bits_bought(b: int) -> int:
+    """N-16c. `b` bits of truncation buys `b` bits of password strength.
+
+    The honest way to size this: the search multiplies an attacker's per-guess
+    cost by 2^(b-1), which is arithmetically the same as lengthening the
+    password. So the question is never "how much search" but "how many bits, and
+    added to what" -- and N-16e is the answer to the second half.
+    """
+    raise NotImplementedError("N-16c")
 
 
 def rekey(store, new_roots: tuple) -> str:

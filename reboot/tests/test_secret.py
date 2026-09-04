@@ -63,7 +63,7 @@ class TheRecoveredSaltStaysHome(StateTest):
         salt, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
         ident = diary.identity_put(store, "alice", ALICE,
                                    secret_wrapped=wrapped, kdf="argon2id")
-        secret.remember_salt(store, ident, salt)
+        secret.reset_salt(store, ident, salt)
         self.assertEqual(secret.unlock(wrapped, PASSWORD,
                                        secret.local_salt(store, ident)), SECRET)
 
@@ -74,22 +74,32 @@ class TheRecoveredSaltStaysHome(StateTest):
         salt, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
         ident = diary.identity_put(laptop, "alice", ALICE,
                                    secret_wrapped=wrapped, kdf="argon2id")
-        secret.remember_salt(laptop, ident, salt)
+        secret.reset_salt(laptop, ident, salt)
         merger.merge(phone, laptop)
-        self.assertIsNone(secret.local_salt(phone, ident))
+        self.assertEqual(secret.local_salt(phone, ident), trunc)
 
-    def test_N12b_the_assertion_carries_the_truncated_salt(self):
-        """Permanently and everywhere. Shipping the full salt and letting the
-        transport truncate it would make the shipped row's id disagree with the
-        creator's -- a different assertion, a forked identity key, and an A-7
-        failure."""
+    def test_N12b_resetting_the_salt_does_not_fork_the_identity(self):
+        """The assertion's copy stays truncated and immutable, so its id never
+        moves; what is reset is local state. There is no second arm and no A-7
+        failure -- just work to recover the salt."""
+        store = a_store(principal=BOB)
+        salt, trunc, wrapped, verifier = secret.seal(SECRET, PASSWORD, B)
+        ident = diary.identity_put(store, "alice", ALICE,
+                                   secret_wrapped=wrapped, kdf="argon2id")
+        _, recovered = secret.enrol(wrapped, PASSWORD, trunc, B, verifier)
+        secret.reset_salt(store, ident, recovered)
+        self.assertEqual(reader.get(store, ident).id, ident)
+        self.assertIsNone(reader.forks(store, ALICE))
+
+    def test_N12b_the_local_salt_starts_truncated_and_is_never_absent(self):
+        """One place to look and one thing to reset, rather than an
+        absent-versus-present case to get wrong."""
         laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
-        salt, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
+        _, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
         ident = diary.identity_put(laptop, "alice", ALICE,
                                    secret_wrapped=wrapped, kdf="argon2id")
         merger.merge(phone, laptop)
-        self.assertEqual(reader.get(phone, ident).id, ident)
-        self.assertNotIn(salt, reader.get(phone, ident).body)
+        self.assertEqual(secret.local_salt(phone, ident), trunc)
 
     def test_N12a_a_device_that_searched_resets_its_own_row(self):
         store = a_store(principal=BOB)
@@ -97,7 +107,7 @@ class TheRecoveredSaltStaysHome(StateTest):
         ident = diary.identity_put(store, "alice", ALICE,
                                    secret_wrapped=wrapped, kdf="argon2id")
         _, recovered = secret.enrol(wrapped, PASSWORD, trunc, B, verifier)
-        secret.remember_salt(store, ident, recovered)
+        secret.reset_salt(store, ident, recovered)
         self.assertEqual(secret.local_salt(store, ident), salt)
 
     def test_N12a_the_everyday_path_is_one_kdf(self):
@@ -151,6 +161,34 @@ class NoStructuralBreak(StateTest):
 
     def test_N15_the_cost_is_a_function_of_b_alone(self):
         self.assertEqual(secret.expected_cost(20), (1 << 19, 1 << 20))
+
+
+class Sizing(StateTest):
+    """N-16c, N-16d, N-16e. The honest framing: `b` bits of truncation buys `b`
+    bits of password strength, so the question is how many bits and added to
+    what -- never "how much search"."""
+
+    def test_N16c_b_bits_of_truncation_buys_b_bits(self):
+        self.assertEqual(secret.bits_bought(11), 11)
+
+    def test_N16d_the_default_comes_from_a_one_minute_budget(self):
+        """A memory-hard kdf at ~0.5s, eight workers, sixty seconds:
+        2^(b-1) = 60 * 8 / 0.5 ~= 960, so b ~= 11. One bit per doubling of
+        budget, cores, or kdf speed -- and the kdf is the one that must not be
+        sped up, since its memory-hardness caps the attacker's parallelism."""
+        expected, _ = secret.expected_cost(secret.DEFAULT_B)
+        self.assertLess(expected * 0.5 / 8, 60)
+        self.assertGreater(expected * 0.5 / 8, 30)
+
+    def test_N16e_it_is_a_multiplier_and_not_a_floor(self):
+        """Eleven bits turns a 20-bit password from ~six core-days into ~sixteen
+        core-years, which is decisive. Against a 40-bit password both numbers are
+        already out of reach and the search is irrelevant. It is worth most
+        exactly where passwords are worst -- and it rescues nothing that was
+        going to fall anyway."""
+        weak, strong = 20, 40
+        self.assertEqual(weak + secret.bits_bought(secret.DEFAULT_B), 31)
+        self.assertEqual(strong + secret.bits_bought(secret.DEFAULT_B), 51)
 
 
 class RecordedParameters(StateTest):
