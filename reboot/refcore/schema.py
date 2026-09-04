@@ -92,12 +92,12 @@ CREATE TABLE IF NOT EXISTS heap (
 -- independently, which is what lets the phone hold every assertion and almost
 -- no content.
 CREATE TABLE IF NOT EXISTS cache (
-  ref_system  TEXT NOT NULL,
-  ref_ident   TEXT NOT NULL,
-  ref_version TEXT NOT NULL,
+  ref_system  BLOB NOT NULL,
+  ref_ident   BLOB NOT NULL,
+  ref_version BLOB NOT NULL,
   bytes       BLOB NOT NULL,
   pinned      INTEGER NOT NULL DEFAULT 0,   -- X-6. exempt from eviction
-  fetched_at  TEXT NOT NULL,
+  fetched_at  BLOB NOT NULL,
   PRIMARY KEY (ref_system, ref_ident, ref_version)
 ) WITHOUT ROWID;
 
@@ -105,18 +105,18 @@ CREATE TABLE IF NOT EXISTS cache (
 -- GONE is recorded, because an absent cache row means AWAY and the two must
 -- never be conflated (X-3).
 CREATE TABLE IF NOT EXISTS referent (
-  ref_system  TEXT NOT NULL,
-  ref_ident   TEXT NOT NULL,
-  state       TEXT NOT NULL,     -- 'away' | 'gone'
-  seen_at     TEXT NOT NULL,
+  ref_system  BLOB NOT NULL,
+  ref_ident   BLOB NOT NULL,
+  state       BLOB NOT NULL,     -- 'away' | 'gone'
+  seen_at     BLOB NOT NULL,
   PRIMARY KEY (ref_system, ref_ident)
 ) WITHOUT ROWID;
 
 -- D-1, D-6. A store that cannot say where it sends its contents is not usable.
 CREATE TABLE IF NOT EXISTS diary_policy (
-  diary     TEXT PRIMARY KEY,
-  policy    TEXT NOT NULL,       -- 'never' | 'domain' | 'published'
-  endpoint  TEXT
+  diary     BLOB PRIMARY KEY,
+  policy    BLOB NOT NULL,       -- 'never' | 'domain' | 'published'
+  endpoint  BLOB
 ) WITHOUT ROWID;
 
 -- V-3. The reviewable record of what crossed the boundary.
@@ -134,9 +134,13 @@ CREATE TABLE IF NOT EXISTS publication_item (
 
 -- Local, never merged. `seq` orders MY receipts, not their writes (C-2), and
 -- it is what S-4's sender-side watermark counts.
+-- A-4a applies to the LOCAL tables too, and not for portability: in SQLite a
+-- BLOB never equals a TEXT, so a mixed pair makes every join between them
+-- return zero rows silently. Measured. W-10, S-11 and X-8 all join local tables
+-- against `assertion.id`.
 CREATE TABLE IF NOT EXISTS arrival (
   seq  INTEGER PRIMARY KEY AUTOINCREMENT,
-  id   TEXT NOT NULL UNIQUE
+  id   BLOB NOT NULL UNIQUE
 );
 
 -- S-4. PER PEER, because a watermark is sender-side and means nothing to
@@ -144,17 +148,17 @@ CREATE TABLE IF NOT EXISTS arrival (
 -- point and S-11's verified high-water mark, which is why they live together
 -- -- all three answer "how far did I get with this peer".
 CREATE TABLE IF NOT EXISTS peer (
-  peer        TEXT PRIMARY KEY,
+  peer        BLOB PRIMARY KEY,
   given_thru  INTEGER NOT NULL DEFAULT 0,   -- S-4, S-6: rounded DOWN
-  cursor      TEXT,                         -- S-7: resume token
-  last_sync   TEXT                          -- D-6
+  cursor      BLOB,                         -- S-7: resume token
+  last_sync   BLOB                          -- D-6
 ) WITHOUT ROWID;
 
 -- S-11. Rows this store has already verified, so incremental transfer does not
 -- cost a full verification. Local and never merged: a peer's claim to have
 -- verified something is not evidence.
 CREATE TABLE IF NOT EXISTS verified (
-  id  TEXT PRIMARY KEY
+  id  BLOB PRIMARY KEY
 ) WITHOUT ROWID;
 """
 

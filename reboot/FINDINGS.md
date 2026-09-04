@@ -10,6 +10,179 @@ reasoned about.
 
 ---
 
+Source for entries B-1..B-9: an independent buildability and dependency review (2026-09-04). The
+reviewer **implemented ~660 lines and got 92 of 217 tests green**, then verified the contested
+findings by execution rather than by reading. Every measurement below is theirs unless noted.
+
+---
+
+## B-1 The spec is implementable, and that is measured rather than argued
+
+660 lines produced 92/217. Full single-engine SQLite: ~1,800–2,000 lines across the 15 modules
+already laid out, **5–7 weeks** for one engineer; **9–11** with a real wire format and a Postgres
+peer. Plus **2–3 weeks of decisions up front**, which are not coding weeks and need the spec owner.
+
+C, anchored on `core/`'s measured 2,486 lines of code: **~10–12 KLOC across ~18 files, 14–18 weeks**,
+because the reboot spec is a strict superset — grants, three withdrawal tiers with heap and
+custodian, references and cache, derivation and publication, the whole S protocol, per-signer
+signature state, fork detection, 16-byte rank, NFC, framing, and a second engine.
+
+**Recommended sequencing: Python first as the reference and conformance oracle, C second against
+it.** Python does not ship to U-3's phone or to the wasm tier, so C is not optional — but a
+differential oracle (same inputs, same ids, same resolution, same digest roots) is worth more than
+any dependency on the list.
+
+## B-2 T-1d was wrong, and the correction is a single missing return value
+
+The claim that S-1 and S-3 are information-theoretically incompatible **does not hold**. A fixed
+256-cell invertible Bloom lookup table — 17 KB, constant, independent of store size — recovers the
+exact missing ids and reports when it cannot:
+
+```
+store=   5  diff=  3  ->  recovered   3   decoded_cleanly=True    exact=True
+store= 500  diff=  3  ->  recovered   3   decoded_cleanly=True    exact=True
+store=1120  diff=120  ->  recovered 120   decoded_cleanly=True    exact=True
+store=1200  diff=200  ->  recovered  41   decoded_cleanly=False   exact=False
+```
+
+Every S test as written is satisfiable. What is missing is **one return value**: `lacking()` must be
+able to say "the sketch overflowed, this is partial" — the same shape as `SyncReport.bounded`, which
+the spec already got right for the transfer half and forgot for the query half. Downgrade T-1d from
+"the API shape is wrong" to "the API is missing a completeness flag."
+
+## B-3 T-1a is confirmed but not blocking; T-1b is blocking and cheap
+
+**T-1a** reproduces exactly: with the sane rule, `test_lying_a_forged_id_does_not_enter_the_store`
+passes and both M-7 tests die with `BadId` inside `writer.put` before reaching their assertions. **The
+fix is one line of test, not a requirement change:** plant the bad row with a raw
+`theirs.conn.execute("INSERT INTO assertion …")`. **A merge source is untrusted by definition and
+should never have to be reachable through the trusted write path.**
+
+**T-1b** reproduces: both healing assertions differ only in `supersedes`, so both become new
+unsuperseded heads and the fork survives. Blocking, and about a day's work — make `supersedes` a
+tuple, frame it as a length-prefixed sorted list, move the edge to a `supersedes(id, parent)` table.
+That is T-4's multi-parent recovery, and it is the right model regardless: "one node reconciles two
+lines" is a real thing a single parent cannot say.
+
+## B-4 T-1c is the one real hole, and it is a missing requirement
+
+Rules (1) and (2) of the triangle *are* jointly satisfiable — "the receiving store's grant view must
+name the tombstone's author as holding `x`." Rule (3), the hub with `grants=()` that must still apply
+a tombstone, then breaks. The only escape passing all three is "`relay` sweeps without judging
+authority, `merge` judges," **which makes every hub a censorship amplifier for the whole fleet.**
+
+Confirmed by grep: `REQUIREMENTS_v2.md` contains **no rule about who may issue a grant.** No root of
+authority, no delegation constraint. This is not a test bug.
+
+## B-5 Two live bugs introduced by the A-4a edit itself *(measured, now fixed)*
+
+**The DDL type split.** `assertion.id` was BLOB while `arrival.id` and `verified.id` were TEXT, and
+`assertion.ref_*` was BLOB while `cache.ref_*` was TEXT. **In SQLite a BLOB never equals a TEXT** —
+measured: `SELECT count(*) FROM assertion JOIN verified ON assertion.id = verified.id` returns **0**
+for identical content. W-10, S-11 and X-8 all depend on exactly those joins. This is the T-2/T-3
+class of defect reproduced *inside the requirement written to close it*, because the edit converted
+the truth tables and stopped there.
+
+**Invalid timestamps in the sync fixture.** `"2026-09-04T12:%02d:00Z" % i` yields `12:60:00Z` at
+i=60 and worse beyond, so `test_S3_a_digest_does_not_grow_with_the_store` — which fills 500 rows —
+**could never pass any C-3-compliant implementation.** `check.py` could not see it: the test dies in
+`writer.py` one frame earlier, which is T-10's "C-1 displaced one frame" arriving with a concrete
+instance.
+
+Both fixed. Neither was catchable by the gate as it stands.
+
+## B-6 Six further defects, unfixed
+
+1. **A-4 vs A-4a: you cannot NFC-normalize invalid UTF-8**, and one test requires normalization while
+   another requires `b"\xff\xfe…"` to round-trip. One rule satisfies both, verified: decode
+   `surrogateescape` → NFC → encode `surrogateescape`. **It must be stated**, because it is a hash
+   rule and two peers guessing differently fragment the store silently.
+2. **D-3a is false as tested.** `test_D3c` grants an agent `S` alone and then reads full bodies out
+   of `reader.log`, while `test_D3a` asserts the same agent gets `Unauthorized` from `reader.get`. An
+   `s`-only agent reads everything through the log view. **D-3a's headline — "a fully compromised
+   agent still cannot read" — does not survive its own suite.**
+3. **`derived_from` is outside the frame and outside the merge.** Not among the eight hashed fields
+   and not a step in the merge order, so V-1's edges are unauthenticated, two assertions with
+   different sources collide on one id, and after a merge `derivatives_of()` is empty — silently
+   disabling W-13's flagging on exactly the peer that received the summary.
+4. **R-4 needs two enforcement points with two behaviours** — refuse in `supersede`, ignore-at-fold in
+   `current` — and nothing says so. The fold-time half costs an author-rights lookup on every arm of
+   every read, **a real cost nobody has costed.**
+5. **C-3's skew tolerance is unstated and load-bearing.** Measured: at a 5-minute bound, 6 of 25 sync
+   tests are refused at write time by their own fixture; at 60 minutes, 1.
+6. **G-1 has no implementation surface.** Nothing in `refcore` takes or returns wire bytes;
+   `merger.merge` and all three `sync` entry points bind two live `Store` objects — structurally the
+   same coupling T-12 condemns in the predecessor.
+
+## B-7 D-4 and S-9 are enforced by a Python `if`
+
+`test_D4` checks that `reader.get` raises `Unauthorized` on a store whose SQLite file the relay
+operator owns. The K4 table claims "a relay learns only ciphertext"; **no requirement anywhere says
+anything is encrypted.** v1's permission filter was deleted for being a non-boundary, and two D/S
+requirements whose only possible implementation is that same non-boundary were kept.
+
+## B-8 Dependencies: the honest answer is that almost none help
+
+**Refuse:** every CRDT library (the data model *is* a 2P-Set; union is ten lines, and any library
+brings its own identity model and fights A-1); **CBOR and every canonical-serialization library**
+("deterministic CBOR" is opt-in per library and its failure modes — map ordering, indefinite lengths,
+float canonicalization — are the exact class T-12 names for PG's json builder); LMDB/RocksDB (the SQL
+is not where the difficulty is, and SQLCipher gives at-rest encryption free); git/IPFS/Fossil; any
+migration tool; **`oopc` as a link** (86 lines of reusable code, unlicensed, 8 commits, no external
+adopters, ~50 lines of boilerplate per class — copy `Type.h`/`Type.c` and adopt the convention, which
+is what `core/` already does).
+
+**minisketch** would make S-1/S-3 exactly true in one round and is production-proven in Erlay, but
+it is C++ with BCH algebra nobody here can audit, and a 60-line IBLT already satisfies every S test.
+**Read `negentropy`'s protocol spec** — range-based set reconciliation, the same problem, well
+documented — before designing the multi-round fallback. **Copy the protocol, not the code.**
+
+**Take:** `hypothesis` in Python, test-only. The top-line claim of the system is a semilattice law and
+the suite checks it at three hand-written points; generated operation sequences with shrinking are
+the difference between believing merge is confluent and having a minimal counterexample. It attacks
+the hardest correctness risk (sweep confluence under merge, G-6) at zero runtime obligation. For C,
+hand-roll ~150 lines that double as the differential oracle against the Python reference.
+
+**LibreSSL's `libcrypto` is already paid for** by SQLCipher-LibreSSL, so use its SHA-256 and
+**delete `core/src/sha256.c`** — its header still claims "not a security boundary" while the function
+now computes the id that Ed25519 signs, and **there is no known-answer test for it anywhere in the
+153-assertion probe**, so a different-but-consistent hash would pass the entire suite.
+
+**`retain-recall` with eyes open:** MIT, real CI across three OSes and three TLS backends with
+sanitizers — but **every invariant is an `assert()`, so `NDEBUG` deletes all of them** and `RECALL` on
+an empty stack is a null dereference in any Release build. And ambient thread-local context is a poor
+match for a layer whose whole job is holding two stores at once; an explicit `Store*` parameter fits
+better.
+
+**C's one forcing dependency is NFC**: there is no libc normalization, so it is ICU (unacceptable) or
+utf8proc (one .c plus a table, MIT). **Better: narrow A-4** so `akey`/`kind`/`author` are opaque bytes
+chosen by the `KindSpec` and normalization is the caller's problem, *verified* rather than performed.
+That is Fossil's answer (T-7), costs nothing, and removes the dependency entirely.
+
+Also flagged: **`retain.h` is an unvendored dependency of `core/`'s public header**, the comment
+claiming it is vendored is false, and `core/build.sh` fails today without `VIKI_RETAIN_DIR`.
+
+## B-9 Two recommendations, ranked
+
+**First — write down the root of authority:** who may issue a grant, and what a receiving store does
+with a grant it cannot trace to that root. It is the only genuinely unsatisfiable thing in the
+specification (B-4). Everything downstream depends on it: W-5's sweep, D-3a's confinement claim,
+S-9's hub, I-4, I-6's rotation, and whether merging grants is safe or is a self-promotion vector.
+
+**Second, cheap and same week — promote A-3's framing to be the wire format**, and add `derived_from`
+to it. That turns G-1 from a sentence into code, gives the S protocol something to ship, kills the
+two-live-handles coupling the spec criticises in its predecessor and then reproduces, and closes B-6.3
+— with one encoder, no options, and no new dependency.
+
+**And a subtraction: cut the G series to G-1 and G-2 for v1.** Nobody has answered T-12's strategic
+question — if the hub cannot read rows, Postgres buys nothing a blob store would not, and there is no
+PG analogue of SQLCipher; if it can, D-4 and S-9 are false. Keep A-4a's bytes rule and A-2a's rank
+width, which are correct on their own merits. Drop "a peer may be Postgres" until the hub-trust
+question is answered: it deletes four requirements, a class of dialect work, and the
+`WITHOUT ROWID`/`AUTOINCREMENT` problem.
+
+---
+
 Source for entries T-1..T-12: an independent three-way comparison (2026-09-04) of `reboot/`,
 `core/` and `vendor/fossil-see`, stopped early and delivered as a partial. Verdict: **treat
 `REQUIREMENTS_v2.md` as a patch list against `core/`, not a replacement.** *(Verified)* = the
@@ -47,7 +220,7 @@ flips, because the merge delivers BOB's **self-issued** `R|S|X`.
 There is no root of authority and no delegation constraint.** This is F-9 and C-9 — both named as v1
 defects, both reproduced in the v2 fixture, while `diary.py:30-38` documents the fix in prose.
 
-**T-1d S-1 and S-3 are information-theoretically incompatible.** `Digest` is fixed at 256 buckets
+**T-1d S-1 and S-3 are information-theoretically incompatible. — OVERSTATED, see B-2.** `Digest` is fixed at 256 buckets
 and `test_sync.py:86-91` pins that count equal for a 5-row and a 500-row store. But
 `lacking(store, remote: Digest)` is a pure local function of one store and one static digest, and
 `test_sync.py:30-34` requires it to return three exact sha256 ids. You cannot recover d arbitrary

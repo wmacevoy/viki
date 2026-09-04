@@ -10,16 +10,28 @@ the assistant diary on battery, over a connection that drops, against a store
 that only ever grows.
 """
 
+from datetime import datetime, timedelta
+
 from refcore import merger, sync, withdrawal, writer
 from refcore.errors import NoSyncPath, Refused
 from refcore.model import Reason, SyncPolicy
 from tests.support import (ALICE, BOB, StateTest, a_ref, a_store, an_assertion)
 
 
+def a_ts(i):
+    """Valid ISO for any i. The first version of this was
+    `"2026-09-04T12:%02d:00Z" % i`, which yields '12:60:00Z' at i=60 and worse
+    beyond -- so the 500-row digest test could never pass a C-3-compliant
+    implementation, and check.py could not see it because the test died one
+    frame earlier in writer.py."""
+    return (datetime(2026, 9, 4, 12, 0, 0)
+            + timedelta(seconds=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def fill(store, n, prefix=b"row"):
     return [writer.put(store, an_assertion(akey="k%d" % i,
                                            body=prefix + b"-%d" % i,
-                                           ts="2026-09-04T12:%02d:00Z" % i)).id
+                                           ts=a_ts(i))).id
             for i in range(n)]
 
 
