@@ -20,14 +20,24 @@ CREATE TABLE IF NOT EXISTS assertion (
   ref_system   BLOB,               -- X-1. the reference is framed;
   ref_ident    BLOB,               --      the content is not
   ref_version  BLOB,
-  supersedes   BLOB,
   body         BLOB NOT NULL
 ) WITHOUT ROWID;
 
 -- (akey, arank, id) -- `id` is in the index because R-2 breaks rank ties by id,
 -- and an index stopping at arank leaves the tiebreak to the query plan.
 CREATE INDEX IF NOT EXISTS assertion_resolve ON assertion(akey, arank, id);
-CREATE INDEX IF NOT EXISTS assertion_super   ON assertion(supersedes);
+-- T-1b. The supersession edge, one row per parent, because an assertion may
+-- reconcile SEVERAL arms of a fork. A single `supersedes` column cannot express
+-- that, and R-7's healing is unsatisfiable without it.
+--
+-- Grow-only and derived from the assertion's framed content, so it merges by
+-- being recomputed rather than by being trusted.
+CREATE TABLE IF NOT EXISTS supersedes (
+  id      BLOB NOT NULL,        -- the superseding assertion
+  parent  BLOB NOT NULL,        -- one of the assertions it retires
+  PRIMARY KEY (id, parent)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS supersedes_parent ON supersedes(parent);
 CREATE INDEX IF NOT EXISTS assertion_ref     ON assertion(ref_system, ref_ident);
 
 -- The remove-set. NOTHING DELETES FROM THIS TABLE (W-2).

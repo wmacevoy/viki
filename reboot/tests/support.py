@@ -15,6 +15,7 @@ import hashlib
 import sqlite3
 import unittest
 
+from refcore import schema
 from refcore.errors import Gone
 from refcore.model import (Assertion, Grant, Reference, SyncPolicy, R, S, X)
 from refcore.store import Store
@@ -151,7 +152,7 @@ def a_ref(system="gmail", ident="msg-1", version="v1"):
 
 def an_assertion(*, author=ALICE, kind="note", akey="k",
                  ts="2026-09-04T12:00:00Z", rank=None, body=b"hello",
-                 reference=None, supersedes=None, derived_from=()):
+                 reference=None, supersedes=(), derived_from=()):
     return Assertion(author=author, kind=kind, akey=akey, ts=ts,
                      rank=rank if rank is not None else rank_of(ts), body=body,
                      reference=reference, supersedes=supersedes,
@@ -171,6 +172,28 @@ def a_store(principal=ALICE, *, diary="personal", clock=None, signer=_UNSET,
                  verifier=verifier or FakeVerifier(), custodian=custodian,
                  fetcher=fetcher, kinds=kinds or (NoteKind(), CountedKind()),
                  grants=grants, policy=policy, endpoint=endpoint)
+
+
+def plant(store, assertion, forged_id):
+    """Write a row a trusted `put` would refuse, straight into the table.
+
+    THE FIX FOR FINDINGS T-1a. Two tests were mutually unsatisfiable because
+    both used `writer.put`: one required it to REFUSE a mismatched id (A-7) and
+    the other required it to ACCEPT one, so that merge had a row to quarantine
+    (M-7). Only one of those can be the write path's behaviour.
+
+    A merge source is untrusted BY DEFINITION, so a corrupt row should never
+    have to be reachable through the trusted door. Planting it directly is what
+    a corrupt peer, a bad encoder or a truncated transfer actually produces --
+    and it lets A-7 refuse at the write path and quarantine at the merge path
+    without contradiction.
+    """
+    schema.install(store.conn)          # planting needs the tables to exist
+    store.conn.execute(
+        "INSERT INTO assertion(id, author, kind, akey, arank, ts, body)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (forged_id, assertion.author, assertion.kind, assertion.akey,
+         assertion.rank, assertion.ts, assertion.body))
 
 
 class StateTest(unittest.TestCase):

@@ -6,7 +6,8 @@ import sqlite3
 from refcore import merger, reader, writer
 from refcore.errors import IncompleteMerge, NoSyncPath, NotAStore
 from refcore.model import SigState, SyncPolicy
-from tests.support import ALICE, BOB, FakeSigner, StateTest, a_store, an_assertion
+from tests.support import (ALICE, BOB, FakeSigner, StateTest, a_store,
+                           an_assertion, plant)
 
 
 def ids_in(store, akey="k"):
@@ -78,9 +79,10 @@ class Quarantine(StateTest):
     def test_M7_one_bad_row_does_not_wedge_the_merge(self):
         mine, theirs = a_store(), a_store()
         writer.put(theirs, an_assertion(body=b"good"))
-        bad = an_assertion(akey="other", body=b"bad")
-        object.__setattr__(bad, "id", "not-a-hash")
-        writer.put(theirs, bad)
+        # Planted, not put: A-7 refuses a mismatched id at the write path, so a
+        # corrupt row can only arrive the way a corrupt row really arrives
+        # (FINDINGS T-1a).
+        plant(theirs, an_assertion(akey="other", body=b"bad"), "not-a-hash")
         report = merger.merge(mine, theirs)
         self.assertEqual(report.quarantined, 1)
         self.assertEqual(report.added, 1)
@@ -88,9 +90,7 @@ class Quarantine(StateTest):
     def test_M7_a_quarantined_merge_is_not_reported_complete(self):
         """Honest about what did not land, and not a wedge. Both halves."""
         mine, theirs = a_store(), a_store()
-        bad = an_assertion(body=b"bad")
-        object.__setattr__(bad, "id", "not-a-hash")
-        writer.put(theirs, bad)
+        plant(theirs, an_assertion(body=b"bad"), "not-a-hash")
         self.assertFalse(merger.merge(mine, theirs).complete)
 
     def test_M7_a_clean_merge_quarantines_nothing(self):

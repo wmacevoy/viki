@@ -139,7 +139,9 @@ Everything in this section follows from U-4, and none of it exists in v1.
 ## A — Assertions
 
 - **A-1** Two peers stating the same thing produce the same id.
-- **A-2** The id covers author, kind, akey, ts, **rank**, reference, supersedes, and body. Rank is in
+- **A-2** The id covers author, kind, akey, ts, **rank**, reference, **the sorted list of
+  superseded ids**, and body. Sorted so the same reconciliation written by two peers is one
+  assertion rather than two. Rank is in
   the frame because a host-supplied rank function otherwise produces identical ids with different
   ranks — same set, different winner, undetectable (C-2).
 - **A-2a** **Rank is exactly 16 bytes**, refused at write time if it is not. A width, not a
@@ -187,6 +189,10 @@ Everything in this section follows from U-4, and none of it exists in v1.
   (C-7). R-1 now states its precondition.
 - **R-6** One resolution statement for every kind.
 - **R-7** A fork is healable by any domain member, because within a domain everyone may supersede.
+  **This requires `supersedes` to be a list**: healing two arms with two single-parent assertions
+  produces two new unsuperseded heads and the fork survives, which is FINDINGS T-1b. One node
+  reconciling several lines is a real thing, Fossil has expressed it since 1996 in a check-in's P
+  card, and both successors dropped it.
   v1 made a fork permanent and unhealable, which was a denial-of-service costing one row (F-4).
 - **R-8** **A chain of successors carries two views over one mechanism**: the **log** view — every
   entry, in order, nothing hidden — and the **replacement** view — the head alone. A conversation and
@@ -254,6 +260,12 @@ requirement was to clean itself up (C-8).
 
 - **S-1** A peer can learn **what another holds that it lacks, without receiving it.** The question
   and the transfer are separate operations.
+- **S-1a** **That answer says whether it is complete.** A fixed-size sketch recovers the exact
+  missing ids while the difference stays inside its capacity and fails to decode past it, so the
+  interface must distinguish "these are all of them" from "these are the ones I could recover, ask
+  again." Same shape as `SyncReport.bounded`, which S-8 already got right for the transfer half —
+  a short list that looks like a complete answer is S-8's exact failure mode moved one function
+  earlier.
 - **S-2** **Two peers that have already converged transfer nothing.** This is the property the
   full-scan design could not express at all, and it is the one the phone case hits first.
 - **S-3** The exchange that answers S-1 is **bounded** — its size does not grow in proportion to the

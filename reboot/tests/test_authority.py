@@ -228,3 +228,70 @@ class RelayCannotJudge(StateTest):
         withdrawal.erase(laptop, target.id, Reason.SECRET)
         merger.merge(phone, laptop)
         self.assertEqual(withdrawal.residue(phone, target.id), ())
+
+
+class TheTombstoneTriangle(StateTest):
+    """FINDINGS T-1c, closed. Three requirements that were jointly
+    unsatisfiable before the N series, pinned here so they stay satisfiable.
+
+    (1) a holder of `x` erases in their own store;
+    (2) a peer's SELF-ISSUED authority does not erase someone else's row;
+    (3) a keyless relay applies nothing.
+
+    The escape that used to be forced -- "the relay sweeps without judging" --
+    made every hub a censorship amplifier for the fleet. What resolves it is
+    N-4's delegation constraint plus S-9's split of relay from peer.
+    """
+
+    def test_T1c_1_a_holder_of_x_erases_in_their_own_store(self):
+        store = a_store(principal=ROOT)
+        diary.add_root(store, ROOT, wrapped=b"sealed", proof=proof_for(ROOT))
+        diary.identity_put(store, "root", ROOT)
+        target = writer.put(store, an_assertion(author=ROOT))
+        withdrawal.erase(store, target.id, Reason.SUBJECT_REQUEST)
+        self.assertEqual(withdrawal.residue(store, target.id), ())
+
+    def test_T1c_2_a_self_issued_grant_does_not_confer_erase(self):
+        """The peer writes itself `x` and merges in. N-4: an issuer may not
+        grant a right it does not hold, and N-2 requires a root's signature on
+        the identity -- so this confers nothing."""
+        mine = a_store(principal=ALICE)
+        diary.add_root(mine, ROOT, wrapped=b"sealed", proof=proof_for(ROOT))
+        target = writer.put(mine, an_assertion(author=ALICE))
+        hostile = a_store(principal=BOB)
+        diary.identity_put(hostile, "bob", BOB)
+        diary.grant(hostile, BOB, "personal", R | S | X)
+        withdrawal.erase(hostile, target.id, Reason.POLICY)
+        merger.merge(mine, hostile)
+        self.assertIsNotNone(reader.get(mine, target.id))
+
+    def test_T1c_3_a_keyless_relay_applies_nothing(self):
+        """It cannot read the identity that signed the tombstone, so it cannot
+        judge authority -- and demanding it sweep anyway was the third leg that
+        made all three unsatisfiable together."""
+        relay = a_store(principal=BOB, grants=())
+        laptop = a_store(principal=ALICE)
+        target = writer.put(laptop, an_assertion(author=ALICE))
+        withdrawal.erase(laptop, target.id, Reason.SECRET)
+        merger.merge(relay, laptop)
+        self.assertNotEqual(withdrawal.residue(relay, target.id), ())
+
+    def test_T1c_all_three_hold_in_one_store_set(self):
+        """The triangle as one scenario, because pinning them separately is
+        what let them drift apart in the first place."""
+        laptop = a_store(principal=ROOT)
+        diary.add_root(laptop, ROOT, wrapped=b"sealed", proof=proof_for(ROOT))
+        diary.identity_put(laptop, "root", ROOT)
+        mine = writer.put(laptop, an_assertion(author=ROOT, akey="mine"))
+        theirs = writer.put(laptop, an_assertion(author=ROOT, akey="theirs"))
+
+        withdrawal.erase(laptop, mine.id, Reason.SUBJECT_REQUEST)   # (1)
+        hostile = a_store(principal=BOB)
+        withdrawal.erase(hostile, theirs.id, Reason.POLICY)         # (2)
+        merger.merge(laptop, hostile)
+        relay = a_store(principal=BOB, grants=())
+        merger.merge(relay, laptop)                                 # (3)
+
+        self.assertEqual(withdrawal.residue(laptop, mine.id), ())
+        self.assertIsNotNone(reader.get(laptop, theirs.id))
+        self.assertNotEqual(withdrawal.residue(relay, theirs.id), ())

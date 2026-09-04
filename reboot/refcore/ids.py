@@ -54,7 +54,10 @@ def frame(tag: bytes, *fields: bytes) -> bytes:
 
 def compute_id(a: Assertion) -> str:
     """A-1, A-2. sha256 over TAG_ASSERTION and
-    (author, kind, akey, ts, rank, reference, supersedes, body).
+    (author, kind, akey, ts, rank, reference, supersedes*, body).
+
+    `supersedes` is a length-prefixed SORTED list, so the same reconciliation
+    written by two peers is the same assertion rather than two (T-1b).
 
     `rank` is in there. Outside it, two hosts with different rank functions
     produce identical ids carrying different ranks -- same set, different

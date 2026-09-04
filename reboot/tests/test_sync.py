@@ -42,8 +42,8 @@ class LearnWithoutReceiving(StateTest):
     def test_S1_a_peer_can_ask_what_it_lacks(self):
         mine, theirs = a_store(diary="assistant"), a_store(diary="assistant")
         wanted = fill(theirs, 3)
-        self.assertEqual(sorted(sync.lacking(mine, sync.digest(theirs))),
-                         sorted(wanted))
+        ids, _ = sync.lacking(mine, sync.digest(theirs))
+        self.assertEqual(sorted(ids), sorted(wanted))
 
     def test_S1_asking_transfers_nothing(self):
         """The whole point of separating them. After asking, the store still
@@ -58,7 +58,9 @@ class LearnWithoutReceiving(StateTest):
         mine, theirs = a_store(diary="assistant"), a_store(diary="assistant")
         fill(theirs, 3)
         merger.merge(mine, theirs)
-        self.assertEqual(sync.lacking(mine, sync.digest(theirs)), ())
+        ids, complete = sync.lacking(mine, sync.digest(theirs))
+        self.assertEqual(ids, ())
+        self.assertTrue(complete)
 
 
 class ConvergedPairsTransferNothing(StateTest):
@@ -89,6 +91,42 @@ class ConvergedPairsTransferNothing(StateTest):
         fill(laptop, 5)
         sync.sync(phone, laptop)
         self.assertEqual(sync.sync(phone, laptop).reverified, 0)
+
+
+class CompletenessOfTheAnswer(StateTest):
+    """S-1a. THE FIX FOR FINDINGS T-1d -- and T-1d itself was overstated.
+
+    A fixed-size sketch does recover the exact missing ids while the difference
+    stays inside its capacity; a 256-cell invertible Bloom lookup table, 17 KB
+    regardless of store size, was measured recovering 120 of 120. Past capacity
+    it fails to decode, and the honest interface says so rather than returning a
+    short list that looks like an answer.
+    """
+
+    def test_S1a_a_small_difference_is_answered_completely(self):
+        mine, theirs = a_store(diary="assistant"), a_store(diary="assistant")
+        fill(theirs, 3)
+        ids, complete = sync.lacking(mine, sync.digest(theirs))
+        self.assertEqual(len(ids), 3)
+        self.assertTrue(complete)
+
+    def test_S1a_a_difference_past_capacity_says_it_is_partial(self):
+        """Otherwise this is S-8's failure mode moved one function earlier: a
+        truncated answer indistinguishable from a converged one."""
+        mine, theirs = a_store(diary="assistant"), a_store(diary="assistant")
+        fill(theirs, 5000)
+        ids, complete = sync.lacking(mine, sync.digest(theirs))
+        self.assertFalse(complete)
+        self.assertGreater(len(ids), 0)
+
+    def test_S1a_partial_means_ask_again_not_nothing_more(self):
+        """Taking what it recovered and asking again must converge, or a large
+        first sync can never finish."""
+        mine, theirs = a_store(diary="assistant"), a_store(diary="assistant")
+        fill(theirs, 5000)
+        sync.sync(mine, theirs)
+        _, complete = sync.lacking(mine, sync.digest(theirs))
+        self.assertTrue(complete)
 
 
 class BoundedExchange(StateTest):
@@ -136,7 +174,8 @@ class Watermarks(StateTest):
         laptop, phone = a_store(diary="assistant"), a_store(diary="assistant")
         fill(laptop, 3)
         sync.advance(laptop, BOB, 999)          # a lie, however it got there
-        self.assertEqual(len(sync.lacking(phone, sync.digest(laptop))), 3)
+        ids, _ = sync.lacking(phone, sync.digest(laptop))
+        self.assertEqual(len(ids), 3)
 
     def test_S6_a_watermark_rounds_down(self):
         """The two errors are not symmetric: too low costs bandwidth and merge
@@ -224,7 +263,7 @@ class Hub(StateTest):
         fill(laptop, 3)
         sync.relay(hub, laptop)
         sync.sync(phone, hub)
-        self.assertEqual(sync.lacking(phone, sync.digest(laptop)), ())
+        self.assertEqual(sync.lacking(phone, sync.digest(laptop))[0], ())
 
     def test_S9_a_hub_applies_tombstones(self):
         """THE ONE A RELAY CANNOT BE EXCUSED FROM. A hub that does not sweep

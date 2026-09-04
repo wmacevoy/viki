@@ -33,7 +33,7 @@ class SupersessionAuthority(StateTest):
         target = writer.put(store, an_assertion(author=ALICE))
         with self.assertRaises(Unauthorized):
             writer.supersede(store, target.id,
-                             an_assertion(author=BOB, supersedes=target.id))
+                             an_assertion(author=BOB, supersedes=(target.id,)))
 
     def test_R4_a_holder_of_s_may_supersede(self):
         """Control."""
@@ -43,7 +43,7 @@ class SupersessionAuthority(StateTest):
         target = writer.put(store, an_assertion(author=ALICE))
         writer.supersede(store, target.id,
                          an_assertion(author=BOB, body=b"revised",
-                                      supersedes=target.id))
+                                      supersedes=(target.id,)))
         self.assertEqual(reader.current(store, "k").body, b"revised")
 
 
@@ -107,7 +107,7 @@ class UndoLogAndHeap(StateTest):
         store = a_store(custodian=FakeCustodian())
         first = writer.put(store, an_assertion(body=b"original"))
         writer.supersede(store, first.id,
-                         an_assertion(body=b"revised", supersedes=first.id))
+                         an_assertion(body=b"revised", supersedes=(first.id,)))
         self.assertEqual([r.body for r in reader.log(store, "k").rows],
                          [b"original", b"revised"])
 

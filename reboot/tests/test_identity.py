@@ -48,8 +48,8 @@ class FramedPosition(StateTest):
                             ids.compute_id(an_assertion(reference=a_ref(ident="m2"))))
 
     def test_A2_supersedes_changes_the_id(self):
-        self.assertNotEqual(ids.compute_id(an_assertion(supersedes=None)),
-                            ids.compute_id(an_assertion(supersedes="f" * 64)))
+        self.assertNotEqual(ids.compute_id(an_assertion(supersedes=())),
+                            ids.compute_id(an_assertion(supersedes=("f" * 64,))))
 
 
 class FrameBoundaries(StateTest):

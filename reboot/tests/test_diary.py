@@ -84,7 +84,7 @@ class Rights(StateTest):
         first = writer.put(store, an_assertion(author=AGENT, body=b"flagged"))
         writer.supersede(store, first.id,
                          an_assertion(author=AGENT, body=b"safe",
-                                      supersedes=first.id))
+                                      supersedes=(first.id,)))
         self.assertEqual(len(reader.log(store, "k").rows), 2)
 
     def test_D3a_an_agent_with_s_and_no_r_cannot_read(self):

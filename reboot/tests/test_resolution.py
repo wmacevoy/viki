@@ -8,7 +8,7 @@ and `resolve` are now different functions with different contracts.
 
 import itertools
 
-from refcore import reader, writer
+from refcore import ids, reader, writer
 from refcore.errors import Forked, NotFound
 from refcore.model import R, S, X
 from tests.support import (pack_rank, ALICE, BOB, FakeSigner, StateTest, a_store,
@@ -21,14 +21,14 @@ class Head(StateTest):
     def test_R1_the_head_of_a_chain_is_current(self):
         store = a_store()
         first = writer.put(store, an_assertion(body=b"first"))
-        writer.put(store, an_assertion(body=b"second", supersedes=first.id))
+        writer.put(store, an_assertion(body=b"second", supersedes=(first.id,)))
         self.assertEqual(reader.current(store, "k").body, b"second")
 
     def test_R1_a_three_link_chain_resolves_to_its_head(self):
         store = a_store()
         a = writer.put(store, an_assertion(body=b"a"))
-        b = writer.put(store, an_assertion(body=b"b", supersedes=a.id))
-        writer.put(store, an_assertion(body=b"c", supersedes=b.id))
+        b = writer.put(store, an_assertion(body=b"b", supersedes=(a.id,)))
+        writer.put(store, an_assertion(body=b"c", supersedes=(b.id,)))
         self.assertEqual(reader.current(store, "k").body, b"c")
 
     def test_R1_rank_is_not_consulted_for_a_chain(self):
@@ -39,7 +39,7 @@ class Head(StateTest):
                                                ts="2026-09-04T12:00:00Z"))
         writer.put(store, an_assertion(body=b"second", rank=pack_rank(counter=0),
                                        ts="2026-09-04T11:00:00Z",
-                                       supersedes=first.id))
+                                       supersedes=(first.id,)))
         self.assertEqual(reader.current(store, "k").body, b"second")
 
     def test_R1_an_unknown_akey_is_not_found(self):
@@ -115,8 +115,8 @@ class TwoViews(StateTest):
     def test_R8_the_log_view_shows_every_entry(self):
         store = a_store()
         a = writer.put(store, an_assertion(body=b"one"))
-        b = writer.put(store, an_assertion(body=b"two", supersedes=a.id))
-        writer.put(store, an_assertion(body=b"three", supersedes=b.id))
+        b = writer.put(store, an_assertion(body=b"two", supersedes=(a.id,)))
+        writer.put(store, an_assertion(body=b"three", supersedes=(b.id,)))
         self.assertEqual([r.body for r in reader.log(store, "k").rows],
                          [b"one", b"two", b"three"])
 
@@ -125,7 +125,7 @@ class TwoViews(StateTest):
         which entries exist, the two views are two data models."""
         store = a_store()
         a = writer.put(store, an_assertion(body=b"one"))
-        writer.put(store, an_assertion(body=b"two", supersedes=a.id))
+        writer.put(store, an_assertion(body=b"two", supersedes=(a.id,)))
         self.assertEqual(reader.current(store, "k").body, b"two")
         self.assertEqual(len(reader.log(store, "k").rows), 2)
 
@@ -136,7 +136,7 @@ class TwoViews(StateTest):
         store = a_store(principal=BOB)
         flagged = writer.put(store, an_assertion(author=ALICE, body=b"flagged"))
         writer.put(store, an_assertion(author=BOB, body=b"safe",
-                                       supersedes=flagged.id))
+                                       supersedes=(flagged.id,)))
         bodies = [r.body for r in reader.log(store, "k").rows]
         self.assertIn(b"flagged", bodies)
         self.assertEqual(reader.current(store, "k").body, b"safe")
@@ -157,17 +157,37 @@ class Forks(StateTest):
         writer.put(store, an_assertion())
         self.assertIsNone(reader.forks(store, "k"))
 
-    def test_R7_a_fork_is_healable(self):
-        """v1 made a fork permanent and unhealable -- a denial of service
-        costing one row (FINDINGS.md F-4)."""
+    def test_R7_a_fork_is_healed_by_ONE_assertion_naming_BOTH_arms(self):
+        """THE FIX FOR FINDINGS T-1b. Healing with two single-parent assertions
+        produces two NEW unsuperseded heads and the fork survives -- which is
+        why `supersedes` is a list. One node reconciling two lines is a real
+        thing a single parent cannot say, and Fossil has expressed it since 1996
+        in a check-in's P card."""
         store = a_store()
         left = writer.put(store, an_assertion(body=b"left"))
         right = writer.put(store, an_assertion(body=b"right"))
-        writer.supersede(store, left.id,
-                         an_assertion(body=b"merged", supersedes=left.id))
-        writer.supersede(store, right.id,
-                         an_assertion(body=b"merged", supersedes=right.id))
+        writer.put(store, an_assertion(body=b"merged",
+                                       supersedes=(left.id, right.id)))
         self.assertIsNone(reader.forks(store, "k"))
+        self.assertEqual(reader.current(store, "k").body, b"merged")
+
+    def test_R7_healing_only_one_arm_leaves_the_fork(self):
+        """Control, and it is the defect stated as a test: a single-parent heal
+        retires one arm and adds another, so the count does not go down."""
+        store = a_store()
+        left = writer.put(store, an_assertion(body=b"left"))
+        writer.put(store, an_assertion(body=b"right"))
+        writer.put(store, an_assertion(body=b"half", supersedes=(left.id,)))
+        self.assertEqual(len(reader.forks(store, "k").arms), 2)
+
+    def test_A2_the_superseded_list_is_sorted_before_framing(self):
+        """So the same reconciliation written by two peers is ONE assertion.
+        Unsorted, the order a peer happened to list the arms in would fork the
+        heal itself."""
+        left, right = "a" * 64, "b" * 64
+        self.assertEqual(
+            ids.compute_id(an_assertion(supersedes=(left, right))),
+            ids.compute_id(an_assertion(supersedes=(right, left))))
 
 
 class UnsignedDoesNotResolve(StateTest):

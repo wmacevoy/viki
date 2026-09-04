@@ -192,6 +192,11 @@ reviewer read the code or ran a probe; *(inferred)* = reasoned from documents.
 
 ## T-1 v2 reproduced the exact defect C-7 named: four mutually unsatisfiable pairs *(verified)*
 
+> **ALL FOUR RESOLVED, 2026-09-04.** T-1a by separating the two doors, T-1b by
+> multi-parent supersession, T-1c by the N series plus S-9's relay/peer split, T-1d by a completeness
+> flag — and T-1d was overstated to begin with (B-2). Each now has a regression test; details at the
+> end of this entry.
+
 C-7 flagged "one PAIR of tests unsatisfiable by any implementation" as a v1 defect. v2 has four.
 
 **T-1a `put` must both refuse and store a forged id.** `test_failure.py:106-110` requires `BadId`
@@ -227,6 +232,41 @@ and `test_sync.py:86-91` pins that count equal for a 5-row and a 500-row store. 
 256-bit ids from a constant-size digest for unbounded d. Real anti-entropy needs **multiple rounds**
 — which the single-`Digest` signature forecloses — or a sketch sized in d, which S-3's test forbids.
 **The S-series API shape is wrong, not just its tests.**
+
+### How the four were closed
+
+**T-1a — two doors, two answers.** A-7 refuses a mismatched id at the *write* path; M-7 quarantines
+one at the *merge* path. Both are right, and they only contradicted because both tests reached the
+store through `writer.put`. **A merge source is untrusted by definition, so a corrupt row should
+never have to arrive through the trusted door** — `tests/support.plant()` writes it directly, which
+is also what a corrupt peer, a bad encoder or a truncated transfer actually produces. No requirement
+changed. Tests: `test_lying_a_forged_id_does_not_enter_the_store`, `Quarantine`.
+
+**T-1b — `supersedes` is a list.** Healing a two-arm fork with two single-parent assertions produces
+two *new* unsuperseded heads, so the fork survives by R-5's own definition. One node reconciling
+several lines is a real thing a single parent cannot say, and **Fossil has expressed it since 1996 in
+a check-in's P card** (T-4) — both successors dropped it. The edge moves to a `supersedes(id, parent)`
+table and is framed as a **sorted** list, so the same reconciliation written by two peers is one
+assertion rather than two. Tests: `test_R7_a_fork_is_healed_by_ONE_assertion_naming_BOTH_arms`, with
+the single-parent case kept as its control, and `test_A2_the_superseded_list_is_sorted_before_framing`.
+
+**T-1c — closed by the N series and the S-9 split.** The triangle was unsatisfiable because a keyless
+relay was required to apply tombstones, which forced "the relay sweeps without judging" — a
+censorship amplifier for the whole fleet. N-4's delegation constraint (an issuer may not grant a
+right it does not hold) plus N-2's root-signed identities settle legs 1 and 2; S-9 splitting relay
+from peer settles leg 3, because a relay *cannot* judge authority — it cannot read the identity that
+signed the tombstone. Tests: `TheTombstoneTriangle`, including all three legs pinned in **one**
+scenario, since pinning them separately is what let them drift apart.
+
+**T-1d — a completeness flag, and the finding was overstated.** `lacking()` returns `(ids, complete)`.
+A fixed-size sketch *does* recover exact ids while the difference stays within capacity — B-2 measured
+120 of 120 from a 17 KB structure — and fails to decode past it. The honest interface distinguishes
+"these are all of them" from "these are what I could recover, ask again," which is the same shape as
+`SyncReport.bounded` that S-8 already had for the transfer half. A short list that looks complete is
+S-8's exact failure mode moved one function earlier. New requirement S-1a; tests:
+`CompletenessOfTheAnswer`.
+
+---
 
 ## T-2 A LIVE BUG in `core/` today: `substr()` counts characters, `range_at` counts bytes *(verified by probe)*
 

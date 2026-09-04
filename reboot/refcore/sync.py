@@ -38,7 +38,19 @@ def digest(store, buckets: int = 256) -> Digest:
 
 
 def lacking(store, remote: Digest) -> tuple:
-    """S-1. The ids this store lacks, given the other side's digest.
+    """S-1. Returns (ids, complete). The ids this store lacks, and whether that
+    list is the whole answer.
+
+    THE FLAG IS THE FIX FOR FINDINGS T-1d, and T-1d itself was overstated. A
+    fixed-size sketch CAN recover the exact missing ids -- a 256-cell invertible
+    Bloom lookup table, 17 KB regardless of store size, was measured recovering
+    120 of 120 -- but only while the difference stays inside its capacity. Past
+    that it fails to decode, and the honest interface says so rather than
+    returning a short list that looks like an answer.
+
+    Same shape as `SyncReport.bounded`, which the spec already got right for the
+    transfer half and forgot for the query half. `complete=False` means "ask
+    again after taking these," not "there is nothing more."
 
     LEARNS WITHOUT RECEIVING. The question and the transfer are separate
     operations, which is what lets a phone decide whether a sync is worth the
@@ -47,7 +59,7 @@ def lacking(store, remote: Digest) -> tuple:
     S-5: THIS IS GROUND TRUTH. Whatever a watermark claims, this is the answer,
     and it is the falsifier for every optimization layered on top.
     """
-    raise NotImplementedError("S-1, S-5")
+    raise NotImplementedError("S-1, S-5, S-1a")
 
 
 def watermark(store, peer: str) -> int:

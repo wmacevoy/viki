@@ -99,6 +99,17 @@ class Assertion:
     identical ids with different ranks -- same set, different winner, and
     undetectable because the ids agree (FINDINGS.md C-2).
 
+    `supersedes` IS A TUPLE, and that is the fix for FINDINGS T-1b. With a single
+    parent, healing a two-arm fork means writing two assertions that differ only
+    in which arm they supersede -- so they get distinct ids, both are
+    unsuperseded, and the fork survives. One node reconciling two lines is a real
+    thing a single parent cannot say. Fossil has carried it since 1996 in a
+    check-in's P card (primary parent plus N merge parents); both successors
+    dropped it (FINDINGS T-4).
+
+    Framed as a length-prefixed SORTED list (A-2), so the same reconciliation
+    written by two peers is the same assertion.
+
     `id` is carried here as lowercase hex because that is the natural handle,
     and stored as its UTF-8 bytes (A-4a). Hex is ASCII, so byte order over the
     stored form and lexical order over this string agree -- which is what makes
@@ -112,7 +123,7 @@ class Assertion:
     rank: bytes            # A-2a: EXACTLY 16 bytes, refused otherwise
     body: bytes
     reference: Reference | None = None
-    supersedes: str | None = None
+    supersedes: tuple = ()      # T-1b: MULTI-PARENT. See the note below.
     derived_from: tuple = ()      # V-1. ids and references this was computed from
     id: str = ""
 

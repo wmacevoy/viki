@@ -12,7 +12,7 @@ from refcore.errors import (BadId, IncompleteMerge, NotAStore, NotFound,
                             Refused, StateError, Unauthorized)
 from refcore.model import Grant, Reason, SyncPolicy, R, S, X
 from tests.support import (AGENT, ALICE, BOB, FakeFetcher, StateTest, a_ref,
-                           a_store, an_assertion)
+                           a_store, an_assertion, plant)
 
 
 class Absent(StateTest):
@@ -53,7 +53,7 @@ class Late(StateTest):
         first = writer.put(mine, an_assertion(body=b"first",
                                               ts="2026-09-04T09:00:00Z"))
         writer.put(mine, an_assertion(body=b"second", ts="2026-09-04T12:00:00Z",
-                                      supersedes=first.id))
+                                      supersedes=(first.id,)))
         writer.put(slow, an_assertion(body=b"first", ts="2026-09-04T09:00:00Z"))
         merger.merge(mine, slow)
         self.assertEqual(reader.current(mine, "k").body, b"second")
@@ -108,6 +108,9 @@ class Lying(StateTest):
     adversary."""
 
     def test_lying_a_forged_id_does_not_enter_the_store(self):
+        """A-7 at the WRITE path. Its counterpart at the merge path is
+        quarantine, not refusal (M-7) -- two different answers for two different
+        doors, which is what makes both satisfiable (FINDINGS T-1a)."""
         forged = an_assertion(body=b"real")
         object.__setattr__(forged, "id", "0" * 64)
         with self.assertRaises(BadId):
@@ -175,6 +178,6 @@ class Lying(StateTest):
         hostile = a_store(principal=BOB, grants=())
         for i in range(10):
             writer.put(hostile, an_assertion(author=BOB, body=b"noise %d" % i,
-                                             supersedes=target.id))
+                                             supersedes=(target.id,)))
         merger.merge(mine, hostile)
         self.assertEqual(reader.current(mine, "k").id, target.id)
