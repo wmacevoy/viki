@@ -34,6 +34,7 @@ the honest limit of what the gate proves — and it becomes a real signal as mod
 
 | File | Answers | Changes when |
 | --- | --- | --- |
+| `PLAN.md` | what happens next, in what order, and what proves each step | the sequence changes |
 | `REQUIREMENTS_v2.md` | what must observably be true | the goal changes |
 | `REQUIREMENTS.md` | v1, superseded and kept | never — the diff is the artifact |
 | `DESIGN.md` | v1 mechanism. **Stale against v2**; kept as the before-picture | — |
