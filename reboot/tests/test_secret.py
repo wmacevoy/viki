@@ -1,11 +1,8 @@
 """N-10..N-17 -- the travelling secret.
 
-A pepper over the copy that leaves the device: `b` random bits mixed into the
-nonce and never stored, so opening the travelled seal costs a search and opening
-the local one does not.
-
-These tests pin the asymmetry that justifies it, the three reasons a sequential
-construction was rejected, and the two hazards that remain.
+The salt is the whole mechanism: full on a device that has it, truncated in the
+row that travels. A device that wants the secret searches the dropped bits,
+recovers the salt, and keeps it locally.
 """
 
 from refcore import diary, merger, reader, secret, writer
@@ -17,88 +14,131 @@ SECRET = b"ed25519-seed-32-bytes-goes-here!"
 B = 12
 
 
-class OneSeal(StateTest):
-    """N-10, N-11. One ciphertext, one key, and a pepper nobody keeps."""
+class OneSaltOneKey(StateTest):
+    """N-10."""
 
     def test_N10_seal_and_enrol_round_trip(self):
-        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
-        found, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier)
+        salt, trunc, wrapped, verifier = secret.seal(SECRET, PASSWORD, B)
+        found, recovered = secret.enrol(wrapped, PASSWORD, trunc, B, verifier)
         self.assertEqual(found, SECRET)
+        self.assertEqual(recovered, salt)
 
-    def test_N11_seal_does_not_return_the_pepper(self):
-        """Nobody holds it -- which is the whole economy of the construction:
-        nothing to protect, leak, sync by accident, or fail to erase."""
-        result = secret.seal(SECRET, PASSWORD, B)
-        self.assertEqual(len(result), 4)          # nonce, wrapped, verifier, key
+    def test_N10_the_travelling_salt_has_its_low_bits_zeroed(self):
+        salt, trunc, _, _ = secret.seal(SECRET, PASSWORD, B)
+        self.assertEqual(int.from_bytes(trunc, "big") & ((1 << B) - 1), 0)
 
-    def test_N11_the_stored_nonce_is_the_peppered_one(self):
-        """Two identities sealed from the same inputs differ, because the pepper
-        is fresh each time. Equal nonces would mean the pepper was constant or
-        absent."""
-        one, _, _, _ = secret.seal(SECRET, PASSWORD, B)
-        two, _, _, _ = secret.seal(SECRET, PASSWORD, B)
-        self.assertNotEqual(one, two)
+    def test_N10_the_truncated_salt_differs_from_the_real_one(self):
+        """Control, and it is N-11 doing the work: if these could be equal there
+        would be no search."""
+        salt, trunc, _, _ = secret.seal(SECRET, PASSWORD, B)
+        self.assertNotEqual(salt, trunc)
 
-    def test_N12_the_creator_caches_the_key_it_already_has(self):
-        """It pays nothing: it just computed the key. Only later devices
-        search."""
-        _, wrapped, _, key = secret.seal(SECRET, PASSWORD, B)
-        self.assertEqual(secret.unlock(wrapped, key), SECRET)
+    def test_N10_truncation_keeps_the_high_bits(self):
+        """The searcher needs everything above `b` or the space is not 2^b."""
+        salt, trunc, _, _ = secret.seal(SECRET, PASSWORD, B)
+        self.assertEqual(int.from_bytes(salt, "big") >> B,
+                         int.from_bytes(trunc, "big") >> B)
 
-    def test_N12_a_device_caches_the_key_never_the_pepper(self):
-        """So even a stolen cache reveals nothing about the pepper, and losing
-        the cache costs exactly what a new device costs."""
-        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
-        _, key = secret.enrol(wrapped, PASSWORD, nonce, B, verifier)
-        self.assertEqual(secret.unlock(wrapped, key), SECRET)
 
-    def test_N12a_the_everyday_path_does_no_search_and_no_kdf(self):
-        """A kdf slow enough to impose the same per-guess cost would be paid
-        here, on every single unlock, which is why it is not an alternative."""
-        _, wrapped, _, key = secret.seal(SECRET, PASSWORD, 24)
-        self.assertEqual(secret.unlock(wrapped, key), SECRET)
+class TheRedraw(StateTest):
+    """N-11. Without it, one identity in 2^b has no hardening at all --
+    silently, and looking exactly like every other identity."""
 
-    def test_N10_the_identity_carries_the_sealed_secret(self):
+    def test_N11_the_low_bits_are_never_all_zero(self):
+        for _ in range(8):
+            self.assertNotEqual(
+                int.from_bytes(secret.new_salt(B), "big") & ((1 << B) - 1), 0)
+
+    def test_N11_a_salt_is_thirty_two_bytes(self):
+        self.assertEqual(len(secret.new_salt(B)), 32)
+
+
+class TheRecoveredSaltStaysHome(StateTest):
+    """N-12. It is the ANSWER to the search: a peer that shared it would
+    broadcast the answer and the hardening would evaporate."""
+
+    def test_N12_the_creator_never_searches(self):
+        """It drew the salt, so it stores it and pays nothing."""
+        store = a_store(principal=ALICE)
+        salt, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
+        ident = diary.identity_put(store, "alice", ALICE,
+                                   secret_wrapped=wrapped, kdf="argon2id")
+        secret.remember_salt(store, ident, salt)
+        self.assertEqual(secret.unlock(wrapped, PASSWORD,
+                                       secret.local_salt(store, ident)), SECRET)
+
+    def test_N12_the_recovered_salt_does_not_sync(self):
+        """THE ONE THAT MATTERS. If it travelled, the first device to search
+        would hand the answer to everyone, including a hub."""
         laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
-        _, wrapped, _, _ = secret.seal(SECRET, PASSWORD, B)
+        salt, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
+        ident = diary.identity_put(laptop, "alice", ALICE,
+                                   secret_wrapped=wrapped, kdf="argon2id")
+        secret.remember_salt(laptop, ident, salt)
+        merger.merge(phone, laptop)
+        self.assertIsNone(secret.local_salt(phone, ident))
+
+    def test_N12b_the_assertion_carries_the_truncated_salt(self):
+        """Permanently and everywhere. Shipping the full salt and letting the
+        transport truncate it would make the shipped row's id disagree with the
+        creator's -- a different assertion, a forked identity key, and an A-7
+        failure."""
+        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
+        salt, trunc, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
         ident = diary.identity_put(laptop, "alice", ALICE,
                                    secret_wrapped=wrapped, kdf="argon2id")
         merger.merge(phone, laptop)
-        self.assertIn(wrapped, reader.get(phone, ident).body)
+        self.assertEqual(reader.get(phone, ident).id, ident)
+        self.assertNotIn(salt, reader.get(phone, ident).body)
+
+    def test_N12a_a_device_that_searched_resets_its_own_row(self):
+        store = a_store(principal=BOB)
+        salt, trunc, wrapped, verifier = secret.seal(SECRET, PASSWORD, B)
+        ident = diary.identity_put(store, "alice", ALICE,
+                                   secret_wrapped=wrapped, kdf="argon2id")
+        _, recovered = secret.enrol(wrapped, PASSWORD, trunc, B, verifier)
+        secret.remember_salt(store, ident, recovered)
+        self.assertEqual(secret.local_salt(store, ident), salt)
+
+    def test_N12a_the_everyday_path_is_one_kdf(self):
+        """A kdf slow enough to impose the same per-guess cost as the search
+        would be paid HERE, on every unlock, which is why it is not an
+        alternative."""
+        salt, _, wrapped, _ = secret.seal(SECRET, PASSWORD, 24)
+        self.assertEqual(secret.unlock(wrapped, PASSWORD, salt), SECRET)
 
 
 class DefenderParallelism(StateTest):
-    """N-13. The reason the pepper beats a sequential construction, and it is
-    counter-intuitive enough to be worth a test.
+    """N-13. Counter-intuitive enough to be worth a test.
 
     Serial work sounds like it defeats parallel attack and does not: cracking
-    parallelizes across GUESSES, not within one. Given that, what matters is
-    that the defender may parallelize ITS search while the attacker's per-guess
-    advantage is unchanged -- so every core the owner brings to enrolment raises
-    what an attacker must spend per guess, for the same enrolment wall-clock.
+    parallelizes across GUESSES, not within one. What matters is that the
+    defender may parallelize ITS search while the attacker's per-guess advantage
+    is unchanged.
     """
 
     def test_N13_the_search_accepts_worker_parallelism(self):
-        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
-        found, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier, workers=8)
+        _, trunc, wrapped, verifier = secret.seal(SECRET, PASSWORD, B)
+        found, _ = secret.enrol(wrapped, PASSWORD, trunc, B, verifier, workers=8)
         self.assertEqual(found, SECRET)
 
     def test_N13_parallelism_does_not_change_the_result(self):
         """Control: a search returning different answers on different core
         counts is not a search."""
-        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
-        one, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier, workers=1)
-        many, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier, workers=8)
+        salt, trunc, wrapped, verifier = secret.seal(SECRET, PASSWORD, B)
+        _, one = secret.enrol(wrapped, PASSWORD, trunc, B, verifier, workers=1)
+        _, many = secret.enrol(wrapped, PASSWORD, trunc, B, verifier, workers=8)
         self.assertEqual(one, many)
+        self.assertEqual(one, salt)
 
 
 class MemoryHardness(StateTest):
-    """N-14. Load-bearing rather than hygiene: the kdf is evaluated 2^(b-1)
-    times per guess, so its resistance to parallel hardware multiplies through
-    the whole search. This is what the rejected construction could not offer --
-    modular squaring is low-memory and ASIC-friendly."""
+    """N-14. Load-bearing rather than hygiene: evaluated 2^(b-1) times per
+    guess, so its resistance to parallel hardware multiplies through the whole
+    search. The rejected time-lock could not offer this -- modular squaring is
+    low-memory and ASIC-friendly."""
 
-    def test_N14_the_kdf_is_recorded_and_memory_hard(self):
+    def test_N14_the_kdf_is_recorded_with_the_identity(self):
         store = a_store(principal=ALICE)
         ident = diary.identity_put(store, "alice", ALICE,
                                    secret_wrapped=b"sealed", kdf="argon2id")
@@ -106,14 +146,11 @@ class MemoryHardness(StateTest):
 
 
 class NoStructuralBreak(StateTest):
-    """N-15. A pepper is entropy: no factoring assumption, no trapdoor to
-    destroy, no shortcut for anyone who learns a parameter."""
+    """N-15. Truncated entropy is entropy: no factoring assumption, no trapdoor,
+    no shortcut for anyone who learns a parameter."""
 
     def test_N15_the_cost_is_a_function_of_b_alone(self):
-        """Not of a hardness assumption with a review date. Everything an
-        attacker needs to know is public, and it still costs 2^(b-1)."""
-        self.assertEqual(secret.expected_cost(20),
-                         (1 << 19, 1 << 20))
+        self.assertEqual(secret.expected_cost(20), (1 << 19, 1 << 20))
 
 
 class RecordedParameters(StateTest):
@@ -121,7 +158,7 @@ class RecordedParameters(StateTest):
 
     def test_N16_b_and_the_kdf_travel_with_the_identity(self):
         laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
-        _, wrapped, _, _ = secret.seal(SECRET, PASSWORD, B)
+        _, _, wrapped, _ = secret.seal(SECRET, PASSWORD, B)
         diary.identity_put(laptop, "alice", ALICE, secret_wrapped=wrapped,
                            kdf="argon2id")
         merger.merge(phone, laptop)
@@ -131,26 +168,24 @@ class RecordedParameters(StateTest):
         """Identities sealed under the old value must stay openable, or a
         parameter change silently locks people out of their own keys."""
         store = a_store(principal=ALICE)
-        _, wrapped, _, _ = secret.seal(SECRET, PASSWORD, 10)
+        _, _, wrapped, _ = secret.seal(SECRET, PASSWORD, 10)
         diary.identity_put(store, "alice", ALICE, secret_wrapped=wrapped,
                            kdf="argon2id")
         self.assertEqual(secret.parameters(store, ALICE)["b"], 10)
 
     def test_N16a_a_wrong_password_fails_in_one_kdf(self):
-        """Without the verifier a typo is indistinguishable from a pepper not
-        yet found, so it costs the full 2^b -- terrible to use, and a denial of
+        """Without the verifier a typo is indistinguishable from a salt not yet
+        found, so it costs the full 2^b -- terrible to use, and a denial of
         service against yourself."""
-        nonce, _, verifier, _ = secret.seal(SECRET, PASSWORD, B)
-        self.assertFalse(secret.verify_password(verifier, "wrong", nonce))
+        _, trunc, _, verifier = secret.seal(SECRET, PASSWORD, B)
+        self.assertFalse(secret.verify_password(verifier, "wrong", trunc))
 
     def test_N16a_the_right_password_verifies(self):
         """Control."""
-        nonce, _, verifier, _ = secret.seal(SECRET, PASSWORD, B)
-        self.assertTrue(secret.verify_password(verifier, PASSWORD, nonce))
+        _, trunc, _, verifier = secret.seal(SECRET, PASSWORD, B)
+        self.assertTrue(secret.verify_password(verifier, PASSWORD, trunc))
 
     def test_N16b_the_cost_is_probabilistic_and_says_so(self):
-        """Expected 2^(b-1), worst case 2^b, so enrolment varies by up to a
-        factor of two. A progress indicator assuming a fixed cost will lie."""
         expected, worst = secret.expected_cost(B)
         self.assertEqual(worst, 2 * expected)
 

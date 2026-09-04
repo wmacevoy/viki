@@ -132,6 +132,17 @@ CREATE TABLE IF NOT EXISTS publication_item (
   PRIMARY KEY (publication, assertion)
 ) WITHOUT ROWID;
 
+-- N-12. The recovered salt: the ANSWER to the search, so it must never sync --
+-- a peer that shared it would broadcast the answer and the hardening would
+-- evaporate. Local like `arrival` and `peer`, and for a sharper reason.
+--
+-- The creator writes here at creation, having drawn the salt. Every other device
+-- writes here once, after searching (N-12a).
+CREATE TABLE IF NOT EXISTS salt_local (
+  identity  BLOB PRIMARY KEY,     -- the identity assertion's id
+  salt      BLOB NOT NULL         -- the FULL 32 bytes, low bits restored
+) WITHOUT ROWID;
+
 -- Local, never merged. `seq` orders MY receipts, not their writes (C-2), and
 -- it is what S-4's sender-side watermark counts.
 -- A-4a applies to the LOCAL tables too, and not for portability: in SQLite a
