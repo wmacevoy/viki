@@ -1,75 +1,95 @@
-"""The travelling secret: a pepper over the copy that leaves the device.
+"""The travelling secret: one seal, and a pepper nobody keeps.
 
-An identity's private key is sealed twice -- once under a key the owner's own
-device derives in one kdf, and once under a key whose nonce carries `b` random
-bits that are never stored. Only the second copy syncs.
+An identity's private key is sealed ONCE. The nonce in the identity assertion is
+the PEPPERED one; the true kdf input is `nonce XOR pepper`, and the pepper was
+discarded the moment it was used.
 
-    nonce         = random, stored
-    pepper        = b uniform random bits, NEVER STORED
-    k_local       = kdf(password, nonce)
-    k_travel      = kdf(password, nonce XOR pepper)
-    local_secret  = encrypt(secret, k_local)
-    travel_secret = encrypt(secret, k_travel)
+    pepper         = b uniform random bits, used once and DISCARDED
+    key            = kdf(password, nonce XOR pepper)
+    secret_wrapped = encrypt(secret, key)
 
-WHAT THIS BUYS: the owner pays the 2^(b-1) expected search ONCE, at enrolment,
-and never again -- everyday unlock uses `local_secret` and one kdf. An attacker
-pays it on every password guess. A kdf slow enough to impose the same per-guess
-cost would be paid by the owner every single time (N-12).
+NOBODY HOLDS THE PEPPER, which is the whole economy of it: there is nothing to
+protect, leak, sync by accident, or fail to erase. The secret is seasoned in
+transit rather than guarded at rest. A device caches the derived KEY -- which it
+either just computed, at creation, or found by searching, at enrolment -- and
+that cache is local and never syncs.
 
-WHY NOT A TIME-LOCK PUZZLE, since it is the obvious alternative and was the
-first choice here. RSW-style repeated squaring makes each attempt serial, which
-sounds like it defeats parallel attack and does not: cracking parallelizes
-across GUESSES, not within one, so serial work is a per-guess multiplier exactly
-like this search is. Given that, the pepper wins three ways (N-13):
+Two seals under two keys was the first draft and is strictly worse: two
+ciphertexts to keep consistent, for an asymmetry that needs neither (N-10).
+
+WHAT THIS BUYS: the creator pays nothing (it has the key already), a new device
+pays the 2^(b-1) expected search once and then caches, and an attacker pays it on
+every password guess forever. A kdf slow enough to impose the same per-guess cost
+would be paid by the owner on every unlock (N-12a).
+
+WHY NOT A TIME-LOCK PUZZLE, since it was the first choice here. RSW-style
+repeated squaring makes each attempt serial, which sounds like it defeats
+parallel attack and does not: cracking parallelizes across GUESSES, not within
+one. Given that, the pepper wins three ways (N-13):
 
   - THE DEFENDER MAY PARALLELIZE ITS SEARCH and the attacker's advantage is
     unchanged, so for a fixed enrolment wall-clock the attacker's per-guess work
     is larger by the defender's core count. Sequential work forbids the defender
     that and gains nothing for it.
   - The whole search is kdf evaluations, so MEMORY-HARDNESS MULTIPLIES through
-    all 2^b of them. Modular squaring is low-memory and ASIC-friendly, which is
-    the opposite of what constrains cracking hardware.
+    all 2^b of them. Modular squaring is low-memory and ASIC-friendly.
   - No dependency. The time-lock needs bignum arithmetic; this needs none.
 
 And no structural break: a pepper is entropy, with no factoring assumption, no
-trapdoor to destroy, and no quantum endgame beyond Grover halving b (N-15).
+trapdoor, and no quantum endgame beyond Grover halving b (N-15).
 """
 
 
-def seal(secret: bytes, password: str, nonce: bytes, b: int) -> tuple:
-    """N-10, N-11. Returns (local_secret, travel_secret, verifier).
+def derive(password: str, nonce: bytes, pepper: bytes) -> bytes:
+    """N-10, N-14. The key. ONE derivation, the same everywhere.
 
-    Generates `b` random bits, uses them, and DISCARDS them. The pepper must not
-    survive this call in any form -- not returned, not logged, not left in a
-    buffer a later allocation can read. A retained pepper collapses the travel
-    seal to plain kdf strength, silently, and unprovably (K4).
+    `kdf` must be memory-hard, and here that is load-bearing rather than hygiene:
+    an attacker evaluates it 2^(b-1) times per password guess, so its resistance
+    to parallel hardware multiplies through the entire search.
+    """
+    raise NotImplementedError("N-10, N-14")
+
+
+def seal(secret: bytes, password: str, b: int) -> tuple:
+    """N-10, N-11, N-16a. Returns (peppered_nonce, secret_wrapped, verifier, key).
+
+    Generates the pepper, uses it, and DISCARDS it -- it is not returned and must
+    not survive this call. `key` comes back only so the creating device can cache
+    what it has already computed (N-12); it is not stored and does not sync.
+
+    The verifier lets a wrong password fail in one kdf rather than after
+    exhausting the search.
     """
     raise NotImplementedError("N-10, N-11")
 
 
-def unlock_local(local_secret: bytes, password: str, nonce: bytes) -> bytes:
-    """The everyday path: one kdf, no search. Milliseconds.
+def unlock(secret_wrapped: bytes, key: bytes) -> bytes:
+    """The everyday path: the cached key is already here. No kdf, no search.
 
-    This is what makes N-12's asymmetry available at all -- if the owner had to
-    search on every unlock, the cost would have to be small enough to be useless.
+    A device caches the KEY, never the pepper -- so even a stolen cache reveals
+    nothing about the pepper, and losing the cache costs exactly what a new
+    device costs, which is the correct behaviour.
     """
-    raise NotImplementedError("N-10")
+    raise NotImplementedError("N-12")
 
 
-def unlock_travel(travel_secret: bytes, password: str, nonce: bytes, b: int,
-                  verifier: bytes, workers: int = 1) -> bytes:
-    """The enrolment path: search all 2^b peppers, expected 2^(b-1).
+def enrol(secret_wrapped: bytes, password: str, nonce: bytes, b: int,
+          verifier: bytes, workers: int = 1) -> tuple:
+    """N-12, N-12a, N-13, N-16a. The new-device path. Returns (secret, key).
+
+    Searches all 2^b peppers, expected 2^(b-1), and returns the derived KEY so
+    the caller can cache it -- after which this device never searches again.
+    Enrolment is the only time anyone pays.
 
     `workers` is the defender's parallelism and it is the point (N-13): the
     attacker's per-guess work is unchanged by it, so every core the owner brings
-    to enrolment buys a proportional increase in what an attacker must spend per
-    guess for the same enrolment wall-clock.
+    here raises what an attacker must spend per guess for the same enrolment
+    wall-clock.
 
-    Checks `verifier` FIRST (N-16a). Without that a wrong password is
-    indistinguishable from a pepper not yet found, so a typo costs the full 2^b
-    -- terrible to use, and a denial of service against yourself.
+    Checks `verifier` FIRST (N-16a), or a typo costs the full 2^b and is
+    indistinguishable from a pepper not yet found.
     """
-    raise NotImplementedError("N-10, N-13, N-16a")
+    raise NotImplementedError("N-12, N-12a, N-13")
 
 
 def verify_password(verifier: bytes, password: str, nonce: bytes) -> bool:
@@ -89,8 +109,8 @@ def parameters(store, pubkey: str) -> dict:
 def expected_cost(b: int) -> tuple:
     """N-16b. (expected, worst_case) kdf evaluations: 2^(b-1) and 2^b.
 
-    Exposed because the cost is PROBABILISTIC and enrolment time varies by up to
-    a factor of two. A progress indicator that assumes a fixed cost will lie.
+    Exposed because the cost is PROBABILISTIC and enrolment varies by up to a
+    factor of two. A progress indicator that assumes a fixed cost will lie.
     """
     raise NotImplementedError("N-16b")
 

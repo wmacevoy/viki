@@ -387,32 +387,36 @@ merged in: a row can claim anything, but a row cannot let you open a database.
 
 ### The travelling secret
 
-Open question 4 answered. `secret_wrapped` **does** travel, hardened by a **pepper** — random bits
-mixed into the nonce that are never stored, so the copy which leaves the device costs a search to
-open while the copy which stays does not.
+Open question 4 answered. `secret_wrapped` **does** travel, sealed **once**, under a key derived
+from the password and a **pepper** that is sprinkled on at creation and then held by nobody.
 
-    nonce         = random, stored
-    pepper        = b uniform random bits, NEVER STORED
-    k_local       = kdf(password, nonce)
-    k_travel      = kdf(password, nonce XOR pepper)
-    local_secret  = encrypt(secret, k_local)
-    travel_secret = encrypt(secret, k_travel)
+    pepper         = b uniform random bits, used once and DISCARDED
+    key            = kdf(password, nonce XOR pepper)
+    secret_wrapped = encrypt(secret, key)
 
-Stored: `nonce`, `b`, `local_secret`, `travel_secret`, and a password verifier. Never the pepper.
+Stored and synced: `nonce`, `b`, `secret_wrapped`, a password verifier. The pepper is never stored
+anywhere, by anyone.
 
-- **N-10** An identity's secret key is sealed twice. **Only `travel_secret` syncs**; `local_secret`
-  never leaves the device that made it.
-- **N-11** The pepper is discarded the moment sealing completes. Recovering `travel_secret` means
-  searching all `2^b` values, expected `2^(b-1)`, each trial costing one `kdf`.
-- **N-12** **The asymmetry is the point.** The owner pays the search **once, at enrolment**; an
-  attacker pays it **on every password guess**. A KDF slow enough to impose the same per-guess cost
-  would be paid by the owner on *every* unlock, which is why it is not an alternative — the everyday
-  path uses `local_secret` and one `kdf`.
+- **N-10** **One seal, one key.** The nonce in the identity assertion is the peppered one; the true
+  input to the `kdf` is `nonce XOR pepper`, and the pepper is gone. Any device that wants the secret
+  searches all `2^b` values, expected `2^(b-1)`. Two seals under two keys was the first draft and is
+  strictly worse — two ciphertexts to keep consistent for an asymmetry that needs neither.
+- **N-11** **Nobody holds the pepper, so there is nothing to protect, leak, sync by accident, or
+  fail to erase.** The creating device does not keep it either; it simply already has the key it just
+  derived. This is what makes the construction cheap: the secret is *seasoned in transit* rather than
+  guarded at rest.
+- **N-12** **A device caches the derived KEY, never the pepper**, and that cache is local and never
+  syncs. Losing it means searching again, which is the correct behaviour — a wiped device should
+  cost what a new device costs.
+- **N-12a** **Therefore only enrolment ever pays.** The creator caches at creation for free, having
+  just computed the key; every later device pays the search once and then caches. An attacker pays it
+  **on every password guess**, forever. A `kdf` slow enough to impose the same per-guess cost would be
+  paid by the owner on every unlock, which is why it is not an alternative.
 - **N-13** **A sequential construction was considered and rejected**, and the reason is worth keeping
   because it is counter-intuitive. A time-lock puzzle (Rivest–Shamir–Wagner 1996) makes each attempt
   *serial*, which sounds like it defeats parallel attack and does not: cracking parallelizes across
-  **guesses**, not within one, so serial work is a per-guess cost multiplier exactly like this. The
-  pepper then wins on three counts — **the defender may parallelize its search while the attacker's
+  **guesses**, not within one, so serial work is a per-guess cost multiplier exactly like this search.
+  The pepper then wins three ways — **the defender may parallelize its search while the attacker's
   advantage is unchanged**, so for a fixed enrolment wall-clock the attacker's per-guess work is
   larger by the defender's core count; the whole search is `kdf` evaluations, so memory-hardness
   multiplies through all `2^b` of them, where modular squaring is low-memory and ASIC-friendly; and
@@ -421,16 +425,15 @@ Stored: `nonce`, `b`, `local_secret`, `travel_secret`, and a password verifier. 
   is evaluated `2^(b-1)` times per guess, so its resistance to parallel hardware multiplies through
   the entire search. This is the property the rejected construction could not offer.
 - **N-15** **There is no structural break.** A pepper is entropy and nothing else — no factoring
-  assumption, no trapdoor to destroy, no shortcut for anyone who learns a secret parameter, and no
-  quantum endgame beyond Grover halving the effective bits. `b` is chosen for that, not for a
-  hardness assumption with a review date.
-- **N-16** `b` and the `kdf` parameters are recorded **with** the identity: a peer that cannot tell
-  how large the search is cannot perform it, and raising `b` later must not orphan identities sealed
+  assumption, no trapdoor, no shortcut for anyone who learns a secret parameter, and no quantum
+  endgame beyond Grover halving the effective bits. `b` is chosen for that, not for a hardness
+  assumption with a review date.
+- **N-16** `b` and the `kdf` parameters travel **with** the identity: a peer that cannot tell how
+  large the search is cannot perform it, and raising `b` later must not orphan identities sealed
   under the old value.
-- **N-16a** **A password verifier is stored alongside**, so a wrong password fails in one `kdf`
-  rather than after exhausting `2^b`. Without it a typo costs the full search and is indistinguishable
-  from a pepper not yet found — which is both terrible to use and a denial of service against
-  yourself.
+- **N-16a** **A password verifier travels alongside**, so a wrong password fails in one `kdf` rather
+  than after exhausting `2^b`. Without it a typo costs the full search and is indistinguishable from
+  a pepper not yet found — both terrible to use and a denial of service against yourself.
 - **N-16b** The search cost is **probabilistic**, expected `2^(b-1)` and worst case `2^b`, so
   enrolment time varies by up to a factor of two. Stated because a progress indicator that assumes a
   fixed cost will lie.
@@ -476,7 +479,7 @@ Stored: `nonce`, `b`, `local_secret`, `travel_secret`, and a password verifier. 
 | A constrained write vocabulary leaks nothing | D-3b | It leaks at the rate of its own entropy; an agent choosing among four statuses across a thousand messages has a slow but real channel |
 | A relay learns only ciphertext and volume | D-4 | It also learns timing and row counts; a hub knows the assistant diary gained 47 rows today |
 | A Postgres peer's operator sees only ciphertext | G-6a | **False, and accepted.** Bodies are encrypted at the application layer, but `akey` must be queryable to resolve and `id` to join, so the operator sees ids, timestamps, kinds, keys and the shape of the derivation graph — who corresponds with whom, how often, across how many distinct topics |
-| The pepper was really discarded | N-11 | The travel seal collapses to plain KDF strength, silently, and the owner cannot prove otherwise to anyone |
+| `b` bits of search is enough | N-10 | Chosen against today's hardware; too small and the seal is a speed bump, too large and enrolment is unusable. It is the one tuning number with no safe default |
 | A robot's source is faithful | U-1, V-5 | A compromised connector writes plausible assertions nobody can distinguish |
 | The cache can be refilled | X-4 | It cannot once the source is gone; X-5 and X-6 exist because of this |
 | `sha256` is collision-free | A-1 | Two assertions become one row |

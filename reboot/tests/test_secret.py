@@ -14,70 +14,57 @@ from tests.support import ALICE, BOB, StateTest, a_store, an_assertion
 
 PASSWORD = "correct horse battery staple"
 SECRET = b"ed25519-seed-32-bytes-goes-here!"
-NONCE = b"\x11" * 16
 B = 12
 
 
-class TwoSeals(StateTest):
-    """N-10. Sealed twice; only one copy travels."""
+class OneSeal(StateTest):
+    """N-10, N-11. One ciphertext, one key, and a pepper nobody keeps."""
 
-    def test_N10_both_seals_recover_the_same_secret(self):
-        local, travel, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertEqual(secret.unlock_local(local, PASSWORD, NONCE), SECRET)
-        self.assertEqual(
-            secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier), SECRET)
+    def test_N10_seal_and_enrol_round_trip(self):
+        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
+        found, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier)
+        self.assertEqual(found, SECRET)
 
-    def test_N10_the_two_seals_are_different_ciphertexts(self):
-        """Control. Equal seals would make the travel copy openable by the fast
-        path, and the whole construction decoration."""
-        local, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertNotEqual(local, travel)
+    def test_N11_seal_does_not_return_the_pepper(self):
+        """Nobody holds it -- which is the whole economy of the construction:
+        nothing to protect, leak, sync by accident, or fail to erase."""
+        result = secret.seal(SECRET, PASSWORD, B)
+        self.assertEqual(len(result), 4)          # nonce, wrapped, verifier, key
 
-    def test_N10_only_the_travel_seal_syncs(self):
-        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
-        local, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
-        ident = diary.identity_put(laptop, "alice", ALICE,
-                                   secret_wrapped=travel, kdf="argon2id")
-        merger.merge(phone, laptop)
-        self.assertNotIn(local, reader.get(phone, ident).body)
+    def test_N11_the_stored_nonce_is_the_peppered_one(self):
+        """Two identities sealed from the same inputs differ, because the pepper
+        is fresh each time. Equal nonces would mean the pepper was constant or
+        absent."""
+        one, _, _, _ = secret.seal(SECRET, PASSWORD, B)
+        two, _, _, _ = secret.seal(SECRET, PASSWORD, B)
+        self.assertNotEqual(one, two)
 
-    def test_N10_the_travel_seal_does_sync(self):
-        """Control: it must arrive, or a new device cannot enrol at all -- which
-        is the requirement this design exists to serve."""
-        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
-        _, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
-        ident = diary.identity_put(laptop, "alice", ALICE,
-                                   secret_wrapped=travel, kdf="argon2id")
-        merger.merge(phone, laptop)
-        self.assertIn(travel, reader.get(phone, ident).body)
+    def test_N12_the_creator_caches_the_key_it_already_has(self):
+        """It pays nothing: it just computed the key. Only later devices
+        search."""
+        _, wrapped, _, key = secret.seal(SECRET, PASSWORD, B)
+        self.assertEqual(secret.unlock(wrapped, key), SECRET)
 
+    def test_N12_a_device_caches_the_key_never_the_pepper(self):
+        """So even a stolen cache reveals nothing about the pepper, and losing
+        the cache costs exactly what a new device costs."""
+        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
+        _, key = secret.enrol(wrapped, PASSWORD, nonce, B, verifier)
+        self.assertEqual(secret.unlock(wrapped, key), SECRET)
 
-class ThePepperIsDiscarded(StateTest):
-    """N-11. It must not survive sealing in any form."""
-
-    def test_N11_seal_returns_no_pepper(self):
-        result = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertEqual(len(result), 3)
-
-    def test_N11_a_larger_b_gives_a_larger_search(self):
-        """The cost must actually depend on b, or b is decorative."""
-        self.assertGreater(secret.expected_cost(16)[0],
-                           secret.expected_cost(12)[0])
-
-
-class TheAsymmetry(StateTest):
-    """N-12. The owner pays once at enrolment; an attacker pays per guess."""
-
-    def test_N12_the_everyday_path_does_no_search(self):
+    def test_N12a_the_everyday_path_does_no_search_and_no_kdf(self):
         """A kdf slow enough to impose the same per-guess cost would be paid
         here, on every single unlock, which is why it is not an alternative."""
-        local, _, _ = secret.seal(SECRET, PASSWORD, NONCE, 24)
-        self.assertEqual(secret.unlock_local(local, PASSWORD, NONCE), SECRET)
+        _, wrapped, _, key = secret.seal(SECRET, PASSWORD, 24)
+        self.assertEqual(secret.unlock(wrapped, key), SECRET)
 
-    def test_N12_a_wrong_password_fails_on_the_local_path(self):
-        """Control: the pepper is on top of the password, not instead of it."""
-        local, _, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertNotEqual(secret.unlock_local(local, "wrong", NONCE), SECRET)
+    def test_N10_the_identity_carries_the_sealed_secret(self):
+        laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
+        _, wrapped, _, _ = secret.seal(SECRET, PASSWORD, B)
+        ident = diary.identity_put(laptop, "alice", ALICE,
+                                   secret_wrapped=wrapped, kdf="argon2id")
+        merger.merge(phone, laptop)
+        self.assertIn(wrapped, reader.get(phone, ident).body)
 
 
 class DefenderParallelism(StateTest):
@@ -92,17 +79,16 @@ class DefenderParallelism(StateTest):
     """
 
     def test_N13_the_search_accepts_worker_parallelism(self):
-        _, travel, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertEqual(
-            secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier,
-                                 workers=8), SECRET)
+        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
+        found, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier, workers=8)
+        self.assertEqual(found, SECRET)
 
     def test_N13_parallelism_does_not_change_the_result(self):
-        """Control: a search that returns different answers on different core
+        """Control: a search returning different answers on different core
         counts is not a search."""
-        _, travel, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
-        one = secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier, workers=1)
-        many = secret.unlock_travel(travel, PASSWORD, NONCE, B, verifier, workers=8)
+        nonce, wrapped, verifier, _ = secret.seal(SECRET, PASSWORD, B)
+        one, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier, workers=1)
+        many, _ = secret.enrol(wrapped, PASSWORD, nonce, B, verifier, workers=8)
         self.assertEqual(one, many)
 
 
@@ -135,8 +121,8 @@ class RecordedParameters(StateTest):
 
     def test_N16_b_and_the_kdf_travel_with_the_identity(self):
         laptop, phone = a_store(principal=ALICE), a_store(principal=ALICE)
-        _, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, B)
-        diary.identity_put(laptop, "alice", ALICE, secret_wrapped=travel,
+        _, wrapped, _, _ = secret.seal(SECRET, PASSWORD, B)
+        diary.identity_put(laptop, "alice", ALICE, secret_wrapped=wrapped,
                            kdf="argon2id")
         merger.merge(phone, laptop)
         self.assertEqual(secret.parameters(phone, ALICE)["b"], B)
@@ -145,8 +131,8 @@ class RecordedParameters(StateTest):
         """Identities sealed under the old value must stay openable, or a
         parameter change silently locks people out of their own keys."""
         store = a_store(principal=ALICE)
-        _, travel, _ = secret.seal(SECRET, PASSWORD, NONCE, 10)
-        diary.identity_put(store, "alice", ALICE, secret_wrapped=travel,
+        _, wrapped, _, _ = secret.seal(SECRET, PASSWORD, 10)
+        diary.identity_put(store, "alice", ALICE, secret_wrapped=wrapped,
                            kdf="argon2id")
         self.assertEqual(secret.parameters(store, ALICE)["b"], 10)
 
@@ -154,13 +140,13 @@ class RecordedParameters(StateTest):
         """Without the verifier a typo is indistinguishable from a pepper not
         yet found, so it costs the full 2^b -- terrible to use, and a denial of
         service against yourself."""
-        _, _, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertFalse(secret.verify_password(verifier, "wrong", NONCE))
+        nonce, _, verifier, _ = secret.seal(SECRET, PASSWORD, B)
+        self.assertFalse(secret.verify_password(verifier, "wrong", nonce))
 
     def test_N16a_the_right_password_verifies(self):
         """Control."""
-        _, _, verifier = secret.seal(SECRET, PASSWORD, NONCE, B)
-        self.assertTrue(secret.verify_password(verifier, PASSWORD, NONCE))
+        nonce, _, verifier, _ = secret.seal(SECRET, PASSWORD, B)
+        self.assertTrue(secret.verify_password(verifier, PASSWORD, nonce))
 
     def test_N16b_the_cost_is_probabilistic_and_says_so(self):
         """Expected 2^(b-1), worst case 2^b, so enrolment varies by up to a
