@@ -84,30 +84,40 @@ def vocabulary(store, diary: str) -> tuple:
 # cannot let you open a database. That asymmetry is the whole mechanism.
 
 def roots(store) -> tuple:
-    """N-3. The root-authority public keys: the recipients the database key is
-    wrapped to.
+    """N-3, N-3a. The root-authority public keys.
 
-    Read from `dbkey_wrap`, which is container structure and never merged — so a
-    peer cannot promote itself by writing a row, because it would have to wrap a
-    key it does not hold.
+    The unsuperseded `root` assertions whose proof verifies under this store's
+    database key. Assertions, not container metadata — so the root set MERGES,
+    and a newly enrolled device learns who the roots are instead of being told
+    out of band.
+
+    The anchor is cryptographic rather than structural: a peer cannot promote
+    itself by writing a row, because it cannot produce a valid proof without the
+    key. That the check needs the key is also why a relay cannot do it (S-9).
     """
-    raise NotImplementedError("N-3")
+    raise NotImplementedError("N-3, N-3a")
 
 
-def add_root(store, recipient: str, wrapped: bytes) -> None:
-    """N-3, N-9. Wrap the database key to another recipient.
+def add_root(store, recipient: str, wrapped: bytes, proof: bytes) -> str:
+    """N-3, N-9. Assert that the database key is wrapped to `recipient`.
 
-    Requires the database key, which means **anyone in the domain can do this.**
+    `proof` is a MAC over the recipient's public key under the database key, so
+    **any key-holder can verify it** — not only the recipient, who is the one
+    party nobody else can impersonate a check for.
+
+    Producing it requires the key, which means anyone in the domain can do this.
     Stated rather than defended: root authority is exactly as strong as
-    database-key custody and no stronger, which is the same guardrail-not-boundary
-    line the project already draws.
+    database-key custody and no stronger.
     """
     raise NotImplementedError("N-3, N-9")
 
 
 def identity_put(store, name: str, pubkey: str,
                  secret_wrapped: bytes | None = None, kdf: str = "") -> str:
-    """N-1, N-8. Record an identity.
+    """N-1, N-8. Assert an identity. Kind `identity`, akey the public key.
+
+    An assertion rather than a table, so it merges, is searchable, obeys the
+    diary's rights, and is revoked by supersession like anything else.
 
     `secret_wrapped` is this identity's private key under a PASSWORD, so N-8's
     slow KDF applies — and must never share a code path with N-7's raw database
@@ -115,6 +125,17 @@ def identity_put(store, name: str, pubkey: str,
     to get this wrong.
     """
     raise NotImplementedError("N-1")
+
+
+def revoke_identity(store, pubkey: str) -> str:
+    """N-1, W-2. Revoke by SUPERSEDING, never by erasing.
+
+    "Unsuperseded" is a pure function of the set, so revocation is
+    order-independent. Erasing an authority-bearing assertion would make the
+    sweep's outcome depend on sweep order, which is FINDINGS.md C-2's defect —
+    and is why identities and roots joined the immune class.
+    """
+    raise NotImplementedError("N-1, W-2")
 
 
 def authoritative(store, pubkey: str) -> bool:

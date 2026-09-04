@@ -291,7 +291,12 @@ requirement was to clean itself up (C-8).
   opaque **heap** rather than being destroyed in place. So the default destructive act is recoverable,
   and true destruction is purging the heap — which makes the heap, not the assertion table, the thing
   a retention deadline (W-7) applies to.
-- **W-2** Tombstones and **grants** are immune to withdrawal at every tier. v1 immunized only
+- **W-2** Tombstones, **grants, identities and root claims** are immune to withdrawal at every tier
+  — the immune class is everything authority is derived from, and N-1/N-3 join it for exactly the
+  reason grants did. Note the asymmetry that makes this work: **supersession is safe and erasure is
+  not.** "Unsuperseded" is a pure function of the set, so revoking an identity or a root by
+  superseding it is order-independent; *erasing* one would make the sweep's outcome depend on sweep
+  order, which is C-2's defect. Revocation is supersession; removal is a re-key (open question 7). v1 immunized only
   tombstones, so erasing a grant made the sweep order-dependent — the same set reaching two terminal
   states depending on sweep order (C-2). The immune class is *everything authority is derived from*.
 - **W-3** Erasure destroys the assertion, its payload, its cache entries, and its projection.
@@ -338,14 +343,21 @@ receives" — a censorship amplifier for the fleet (`FINDINGS.md` B-4, T-1c).
 The anchor is the **container**, not the content. That is what makes it unforgeable by anything
 merged in: a row can claim anything, but a row cannot let you open a database.
 
-- **N-1** An **identity** is a row carrying a name, a public key, and optionally that identity's
-  secret key encrypted under a password. Identities live in the diary and merge like everything else.
+- **N-1** An **identity is an assertion**, kind `identity`, carrying a name, a public key, and
+  optionally that identity's secret key encrypted under a password. Not a table of its own: a table
+  lives at the database level and would get no merge, no search, no permissions and no supersession.
+  As an assertion it gets all four for free, and revoking an identity is superseding it.
 - **N-2** An identity row is **authoritative only when signed by a root-authority key.** An unsigned
   or unrootable identity is stored, readable, and confers nothing.
-- **N-3** **A root-authority key is one to which the database key is wrapped.** The set of roots is
-  therefore read from the key-wrap table, which is container structure rather than merged content —
-  so a peer cannot promote itself by writing a row, because it would have to wrap a key it does not
-  have.
+- **N-3** **A root-authority key is one to which the database key is wrapped.** A root claim is an
+  assertion, kind `root`, carrying the recipient's public key, the sealed database key, and a
+  **proof that any key-holder can verify** — a MAC over the recipient's public key under the
+  database key. So the anchor is cryptographic rather than structural: a peer cannot promote itself
+  by writing a row, because it cannot produce the proof without the key.
+- **N-3a** **The root set therefore travels.** That is the point of it being an assertion rather
+  than container metadata: a newly enrolled device learns who the roots are by merging, instead of
+  being told out of band. It is also why the proof must be verifiable by *any* key-holder and not
+  only by the recipient — nobody else holds the recipient's private key.
 - **N-4** A **grant is honored only when** its issuer's identity is authoritative (N-2) **and the
   issuer already holds the right being granted.** Delegation narrows; it never escalates.
 - **N-5** Root authorities hold every right. That is what root means, and it is what terminates the
@@ -359,8 +371,8 @@ merged in: a row can claim anything, but a row cannot let you open a database.
 - **N-8** **A password-encrypted secret key DOES require a slow KDF**, because its input is a
   password. N-7 and N-8 must never share a code path: the single most likely way to get this wrong is
   one "unlock" function that treats both inputs alike.
-- **N-9** **Anyone holding the database key can add a root**, because wrapping the key to a new
-  recipient requires only the key. This is stated rather than defended — it is the same
+- **N-9** **Anyone holding the database key can add a root**, because producing the proof requires
+  only the key — which is the same bound the verification has, and deliberately so. This is stated rather than defended — it is the same
   guardrail-not-boundary line the project already draws, and it means root authority is exactly as
   strong as database-key custody and no stronger.
 

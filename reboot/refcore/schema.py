@@ -132,38 +132,6 @@ CREATE TABLE IF NOT EXISTS publication_item (
   PRIMARY KEY (publication, assertion)
 ) WITHOUT ROWID;
 
--- N-1, N-2. Identities merge like everything else; authority comes from the
--- signature, checked against the root set in `dbkey_wrap`.
---
--- `secret_wrapped` is this identity's private key under a PASSWORD, so N-8's
--- slow KDF applies to it and N-7's raw key must never reach the same code path.
--- Whether this column should travel at all is REQUIREMENTS_v2 open question 6:
--- syncing it is what lets a new device enrol, and it is also offline
--- password-cracking material for anyone who obtains the database key.
-CREATE TABLE IF NOT EXISTS identity (
-  id              BLOB PRIMARY KEY,
-  name            BLOB NOT NULL,
-  pubkey          BLOB NOT NULL,
-  secret_wrapped  BLOB,            -- password-encrypted; NULL for others' identities
-  kdf             BLOB,            -- the KDF and its parameters, per N-8
-  author          BLOB NOT NULL,
-  ts              BLOB NOT NULL
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS identity_pubkey ON identity(pubkey);
-
--- N-3. THE TRUST ANCHOR, and it is deliberately NOT merged content: the set of
--- root authorities is the set of recipients the database key is wrapped to. A
--- peer cannot promote itself by writing a row, because it would have to wrap a
--- key it does not hold.
---
--- N-9: anyone WITH the key can add a recipient, so root authority is exactly as
--- strong as database-key custody and no stronger. Stated, not defended.
-CREATE TABLE IF NOT EXISTS dbkey_wrap (
-  recipient  BLOB PRIMARY KEY,     -- a root authority's public key
-  wrapped    BLOB NOT NULL,        -- the database key, sealed to that recipient
-  added_at   BLOB NOT NULL
-) WITHOUT ROWID;
-
 -- Local, never merged. `seq` orders MY receipts, not their writes (C-2), and
 -- it is what S-4's sender-side watermark counts.
 -- A-4a applies to the LOCAL tables too, and not for portability: in SQLite a
