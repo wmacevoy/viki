@@ -5,7 +5,7 @@ goes away. No retrieval, no network, no filesystem.
 
 ## State of this repository
 
-**217 tests. 217 red. Zero green.** That is the finished condition of this round, not a problem to
+**258 tests. 258 red. Zero green.** That is the finished condition of this round, not a problem to
 fix. The tests are the requirements in executable form, written before the code so the first
 implementation has something to be wrong against.
 
@@ -92,6 +92,7 @@ refcore/          the skeleton. Every behavior raises NotImplementedError.
   reader.py       get, current, resolve, log, forks, sig_states
   refs.py         reference state, cache, pin, evict, staleness
   derive.py       derivation edges, publication
+  secret.py       the travelling secret: time-lock sealing, rekey
   merger.py       merge, push -- the ALGEBRA of union
   sync.py         digest, lacking, watermark, sync, push, relay -- the PROTOCOL
   withdrawal.py   withdraw, restore, seal, erase, sweep, residue
@@ -99,6 +100,23 @@ tests/
   support.py      fixtures. Implemented; they are the mocks.
 check.py          the gate
 ```
+
+## Dependencies
+
+Almost none, by choice, and a fourth review confirmed that almost nothing would help: "the design is
+already near-minimal, and the two dependencies that would earn their place — a canonical encoder and
+a set-reconciliation sketch — are each ~50 and ~300 lines you should own."
+
+| Where | What | Why |
+| --- | --- | --- |
+| Python, test-only | `hypothesis` | The top-line claim is a semilattice law currently checked at a handful of hand-written points |
+| C | SQLCipher-LibreSSL, and the `libcrypto` it already links | SHA-256 and Ed25519 already paid for |
+| C | **libbf** (via `libbfxx`) | Bignum arithmetic for the time-lock (N-10..N-16). The alternative is hand-rolled modular exponentiation |
+| C, conditional | utf8proc | Only if A-4 is not narrowed; there is no libc NFC |
+
+**Refused:** every CRDT library, CBOR and all canonical-serialization libraries, LMDB/RocksDB,
+git/IPFS/Fossil, migration tools, minisketch, and `oopc` as a *link* — copy the convention, which is
+what `core/` already does.
 
 ## Known limits
 

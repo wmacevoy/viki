@@ -234,6 +234,10 @@ speaks ids and digests, and neither needs to know the other's engine.
   allocate before commit and are not gap-free, so `max(seq)` can name a row that has not landed —
   which is exactly S-6's dangerous direction arriving from the engine rather than from a caller. A
   watermark advances on acknowledged rows, never on a sequence maximum.
+- **G-6a** **A Postgres peer holds the database key and encrypts bodies at the application layer**,
+  because SQLCipher has no Postgres analogue. Open question 5 answered: Postgres is a **peer**, not a
+  relay. The consequence is stated rather than discovered — see the K4 table: **metadata is in the
+  clear** on a Postgres peer, because `akey` must be queryable for resolution and `id` for joins.
 - **G-6** **The merge sequence is order-dependent and must be atomic against concurrent merges.**
   SQLite's single writer supplies that for free; under MVCC two merges interleave and a sweep can
   judge authority that has not committed. An isolation level or an advisory lock, stated, not assumed.
@@ -371,10 +375,54 @@ merged in: a row can claim anything, but a row cannot let you open a database.
 - **N-8** **A password-encrypted secret key DOES require a slow KDF**, because its input is a
   password. N-7 and N-8 must never share a code path: the single most likely way to get this wrong is
   one "unlock" function that treats both inputs alike.
+- **N-17** **Device removal is a re-key.** Unwrapping a recipient does not un-tell them a key they
+  already hold, so removal means generating a new database key, re-wrapping it to the remaining
+  roots, and re-encrypting. The removed device keeps everything it had and learns nothing after —
+  forward-only, like every other revocation here. Shredding a diary and shredding its keys are the
+  same operation, which is what makes this tractable at all.
 - **N-9** **Anyone holding the database key can add a root**, because producing the proof requires
   only the key — which is the same bound the verification has, and deliberately so. This is stated rather than defended — it is the same
   guardrail-not-boundary line the project already draws, and it means root authority is exactly as
   strong as database-key custody and no stronger.
+
+### The travelling secret
+
+Open question 4 answered. `secret_wrapped` **does** travel, hardened by a time-lock puzzle
+(Rivest–Shamir–Wagner 1996) so that the copy which leaves the device is far more expensive to attack
+than the copy which does not.
+
+    nonce         = p * q          -- p and q destroyed, never stored
+    k_local       = kdf(password, nonce)
+    k_travel      = k_local^(2^t) mod nonce
+    local_secret  = encrypt(secret, k_local)
+    travel_secret = encrypt(secret, k_travel)
+
+Stored: `nonce`, `local_secret`, `travel_secret`. Never `p`, never `q`.
+
+- **N-10** An identity's secret key is sealed twice. **Only `travel_secret` syncs**; `local_secret`
+  never leaves the device that made it.
+- **N-11** `k_travel` is `k_local` squared `t` times mod the nonce. Repeated squaring is **inherently
+  sequential**: there is no way to reach the t-th square without passing through the previous t−1.
+- **N-12** **`p` and `q` are destroyed before the identity is written.** With `φ(n)` you compute
+  `2^t mod φ(n)` and shortcut the whole chain in one exponentiation, so the factors are the trapdoor
+  and nobody may hold them — **including the owner.** A retained factor voids the construction
+  silently, and no test can detect it after the fact.
+- **N-13** **The asymmetry is the point, not the sequentiality.** The owner pays the time-lock **once,
+  at enrolment**; an attacker pays it **on every password guess**. That is what a slow KDF cannot buy,
+  because a KDF costs the owner the same on every unlock. Stated plainly because the tempting claim —
+  "sequential work defeats parallel attack" — is **false**: password cracking parallelizes across
+  guesses, not within one, so `t` is a per-guess cost multiplier and behaves like a KDF cost
+  parameter. It is the *when* the defender pays that differs, not the attacker's parallelism.
+- **N-14** **The hardening is bounded by the difficulty of factoring the nonce.** An attacker who
+  factors it recovers the shortcut and `travel_secret` falls back to plain KDF strength. This is a
+  moving target with a known endgame, so the nonce size is a stated parameter with a stated review
+  date rather than a constant.
+- **N-15** Modular squaring is **low-memory and ASIC-friendly**, which is the opposite of a
+  memory-hard KDF. This construction hardens against *time* and not against *area*, so `kdf` in
+  `k_local` must itself be memory-hard — the two defend different axes and neither substitutes.
+- **N-16** `t` and the nonce size are recorded **with** the identity, because a peer that cannot tell
+  how much work `travel_secret` requires cannot unlock it, and a future increase must not orphan
+  existing identities.
 
 ## C — Time
 
@@ -416,6 +464,8 @@ merged in: a row can claim anything, but a row cannot let you open a database.
 | Team members are friendly | D-3 | One compromised member device exposes an entire project diary and can supersede or redact anything in it. **Accepted deliberately** — the alternative is intra-diary crypto, which costs retrieval |
 | A constrained write vocabulary leaks nothing | D-3b | It leaks at the rate of its own entropy; an agent choosing among four statuses across a thousand messages has a slow but real channel |
 | A relay learns only ciphertext and volume | D-4 | It also learns timing and row counts; a hub knows the assistant diary gained 47 rows today |
+| A Postgres peer's operator sees only ciphertext | G-6a | **False, and accepted.** Bodies are encrypted at the application layer, but `akey` must be queryable to resolve and `id` to join, so the operator sees ids, timestamps, kinds, keys and the shape of the derivation graph — who corresponds with whom, how often, across how many distinct topics |
+| The time-lock's factors were really destroyed | N-12 | The whole hardening collapses to plain KDF strength, silently, and the owner cannot prove otherwise to anyone |
 | A robot's source is faithful | U-1, V-5 | A compromised connector writes plausible assertions nobody can distinguish |
 | The cache can be refilled | X-4 | It cannot once the source is gone; X-5 and X-6 exist because of this |
 | `sha256` is collision-free | A-1 | Two assertions become one row |
@@ -464,7 +514,6 @@ ownership rule is decided.
 6. **The reference format.** A Gmail message id, a Graph id and a Drive id have different stability
    and different versioning. X-7 assumes an etag exists everywhere; that needs checking per system
    before it is a requirement.
-7. **How a phone joins a domain, and how a lost one is removed.** N-3 gives half an answer —
-   enrolment is being wrapped into `dbkey_wrap` — but removal is not symmetric: unwrapping a
-   recipient does not un-tell them the database key they already hold, so a lost device is a re-key,
-   not a delete. Nothing states that.
+7. ~~How a phone joins a domain, and how a lost one is removed.~~ **Answered.** Enrolment is a
+   `root` assertion wrapping the database key to the new device (N-3). **Removal is a re-key, not a
+   delete** — see N-17.

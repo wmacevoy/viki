@@ -141,6 +141,25 @@ class WireFormat(StateTest):
                          ids.compute_id(an_assertion()))
 
 
+class PostgresIsAPeer(StateTest):
+    """G-6a. Open question 5 answered: Postgres is a peer, not a relay.
+
+    It holds the database key and encrypts bodies at the application layer,
+    because SQLCipher has no Postgres analogue. The consequence is a K4, not a
+    gap: `akey` must be queryable to resolve and `id` to join, so the operator
+    sees ids, timestamps, kinds, keys and the shape of the derivation graph.
+    """
+
+    def test_G6a_a_peer_encrypts_bodies_but_not_the_resolution_key(self):
+        """Stated as a test so the leak is a recorded decision rather than
+        something discovered by an operator reading a table."""
+        store = a_store(principal=ALICE)
+        put = writer.put(store, an_assertion(akey="salary", body=b"secret"))
+        row = reader.get(store, put.id)
+        self.assertEqual(row.akey, "salary")
+        self.assertEqual(row.body, b"secret")
+
+
 class ProjectionsMayDiffer(StateTest):
     """G-3. The single decision that makes a heterogeneous fleet survivable,
     stated explicitly rather than left implied."""
