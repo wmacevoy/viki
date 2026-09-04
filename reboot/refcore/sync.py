@@ -96,6 +96,33 @@ def outstanding(store, peer: str) -> int:
     raise NotImplementedError("S-4, S-5")
 
 
+def export(store, ids: tuple) -> bytes:
+    """G-1a, G-1b. Serialize assertions for the wire, using A-3's framing.
+
+    THE SAME ENCODER THAT COMPUTES IDS. One encoder, no options, nothing to
+    configure differently on two peers -- which is why CBOR and every other
+    canonical-serialization library was refused: "deterministic" is opt-in per
+    library, and its failure modes are the exact class that makes two peers
+    disagree.
+    """
+    raise NotImplementedError("G-1a")
+
+
+def ingest(store, wire: bytes) -> SyncReport:
+    """G-1a, G-1b, M-7. Take wire bytes into this store.
+
+    THIS IS THE REAL PATH. Every entry point below that takes two live `Store`
+    objects is a convenience over export/ingest, and taking the other side's
+    handle is the coupling FINDINGS.md T-12 condemns in the predecessor and
+    B-6.6 caught this design reproducing -- a Postgres peer, a hub, or anything
+    across a network cannot hold it.
+
+    Verifies ids (A-7), quarantines what fails (M-7), and quarantines rows past
+    the clock bound rather than refusing them (C-3c).
+    """
+    raise NotImplementedError("G-1b, M-7")
+
+
 def sync(dst, src, *, budget: int = 0, cursor: str = "") -> SyncReport:
     """S-2, S-7, S-8, S-10, S-11. Incremental pull: only what dst lacks.
 
@@ -117,6 +144,10 @@ def sync(dst, src, *, budget: int = 0, cursor: str = "") -> SyncReport:
 
     S-10: refuses a `never` diary (D-2) and refuses two different diary
     identities (M-8), before any bytes move.
+
+    G-1b: a convenience over `export`/`ingest` for the case where both stores
+    are in one process, NOT a second path. If the two ever disagree, this one is
+    wrong.
     """
     raise NotImplementedError("S-2, S-7, S-8")
 

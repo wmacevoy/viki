@@ -10,10 +10,10 @@ portability rule you can only test by deploying is a rule nobody tests.
 """
 
 from refcore import ids, merger, reader, refs, schema, sync, writer
-from refcore.errors import Refused
+from refcore.errors import BadTimestamp, Refused
 from refcore.model import SyncPolicy
 from tests.support import (ALICE, BOB, StateTest, a_ref, a_store, an_assertion,
-                           pack_rank)
+                           pack_rank, plant)
 
 
 class RankWidth(StateTest):
@@ -93,6 +93,124 @@ class EverythingIsBytes(StateTest):
         store = a_store()
         put = writer.put(store, an_assertion(body=b"\xff\xfe not utf-8"))
         self.assertEqual(reader.get(store, put.id).body, b"\xff\xfe not utf-8")
+
+
+class NormalizationRule(StateTest):
+    """A-4 under A-4a. FINDINGS B-6.1: you cannot NFC-normalize invalid UTF-8,
+    and A-4a requires arbitrary bytes to round-trip. Surrogate escaping is what
+    satisfies both, and because it is a HASH rule the exact procedure is the
+    specification."""
+
+    def test_A4_text_normalizes_and_non_text_survives(self):
+        import unicodedata
+        nfc = unicodedata.normalize("NFC", "café").encode()
+        nfd = unicodedata.normalize("NFD", "café").encode()
+        self.assertEqual(ids.normalize(nfc), ids.normalize(nfd))
+        self.assertEqual(ids.normalize(b"\xff\xfe raw"), b"\xff\xfe raw")
+
+    def test_A4_a_body_with_a_nul_normalizes_to_itself(self):
+        self.assertEqual(ids.normalize(b"a\x00b"), b"a\x00b")
+
+
+class DerivedFromIsFramed(StateTest):
+    """V-1a. FINDINGS B-6.3 -- the one that fails silently on exactly the peer
+    that needed it."""
+
+    def test_V1a_derived_from_changes_the_id(self):
+        """Outside the frame, two assertions with different sources collide on
+        one id and the provenance edges are unauthenticated."""
+        self.assertNotEqual(
+            ids.compute_id(an_assertion(derived_from=("a" * 64,))),
+            ids.compute_id(an_assertion(derived_from=("b" * 64,))))
+
+    def test_V1a_the_source_list_is_sorted_before_framing(self):
+        a, b = "a" * 64, "b" * 64
+        self.assertEqual(ids.compute_id(an_assertion(derived_from=(a, b))),
+                         ids.compute_id(an_assertion(derived_from=(b, a))))
+
+    def test_V1a_edges_survive_a_merge(self):
+        """Recomputed from the framed sources on arrival, never merged as data.
+        Unmerged, `derivatives_of()` is empty after a merge and W-13's flagging
+        silently stops working on the peer that received the summary."""
+        from refcore import derive
+        laptop, phone = a_store(diary="assistant"), a_store(diary="assistant")
+        source = writer.put(laptop, an_assertion(akey="src", reference=a_ref()))
+        summary = writer.put(laptop, an_assertion(
+            akey="summary", body=b"derived", derived_from=(source.id,)))
+        merger.merge(phone, laptop)
+        self.assertEqual(derive.derivatives_of(phone, source.id), (summary.id,))
+
+
+class ClockBound(StateTest):
+    """C-3a, C-3b, C-3c. FINDINGS B-6.5: the number was unstated and
+    load-bearing."""
+
+    def test_C3a_a_day_ahead_is_refused(self):
+        with self.assertRaises(BadTimestamp):
+            ids.check_timestamp("2026-09-06T12:00:00Z",
+                                received_at="2026-09-04T12:00:00Z")
+
+    def test_C3a_an_hour_ahead_is_accepted(self):
+        """Control: real clocks disagree by minutes and that must stay
+        workable."""
+        self.assertIsNone(ids.check_timestamp("2026-09-04T13:00:00Z",
+                                              received_at="2026-09-04T12:00:00Z"))
+
+    def test_C3a_the_past_is_unbounded(self):
+        """A device offline for a year writes legitimate old timestamps."""
+        self.assertIsNone(ids.check_timestamp("2019-01-01T00:00:00Z",
+                                              received_at="2026-09-04T12:00:00Z"))
+
+    def test_C3b_the_bound_limits_permanence_not_capture(self):
+        """An attacker can re-issue daily, so a 24-hour ceiling does not prevent
+        akey capture -- it prevents FOREVER. Worth a test because "we bound the
+        clock" reads like a defence and is really a decay rate: a timestamp just
+        inside the bound is accepted, so capture is available, briefly."""
+        self.assertIsNone(ids.check_timestamp("2026-09-05T11:00:00Z",
+                                              received_at="2026-09-04T12:00:00Z"))
+        with self.assertRaises(BadTimestamp):
+            ids.check_timestamp("2026-09-05T13:00:00Z",
+                                received_at="2026-09-04T12:00:00Z")
+
+    def test_C3c_a_too_future_row_arriving_by_merge_is_quarantined(self):
+        """Refusing it would wedge the sync. Only the write path refuses."""
+        mine, theirs = a_store(diary="assistant"), a_store(diary="assistant")
+        plant(theirs, an_assertion(ts="2099-01-01T00:00:00Z"), "f" * 64)
+        self.assertEqual(merger.merge(mine, theirs).quarantined, 1)
+
+
+class WireFormatExists(StateTest):
+    """G-1a, G-1b. FINDINGS B-6.6: G-1 was a sentence with no surface, and every
+    entry point bound two live Stores -- the coupling T-12 condemns in the
+    predecessor."""
+
+    def test_G1b_export_and_ingest_move_bytes(self):
+        """A Postgres peer, a hub, or anything across a network cannot hold the
+        other side's handle."""
+        laptop, phone = a_store(diary="assistant"), a_store(diary="assistant")
+        put = writer.put(laptop, an_assertion())
+        wire = sync.export(laptop, (put.id,))
+        self.assertIsInstance(wire, bytes)
+        sync.ingest(phone, wire)
+        self.assertIsNotNone(reader.get(phone, put.id))
+
+    def test_G1a_the_wire_uses_the_same_framing_as_the_id(self):
+        """One encoder, no options, nothing to configure differently on two
+        peers -- which is why every canonical-serialization library was
+        refused."""
+        laptop = a_store(diary="assistant")
+        put = writer.put(laptop, an_assertion())
+        self.assertIn(ids.TAG_ASSERTION, sync.export(laptop, (put.id,)))
+
+    def test_G1b_store_to_store_sync_agrees_with_the_wire(self):
+        """It is a convenience over export/ingest, not a second path. If the two
+        disagree, the convenience is wrong."""
+        src = a_store(diary="assistant")
+        put = writer.put(src, an_assertion())
+        by_wire, by_handle = a_store(diary="assistant"), a_store(diary="assistant")
+        sync.ingest(by_wire, sync.export(src, (put.id,)))
+        sync.sync(by_handle, src)
+        self.assertEqual(sync.digest(by_wire).root, sync.digest(by_handle).root)
 
 
 class ByteOrderResolution(StateTest):

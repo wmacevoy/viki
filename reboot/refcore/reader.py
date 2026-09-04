@@ -49,6 +49,11 @@ def resolve(store, akey: str) -> tuple:
 def log(store, akey: str) -> Result:
     """R-8. THE LOG VIEW: every entry on the chain, in order, nothing hidden.
 
+    D-3a0: REQUIRES `r`, like every other read path. This one was left ungated
+    and an `s`-only agent could read every body through it, which made D-3a's
+    confinement claim false in its own suite (FINDINGS.md B-6.2). A claim that
+    one unlisted function defeats is not a claim.
+
     R-9: A READ WHOSE CORRECTNESS DEPENDS ON HISTORY MUST USE THIS. Anyone
     holding `s` can change what `current` returns without destroying anything,
     so an audit or security decision reading only the head is flippable while

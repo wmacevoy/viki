@@ -5,7 +5,7 @@ goes away. No retrieval, no network, no filesystem.
 
 ## State of this repository
 
-**276 tests. 276 red. Zero green.** That is the finished condition of this round, not a problem to
+**293 tests. 293 red. Zero green.** That is the finished condition of this round, not a problem to
 fix. The tests are the requirements in executable form, written before the code so the first
 implementation has something to be wrong against.
 

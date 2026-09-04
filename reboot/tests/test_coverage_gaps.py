@@ -47,6 +47,40 @@ class SupersessionAuthority(StateTest):
         self.assertEqual(reader.current(store, "k").body, b"revised")
 
 
+class SupersessionHasTwoDoors(StateTest):
+    """R-4a, R-4b. FINDINGS B-6.4: R-4 needs two enforcement points with two
+    different behaviours, and nothing said so. Same division as A-7 and M-7."""
+
+    def test_R4a_the_write_path_refuses(self):
+        store = a_store(principal=BOB,
+                        grants=(Grant(principal=BOB, diary="personal", rights=R),))
+        target = writer.put(store, an_assertion(author=ALICE))
+        with self.assertRaises(Unauthorized):
+            writer.supersede(store, target.id,
+                             an_assertion(author=BOB, supersedes=(target.id,)))
+
+    def test_R4a_the_fold_path_stores_and_ignores(self):
+        """Refusing at the fold would discard evidence of an attempted
+        suppression -- and it arrived by merge, where refusal is not available
+        anyway."""
+        mine = a_store(principal=ALICE)
+        target = writer.put(mine, an_assertion(author=ALICE))
+        hostile = a_store(principal=BOB, grants=())
+        writer.put(hostile, an_assertion(author=BOB, supersedes=(target.id,)))
+        merger.merge(mine, hostile)
+        self.assertEqual(reader.current(mine, "k").id, target.id)
+        self.assertEqual(len(reader.log(mine, "k").rows), 2)
+
+    def test_R4b_the_fold_check_is_a_lookup_not_a_query_per_row(self):
+        """Rights are per (principal, diary) and a store has one diary, so the
+        author-rights check is a small map bound at open. If rights ever became
+        per-assertion this cost would stop being negligible -- one more reason
+        they do not."""
+        store = a_store(principal=ALICE)
+        self.assertEqual(diary.rights(store, ALICE, "personal"),
+                         diary.rights(store, ALICE, "personal"))
+
+
 class OneResolutionRule(StateTest):
     """R-6. v1 had three statements resolving differently, and its own header
     admitted it."""

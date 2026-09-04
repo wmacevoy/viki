@@ -10,7 +10,14 @@ from .model import Publication
 
 
 def record(store, derived_id: str, sources: tuple) -> None:
-    """V-1. Edges are queryable both ways.
+    """V-1, V-1a. Recompute the edge rows from the assertion's FRAMED sources.
+
+    Never merged as data: `derived_from` is inside the frame (A-2), so a peer
+    re-derives the edges from the assertion it received rather than trusting a
+    table. Unmerged and unframed -- which is how this started -- the edges are
+    unauthenticated AND `derivatives_of()` comes back empty after a merge,
+    silently disabling W-13's flagging on exactly the peer that received the
+    summary (FINDINGS.md B-6.3).
 
     Needed three ways: explaining why the calendar says this, reaching a summary
     when its source is erased (W-12), and auditing what an agent published.

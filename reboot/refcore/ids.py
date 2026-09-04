@@ -21,6 +21,14 @@ def normalize(text: str) -> bytes:
     ordered is bytes, so nothing downstream can accidentally hash a str under
     one engine's encoding assumptions.
 
+    THE RULE IS EXACT, because it is a hash rule: decode with `surrogateescape`,
+    normalize NFC, re-encode with `surrogateescape`.
+
+    You cannot NFC-normalize invalid UTF-8, and A-4a requires arbitrary bytes to
+    round-trip -- so the naive reading of A-4 contradicts A-4a outright
+    (FINDINGS.md B-6.1). Surrogate escaping satisfies both: text normalizes,
+    non-text survives byte for byte.
+
     Decomposed and precomposed forms are different bytes for the same visible
     string, and macOS filesystems and input methods emit the decomposed one
     routinely. Two peers then write the same note and get two assertions.
@@ -54,10 +62,15 @@ def frame(tag: bytes, *fields: bytes) -> bytes:
 
 def compute_id(a: Assertion) -> str:
     """A-1, A-2. sha256 over TAG_ASSERTION and
-    (author, kind, akey, ts, rank, reference, supersedes*, body).
+    (author, kind, akey, ts, rank, reference, supersedes*, derived_from*, body).
 
-    `supersedes` is a length-prefixed SORTED list, so the same reconciliation
-    written by two peers is the same assertion rather than two (T-1b).
+    `supersedes` and `derived_from` are length-prefixed SORTED lists, so the same
+    statement written by two peers is one assertion rather than two (T-1b,
+    V-1a).
+
+    `derived_from` being IN here is B-6.3: outside the frame the provenance
+    edges are unauthenticated and two assertions with different sources collide
+    on one id.
 
     `rank` is in there. Outside it, two hosts with different rank functions
     produce identical ids carrying different ranks -- same set, different
@@ -83,12 +96,24 @@ def verify_id(obj) -> bool:
     raise NotImplementedError("A-7")
 
 
-def check_timestamp(ts: str, *, received_at: str | None = None) -> None:
-    """C-3. Refuse a malformed or non-UTC timestamp, raising BadTimestamp.
+SKEW_AHEAD_SECONDS = 24 * 60 * 60
 
-    `received_at` bounds an author-chosen ts against the receiving peer's own
-    clock. Without it an attacker sets ts far in the future and owns an akey
-    forever, and no supersession is involved so R-4's authority check never runs
-    (FINDINGS.md F-4).
+
+def check_timestamp(ts: str, *, received_at: str | None = None) -> None:
+    """C-3, C-3a. Refuse a malformed or non-UTC timestamp, raising BadTimestamp.
+
+    `received_at` bounds an author-chosen ts against the receiving peer's clock:
+    at most SKEW_AHEAD_SECONDS into the future, and THE PAST IS UNBOUNDED. A
+    device offline for a year writes legitimate old timestamps; one writing
+    tomorrow's is broken or hostile.
+
+    C-3b: WHAT THIS BOUNDS IS PERMANENCE, NOT ATTACK. An attacker can re-issue
+    daily, so a 24-hour ceiling does not prevent akey capture -- it prevents
+    FOREVER. Worth saying, because "we bound the clock" reads like a defence and
+    is really a decay rate.
+
+    C-3c: past the bound, a row arriving by MERGE is quarantined rather than
+    refused (M-7) -- refusing it would wedge the sync. Only the write path
+    refuses.
     """
-    raise NotImplementedError("C-3")
+    raise NotImplementedError("C-3, C-3a")

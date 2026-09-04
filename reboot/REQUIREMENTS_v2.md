@@ -74,6 +74,10 @@ both reviews showed it cannot be one, and the use cases do not ask for it.
   on a verdict log can write a later verdict but cannot un-write an earlier one — the flag and the
   un-flag are both in the log, and what changes is only which entry the head view returns. See R-9 for
   the obligation that puts on the reader.
+- **D-3a0** **Every read path requires `r`** — `get`, `current`, `resolve`, `log`, `forks`,
+  `visible`. Naming them is not pedantry: `log` was left ungated and an `s`-only agent could read
+  every body through it, which made D-3a's headline claim false in its own suite
+  (`FINDINGS.md` B-6.2). A confinement claim that one unlisted function defeats is not a claim.
 - **D-3a** `s` without `r` is the load-bearing case, not an edge one. An agent that may write a status
   and read nothing else is confined by the data model rather than by prompt engineering — and a fully
   compromised such agent still cannot read. Every grant is stated as the capability of an agent that
@@ -120,6 +124,11 @@ Everything in this section follows from U-4, and none of it exists in v1.
 
 - **V-1** A derived assertion names the assertions and references it was derived from. The edges are
   queryable in both directions.
+- **V-1a** **`derived_from` is inside the frame, and the edge table is recomputed from it on
+  arrival** — never merged as data. Outside the frame the edges are unauthenticated and two
+  assertions with different sources collide on one id; unmerged, `derivatives_of()` is empty after a
+  merge, which silently disables W-13's flagging **on exactly the peer that received the summary**
+  (`FINDINGS.md` B-6.3). Sorted, for the same reason the superseded list is.
 - **V-2** Publication — writing into a diary with a wider sync policy than the source — is an explicit
   operation, never a side effect of an ordinary write.
 - **V-3** A publication produces a reviewable record of what crossed: which assertions, derived from
@@ -140,7 +149,7 @@ Everything in this section follows from U-4, and none of it exists in v1.
 
 - **A-1** Two peers stating the same thing produce the same id.
 - **A-2** The id covers author, kind, akey, ts, **rank**, reference, **the sorted list of
-  superseded ids**, and body. Sorted so the same reconciliation written by two peers is one
+  superseded ids**, **the sorted list of derived-from sources**, and body. Sorted so the same reconciliation written by two peers is one
   assertion rather than two. Rank is in
   the frame because a host-supplied rank function otherwise produces identical ids with different
   ranks — same set, different winner, undetectable (C-2).
@@ -154,7 +163,12 @@ Everything in this section follows from U-4, and none of it exists in v1.
   different ranks for the same logical content. Precision, not width, is what makes ties common
   (T-3), so the millisecond field is the part to revisit if ties appear.
 - **A-3** Length-prefixed framing. No field value can forge a boundary.
-- **A-4** NFC normalization before hashing.
+- **A-4** NFC normalization before hashing, by an **exactly stated rule**: decode with
+  `surrogateescape`, normalize NFC, re-encode with `surrogateescape`. You cannot NFC-normalize
+  invalid UTF-8, and A-4a requires arbitrary bytes to round-trip, so the naive reading of A-4
+  contradicts it (`FINDINGS.md` B-6.1). Surrogate escaping satisfies both: text normalizes, non-text
+  survives byte-for-byte. **This is a hash rule, so the wording is the specification** — two peers
+  guessing differently fragment the store silently and permanently.
 - **A-4a** **Every value that is hashed, compared or ordered is BYTES — UTF-8 for text, after NFC.
   There are no TEXT columns in the truth tables.** One rule, and it closes four separate leaks at
   once: no collation exists for bytes on either engine; Postgres `text` rejects `\x00` and invalid
@@ -184,6 +198,15 @@ Everything in this section follows from U-4, and none of it exists in v1.
 - **R-3** Resolution is a pure function of the set. Shuffled insertion yields identical results.
 - **R-4** A supersession is honored only when signed by a principal permitted to supersede — which,
   under D-3, means a member of the diary's domain, not a per-assertion right.
+- **R-4a** **R-4 is enforced twice, with two different behaviours, and both are required.** At the
+  **write** path a principal lacking `s` is *refused*. At the **fold** path an assertion whose
+  *author* lacks `s` is *stored and ignored* — refusing it there would discard evidence of an
+  attempted suppression, and it arrived by merge where refusal is not available anyway. Two doors,
+  two answers, exactly as A-7 and M-7 divide (T-1a).
+- **R-4b** The fold-time check costs an **author-rights lookup per arm**. That is cheap and it is
+  cheap for a stated reason: rights are per `(principal, diary)` and a store has one diary, so it is
+  a lookup in a small map bound at open — not a query per row. If rights ever become per-assertion
+  this cost stops being negligible, which is one more reason they do not.
 - **R-5** More than one unsuperseded arm is a **fork**, and it is reported. R-1 and R-5 were
   inconsistent in v1: if any second arm is a fork, rank is never consulted and R-2 is unreachable
   (C-7). R-1 now states its precondition.
@@ -223,6 +246,14 @@ Everything in this section follows from U-4, and none of it exists in v1.
 store may run Postgres. They are peers, not tiers — they reconcile through the S protocol, which
 speaks ids and digests, and neither needs to know the other's engine.
 
+- **G-1a** **The wire format is A-3's framing — the same encoder that computes ids.** One encoder,
+  no options, nothing to configure differently on two peers. This is why CBOR and every other
+  canonical-serialization library was refused: "deterministic" is opt-in per library, and its failure
+  modes are the exact class that makes two peers disagree.
+- **G-1b** **`export()` and `ingest()` are the real path; store-to-store sync is a convenience over
+  them.** Every entry point taking two live `Store` objects is the coupling `FINDINGS.md` T-12
+  condemns in the predecessor and B-6.6 caught this design reproducing — a Postgres peer, a hub, or
+  anything across a network cannot hold the other side's handle.
 - **G-1** **The wire format is the S protocol, never a database file.** The predecessor's merge binds
   two live handles and its host ships an entire checkpointed SQLite file, so the wire format *is* the
   SQLite file format and no other engine can participate at any layer (`FINDINGS.md` T-12). Sync is
@@ -473,6 +504,15 @@ secret searches the `2^b` values of those bits, recovers the original salt, and 
   substituted.
 - **C-3** A malformed or non-UTC timestamp is refused, and `ts` is bounded against the receiving
   peer's own clock on arrival (F-4).
+- **C-3a** **The bound is 24 hours into the future, and the past is unbounded.** A device that has
+  been offline for a year writes legitimate old timestamps; one writing tomorrow's is either broken
+  or hostile. The number was unstated and load-bearing — at a five-minute bound, six of twenty-five
+  sync tests were refused by their own fixture (`FINDINGS.md` B-6.5).
+- **C-3b** **What this bounds is permanence, not attack.** An attacker can re-issue daily, so a
+  24-hour ceiling does not stop akey capture — it stops *forever*. Stated because "we bound the
+  clock" reads like a defence and is really a decay rate.
+- **C-3c** A row past the bound arriving by **merge is quarantined** (M-7), not refused, because
+  refusing it would wedge the sync. Only the write path refuses.
 - **C-4** Rank is declared per kind, framed (A-2), and exactly 16 bytes in the stated encoding
   (A-2a, A-2b). A kind returning any other width is refused at write time.
 - **C-5** Retention deadlines are absolute.

@@ -78,14 +78,33 @@ class Rights(StateTest):
 
     def test_D3c_s_without_x_can_supersede_but_not_remove(self):
         """The filter-agent case. `s` is safe to grant because it destroys
-        nothing: the predecessor stays in the log view."""
-        store = a_store(principal=AGENT,
+        nothing: the predecessor stays in the log view.
+
+        Read back by a principal holding `r`, NOT by the agent -- the agent has
+        `s` alone and D-3a0 gates every read path. An earlier version had the
+        agent read its own log, which made D-3a's confinement claim false in its
+        own suite (FINDINGS.md B-6.2).
+        """
+        agent = a_store(principal=AGENT,
                         grants=(Grant(principal=AGENT, diary="personal", rights=S),))
-        first = writer.put(store, an_assertion(author=AGENT, body=b"flagged"))
-        writer.supersede(store, first.id,
+        first = writer.put(agent, an_assertion(author=AGENT, body=b"flagged"))
+        writer.supersede(agent, first.id,
                          an_assertion(author=AGENT, body=b"safe",
                                       supersedes=(first.id,)))
-        self.assertEqual(len(reader.log(store, "k").rows), 2)
+        owner = a_store(principal=ALICE)
+        merger.merge(owner, agent)
+        self.assertEqual(len(reader.log(owner, "k").rows), 2)
+
+    def test_D3a0_an_s_only_agent_cannot_read_the_log_either(self):
+        """The unlisted function that defeated the claim. Naming every read path
+        is not pedantry -- a confinement claim with one hole is not a claim."""
+        owner = a_store(principal=ALICE)
+        writer.put(owner, an_assertion(author=ALICE, body=b"secret"))
+        agent = a_store(principal=AGENT,
+                        grants=(Grant(principal=AGENT, diary="personal", rights=S),))
+        merger.merge(agent, owner)
+        with self.assertRaises(Unauthorized):
+            reader.log(agent, "k")
 
     def test_D3a_an_agent_with_s_and_no_r_cannot_read(self):
         """THE CONFINEMENT CASE. Every grant is stated as the capability of an

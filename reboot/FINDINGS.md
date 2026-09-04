@@ -91,7 +91,7 @@ instance.
 
 Both fixed. Neither was catchable by the gate as it stands.
 
-## B-6 Six further defects, unfixed
+## B-6 Six further defects — ALL RESOLVED 2026-09-04
 
 1. **A-4 vs A-4a: you cannot NFC-normalize invalid UTF-8**, and one test requires normalization while
    another requires `b"\xff\xfe…"` to round-trip. One rule satisfies both, verified: decode
@@ -113,6 +113,41 @@ Both fixed. Neither was catchable by the gate as it stands.
 6. **G-1 has no implementation surface.** Nothing in `refcore` takes or returns wire bytes;
    `merger.merge` and all three `sync` entry points bind two live `Store` objects — structurally the
    same coupling T-12 condemns in the predecessor.
+
+### How the six were closed
+
+**1 — the normalization rule is now exact.** Decode `surrogateescape`, NFC, re-encode
+`surrogateescape`. Text normalizes; non-text survives byte for byte. Stated as procedure rather than
+intent because it is a hash rule, and two peers guessing differently fragment the store silently.
+
+**2 — D-3a0 names every read path.** `log` was ungated, so an `s`-only agent read every body through
+it. The test that exposed this now reads back through a principal holding `r`, and a new test asserts
+the agent itself cannot. **A confinement claim that one unlisted function defeats is not a claim** —
+so the requirement enumerates the paths instead of gesturing at them.
+
+**3 — `derived_from` joins the frame, sorted, and the edges are recomputed on arrival.** Never merged
+as data: a peer re-derives them from the assertion it received rather than trusting a table. This was
+the worst of the six because it failed *silently* and *on exactly the peer that needed it* — the one
+that received the summary and would have had to flag it when its source was erased.
+
+**4 — R-4a states both doors.** Refuse at the write path; store-and-ignore at the fold, because
+refusing there discards evidence of an attempted suppression and it arrived by merge where refusal is
+not available anyway. Same division as A-7/M-7 (T-1a). R-4b costs the fold check honestly: rights are
+per `(principal, diary)` and a store has one diary, so it is a map lookup bound at open, not a query
+per row — and if rights ever became per-assertion that stops being true, which is one more argument
+against them.
+
+**5 — the bound is 24 hours ahead, the past unbounded.** And C-3b says what it actually buys:
+**an attacker can re-issue daily, so this bounds permanence, not capture.** "We bound the clock" reads
+like a defence and is really a decay rate. C-3c routes an over-bound row arriving by merge to
+quarantine rather than refusal, or the sync wedges.
+
+**6 — `export()` and `ingest()` exist, and they are the real path.** Store-to-store sync is a
+convenience over them, with a test asserting the two agree, because if they ever disagree the
+convenience is wrong. The wire format is A-3's framing — **the same encoder that computes ids** —
+which is also B-9's second recommendation, and the reason every canonical-serialization library was
+refused: "deterministic" is opt-in per library and its failure modes are the exact class that makes
+two peers disagree.
 
 ## B-7 D-4 and S-9 are enforced by a Python `if`
 
