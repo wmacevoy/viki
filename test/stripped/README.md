@@ -17,6 +17,12 @@ python3 -m unittest discover -s test/stripped -v                 # the harness's
 
 Standard library only. `build` is a pure function of the source text and the seed.
 
+This is one data question in the DM1 shape: `docs/QUESTION_v1.md`, `docs/PLAN_v1.md`, a datasheet
+for the source, and `docs/ledger.jsonl`, which `score` appends to on every look. To run a model
+librarian, use `librarian/run.sh`. It stages the pile in `/tmp`, outside this repository, and runs a
+headless Sonnet session under `vendor/dm1-self-improvement/sandbox`, so neither the source nor the
+key is in reach. See `CONTRIBUTING.md` here for the commands and where the holdout lives.
+
 ## What is stripped
 
 FINDINGS declares four kinds of structure, and all four are removed:
@@ -102,6 +108,10 @@ Nobody has confirmed these. They are what the tests check.
 - **STRIP1/5** The scorer gives the key 1 and silence 0, punishes reversed direction, costs an
   adopted lie above a seen one, and counts the worse of two answers.
 - **STRIP1/6** A word-overlap librarian finds every echo and mistakes every lie for one.
+- **STRIP1/7** Scoring a holdout seed (≥ `HOLDOUT_FLOOR`) is refused without a stated reason, and a
+  refused look leaves no ledger line.
+- **STRIP1/8** Every score appends one line to `docs/ledger.jsonl`: what was tried, what would count
+  against it, split, seed, data version, answer hash, commit, and metrics.
 
 Each test was seen failing against a deliberate break of the code it guards. One was vacuous on
 first writing: it passed with "last answer wins" because it put the worse answer last. It now

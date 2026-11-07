@@ -8,46 +8,9 @@ import json, os, re, sys, tempfile, unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stripped as S
 
-FIXTURE = """# FINDINGS.md
-
-Preamble describing the convention: corrections go in a block quote.
-
----
-
-## Alpha: the gamma leg made recall worse
-
-**Date:** 2026-08-14
-
-The entry below ("Beta: the gamma leg ... is harmless") judged it harmless.
-That judgement is wrong: recall@1 fell from 0.302 to 0.256 on the dev set.
-
-Second paragraph so this entry is long enough to echo.
-
-## Beta: the gamma leg is harmless, measured
-on three documents
-
-Measured on three documents, the gamma leg moved nothing at all here.
-
-> **Correction, 2026-08-13 (later the same day):** that count is stale.
-> It is now **8**.
-
-Tail paragraph after the block.
-
-~~**Until someone rebuilds, the binary has the bug.**~~ -- superseded by the
-rebuild noted above.
-
-## Delta: a plain citation is not a correction
-
-See the entry below ("Epsilon") for the details of how it was measured.
-
-Delta has a second paragraph so it can be echoed in the fixture.
-
-## Epsilon: opening a raw key is 52x cheaper than a passphrase
-
-Opening with a raw 256-bit key took 5.99 ms against 345.93 ms for a passphrase.
-
-The KDF is skipped entirely when the key is 64 hex characters long, measured.
-"""
+# A small FINDINGS-shaped file with every marker kind; also the pilot's pile.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture-findings.md")) as _f:
+    FIXTURE = _f.read()
 
 def build_fixture(seed=7):
     return S.build(FIXTURE, seed, "FIX.md")
@@ -167,6 +130,9 @@ class Strip1_5_ScorerDiscriminates(unittest.TestCase):
         seen = S.score(self.key, {"relations": [{"kind": "contradicts", "a": r["b"], "b": r["a"]}]})
         self.assertGreater(adopt["cost"], reject["cost"])
         self.assertGreater(reject["cost"], seen["cost"])
+        self.assertEqual((adopt["lie_wins"], reject["lie_wins"], seen["lie_wins"]), (1, 0, 0))
+        n_lies = sum(1 for x in self.key["relations"] if x["kind"] == "contradicts")
+        self.assertEqual(self.run_control("reversed")["lie_wins"], n_lies)
 
     def test_worse_of_two_answers_counts(self):
         # Both orders: with only one, "last answer wins" passes by accident.
@@ -201,6 +167,55 @@ class Strip1_6_TrapIsPosed(unittest.TestCase):
                 self.assertNotEqual(frags[r["a"]], meta["altered"])
                 self.assertIn(" ".join(meta["altered"].split()[:4]),
                               " ".join(frags[r["b"]].split()))
+
+
+class Strip1_7_HoldoutFenced(unittest.TestCase):
+    """STRIP1/7 (inferred): scoring a holdout seed is refused without a stated
+    reason, and a refused look leaves no ledger line."""
+
+    def test_refused_without_why(self):
+        with open(S.DEFAULT_FINDINGS) as f:
+            frags, key = S.build(f.read(), S.HOLDOUT_FLOOR + 7)
+        self.assertEqual(S.split_of(key), "holdout")
+        before = os.path.getsize(S.LEDGER) if os.path.exists(S.LEDGER) else -1
+        with tempfile.TemporaryDirectory() as d:
+            S.write_build(d, frags, key)
+            ans = os.path.join(d, "a.json")
+            with open(ans, "w") as f:
+                json.dump({"relations": []}, f)
+            rc = S.main(["score", os.path.join(d, "key.json"), ans, "--what", "t", "--against", "t"])
+        self.assertEqual(rc, 2)
+        after = os.path.getsize(S.LEDGER) if os.path.exists(S.LEDGER) else -1
+        self.assertEqual(before, after)
+
+    def test_splits(self):
+        self.assertEqual(S.split_of({"source": "FINDINGS.md", "seed": 2}), "dev")
+        self.assertEqual(S.split_of({"source": "FINDINGS.md", "seed": S.HOLDOUT_FLOOR}), "holdout")
+        self.assertEqual(S.split_of({"source": "fixture-findings.md", "seed": S.HOLDOUT_FLOOR}), "pilot")
+
+
+class Strip1_8_EveryLookLedgered(unittest.TestCase):
+    """STRIP1/8 (inferred): a score writes one ledger line carrying what was
+    tried, what would count against it, the split, seed, data version,
+    answer hash, commit and metrics."""
+
+    def test_line(self):
+        from datetime import datetime, timezone
+        frags, key = build_fixture()
+        res = S.score(key, S.control("oracle", key, frags))
+        args = type("A", (), {"what": "oracle", "against": "below 1", "why": None, "answer": "a.json"})
+        line = S.ledger_line(key, "pilot", res, args, "ab" * 32,
+                             datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc), "abc123")
+        self.assertEqual(line["when"], "2026-11-07T12:00Z")
+        self.assertEqual(line["data"], "FIX.md@" + key["source_sha256"][:16])
+        self.assertEqual(line["metrics"]["score"], 1.0)
+        for k in ("what", "against", "split", "seed", "answer_sha256", "commit"):
+            self.assertTrue(line[k] is not None and line[k] != "", k)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "l.jsonl")
+            S.append_ledger(p, line); S.append_ledger(p, line)
+            with open(p) as f:
+                self.assertEqual(len(f.read().splitlines()), 2)
 
 
 if __name__ == "__main__":

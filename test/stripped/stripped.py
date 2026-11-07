@@ -15,17 +15,25 @@ counted as independent sources, and a confident claim with altered numbers.
 
     stripped.py build   --out DIR [--seed N] [--findings PATH]
     stripped.py control {null,oracle,reversed,lexical} DIR      > answer.json
-    stripped.py score   DIR/key.json answer.json [--json]
+    stripped.py score   DIR/key.json answer.json --what W --against A [--why Y] [--json]
 
 See README.md beside this file for the answer format and the cost table.
+Every `score` is a look, and appends one line to docs/ledger.jsonl.
 Standard library only.
 """
-import argparse, hashlib, json, os, random, re, sys
+import argparse, hashlib, json, os, random, re, subprocess, sys
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_FINDINGS = os.path.join(HERE, "..", "..", "FINDINGS.md")
+LEDGER = os.path.join(HERE, "docs", "ledger.jsonl")
 N_ECHOES = 6
 N_LIES = 6
+# The holdout (docs/PLAN_v1.md): any seed at or above this floor. The seeds
+# themselves are chosen and kept by the owner outside the working directory,
+# because a seed written here would put its key in every agent's reach. Dev
+# seeds are small. Scoring a holdout seed spends it, so it needs a reason.
+HOLDOUT_FLOOR = 1_000_000
 
 # ---- parsing ---------------------------------------------------------------
 
@@ -311,6 +319,8 @@ def score(key, answer):
         # 1 is the key, 0 is saying nothing, below 0 is worse than nothing.
         "score": 1 - total / null_cost if null_cost else 0.0,
         "per_kind": per_kind, "unkeyed": unkeyed,
+        # PLAN_v1's second metric: planted lies the answer adopted as current.
+        "lie_wins": sum(1 for o, _ in worst.values() if o == "lie_wins"),
         "brier": sum(brier) / len(brier) if brier else None, "n_brier": len(brier),
     }
 
@@ -358,6 +368,7 @@ def report(res):
         p = res["per_kind"][kd]
         lines.append("%-12s %4d %6d %6d %8d %6.1f" % (kd, p["n"], p["exact"], p["wrong"], p["missing"], p["cost"]))
     lines.append("")
+    lines.append("lie_wins %d  (planted lies adopted as current)" % res["lie_wins"])
     lines.append("unkeyed %d  (claims the key does not hold: wrong, or real and undeclared -- read them)"
                  % len(res["unkeyed"]))
     if res["brier"] is not None:
@@ -371,6 +382,9 @@ def main(argv):
     b.add_argument("--seed", type=int, default=1); b.add_argument("--findings", default=DEFAULT_FINDINGS)
     c = sub.add_parser("control"); c.add_argument("name"); c.add_argument("dir")
     s = sub.add_parser("score"); s.add_argument("key"); s.add_argument("answer")
+    s.add_argument("--what", required=True, help="what was tried, e.g. 'sonnet, arm p, TASK v1'")
+    s.add_argument("--against", required=True, help="the result that would count against the claim")
+    s.add_argument("--why", help="required for a holdout seed: the decision this look serves")
     s.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "build":
@@ -390,11 +404,52 @@ def main(argv):
     else:
         with open(a.key) as f:
             key = json.load(f)
-        with open(a.answer) as f:
-            ans = json.load(f)
-        res = score(key, ans)
+        split = split_of(key)
+        if split == "holdout" and not (a.why and a.why.strip()):
+            print("refused: seed %d is a holdout seed (>= %d, PLAN_v1). Scoring it spends it; "
+                  "say what decision it serves with --why." % (key["seed"], HOLDOUT_FLOOR), file=sys.stderr)
+            return 2
+        with open(a.answer, "rb") as f:
+            raw = f.read()
+        res = score(key, json.loads(raw))
+        append_ledger(LEDGER, ledger_line(key, split, res, a, hashlib.sha256(raw).hexdigest(),
+                                          datetime.now(timezone.utc), git_commit()))
         print(json.dumps(res, indent=1) if a.json else report(res))
     return 0
+
+def split_of(key):
+    if key["source"] != "FINDINGS.md":
+        return "pilot"
+    return "holdout" if key["seed"] >= HOLDOUT_FLOOR else "dev"
+
+def ledger_line(key, split, res, a, answer_sha, now, commit):
+    """One look, as DM1's LEDGER template asks. Pure: clock and commit are passed in."""
+    return {
+        "when": now.strftime("%Y-%m-%dT%H:%MZ"), "who": os.environ.get("USER", "?"),
+        "question": "Q1", "what": a.what, "against": a.against, "split": split,
+        "seed": key["seed"], "data": key["source"] + "@" + key["source_sha256"][:16],
+        "answer": a.answer, "answer_sha256": answer_sha[:16],
+        "environment": "python " + sys.version.split()[0], "commit": commit,
+        "metrics": {"score": round(res["score"], 3), "cost": res["cost"],
+                    "null_cost": res["null_cost"], "unkeyed": len(res["unkeyed"]), "lie_wins": res["lie_wins"],
+                    "brier": None if res["brier"] is None else round(res["brier"], 3),
+                    "exact": {k: v["exact"] for k, v in res["per_kind"].items()}},
+        "holdout_why": a.why if split == "holdout" else None,
+    }
+
+def append_ledger(path, line):
+    with open(path, "a") as f:
+        f.write(json.dumps(line, sort_keys=True) + "\n")
+
+def git_commit():
+    try:
+        out = subprocess.run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+        dirty = subprocess.run(["git", "-C", HERE, "status", "--porcelain", "--", HERE],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+        return out.stdout.strip() + ("+dirty" if dirty else "") if out.returncode == 0 else "unknown"
+    except OSError:
+        return "unknown"
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

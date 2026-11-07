@@ -1,0 +1,16 @@
+You are acting as a librarian over a messy pile of notes. Your job is to find relationships between the notes. Accuracy matters more than volume: a wrong claim does harm, and leaving a pair out is better than asserting something you aren't reasonably sure of.
+
+THE PILE: the Markdown files in this directory (f*.md). They are notes from one software project, collected in no particular order. Each file's name (minus `.md`) is its id, like `f1a2b3c4`. Nothing in the pile says which note relates to which; you have to judge from the content. Read all of them.
+
+RELATIONS TO REPORT, three kinds:
+- `corrects` (directed): note `a` replaces, corrects or retracts a claim in note `b`, so `b` (or the claim in it) should no longer be read as current. `a` is the newer, correcting note. Getting the direction wrong is as bad as missing it.
+- `same` (undirected): `a` and `b` come from the same origin. One restates or copies the other, so they are not independent sources.
+- `contradicts` (undirected): `a` and `b` disagree on a fact, and you cannot tell from the pile which is right. Use this rather than `corrects` when you cannot justify which one replaces the other.
+
+Notes on the same topic that merely discuss it, or one note citing another, are NOT a relation. Report only the three kinds above.
+{{CONFIDENCE}}
+OUTPUT: write answer.json in this directory with exactly this shape:
+
+{{EXAMPLE}}
+
+Use only ids that exist in the pile. Check the file parses as JSON (e.g. `python3 -m json.tool answer.json`) before you finish. Nobody is available to answer questions until you have finished, so make your own calls. Then reply with the number of relations of each kind and two or three sentences on how you worked.
