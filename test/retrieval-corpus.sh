@@ -182,13 +182,18 @@ fi
 mkdir -p "$CO/notes"
 
 # doc <name> -- materialize one corpus document into the checkout.
+# doc NAME [SRC]: SRC defaults to NAME. Two corpus docs were renamed in the
+# repo on 2026-11-07 (AGENTS.md -> STATUS.md, CLAUDE.md -> CONTRIBUTING.md,
+# when the SE1 guide's AGENTS.md took the name); the corpus keeps the old
+# names so its paths, and the queries that cite them, do not move.
 doc(){
+    _src=${2:-$1}
     if [ "$DOC_SOURCE" = "git HEAD" ]; then
-        ( cd "$REPO_ROOT" && git show "HEAD:$1" ) > "$CO/$1" \
-            || die "git show HEAD:$1 failed -- is $1 tracked?"
+        ( cd "$REPO_ROOT" && git show "HEAD:$_src" ) > "$CO/$1" \
+            || die "git show HEAD:$_src failed -- is $_src tracked?"
     else
-        [ -f "$REPO_ROOT/$1" ] || die "corpus document missing from the repo: $1"
-        cp "$REPO_ROOT/$1" "$CO/$1"
+        [ -f "$REPO_ROOT/$_src" ] || die "corpus document missing from the repo: $_src"
+        cp "$REPO_ROOT/$_src" "$CO/$1"
     fi
     [ -s "$CO/$1" ] || die "corpus document $1 came out EMPTY"
 }
@@ -333,7 +338,7 @@ EOF
 commit_with "$SRC/c06"
 
 # --- c07: forum + AGENTS/FINDINGS ---
-doc AGENTS.md; doc FINDINGS.md
+doc AGENTS.md STATUS.md; doc FINDINGS.md
 printf -- '- Index forum posts; extract shared retrieval into viki_ask_query()\n' >> "$CO/TIMELINE.md"
 cat > "$SRC/c07" <<'EOF'
 Index forum posts; extract shared retrieval into viki_ask_query()
@@ -489,7 +494,7 @@ EOF
 commit_with "$SRC/c11"
 
 # --- c12: CLAUDE.md + the invalidation and mixed-epoch fixes ---
-doc CLAUDE.md
+doc CLAUDE.md CONTRIBUTING.md
 printf -- '- Close Milestone 1: DoD test, invalidation, mixed-epoch scoring\n' >> "$CO/TIMELINE.md"
 cat > "$SRC/c12" <<'EOF'
 Close Milestone 1: DoD test, invalidation, mixed-epoch scoring

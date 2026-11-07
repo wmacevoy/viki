@@ -1,0 +1,297 @@
+# 2. Unknowing
+
+Building something is mostly finding out what you did not know. This chapter names the five kinds of
+not-knowing, says what each costs, and says how to move each one before it charges full price. The
+labels `K0`–`K4` are used throughout the guide.
+
+| #      | Category             | What it is                                                         | On a class project                                                  |
+| ------ | -------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| **K0** | The known            | Things you know, that are true.                                    | Your language's `sort` is stable; you checked the docs.             |
+| **K1** | The known unknown    | Things you know you don't know.                                    | "I don't know how the grader feeds input. I'll ask."                |
+| **K2** | The unknown unknown  | Things you didn't know you didn't know.                            | The grader's input file has Windows line endings. Nobody thought to ask. |
+| **K3** | Erroneous certainty  | What feels like K0 and is false.                                   | "My delete handles the head node." It doesn't.                      |
+| **K4** | Chosen falsehood     | Things held as true, knowing they aren't, because they are useful. | "Input is well-formed" — written in the README, with what breaks if it isn't. |
+
+---
+
+### <a id="u1"></a>SE1/U1. K0 through K3 are in order of expense; K4 is a choice
+
+*Since v1.0 (2026-10-20).*
+
+> **Quick:** K0 is known and true. K1, the known unknown, is cheap: ask or look it up. K2, the unknown unknown, costs a rewrite. K3, erroneous certainty, costs everything built on it, found last. K4, a falsehood chosen knowingly, is not on the ladder; it is a decision.
+
+K0 costs nothing; you already know it. Finding out a K1 is cheap — you know the question, so you can
+look it up or ask. A K2 costs a rewrite, because it arrives as a surprise after you have built on
+the wrong picture. A K3 costs the most: whatever was built on top of the belief, discovered at the
+worst possible moment.
+
+K4 is not on that ladder at all. It is a decision, and usually a good one.
+
+### <a id="u2"></a>SE1/U2. Building is discovering, in the right order and at the right price, which category each part of the problem belongs to
+
+*Changed in v1.4 (2026-11-02).*
+
+> **Quick:** Every practice moves something toward K0 before it charges full price: write K0 down; spike K1; expose K2 to reality early by integrating, demoing, asking a domain expert; meet K3 with evidence that could have said no; name each K4 and its blast radius.
+
+Every practice in this guide is a way of moving something **toward K0** — from a more expensive
+category to a cheaper one — before it charges full price:
+
+| From | To     | How                                                                                                         |
+| ---- | ------ | ----------------------------------------------------------------------------------------------------------- |
+| K0   | stays  | Write it down so it stays known. Tests are executable knowledge, and unlike prose they complain when they go stale. |
+| K1   | K0     | Spikes, prototypes, reading the source, asking the client. The only category you can simply decide to spend time on, and some of it will not convert ([SE1/U10](#u10)). |
+| K2   | K1     | Exposure to reality, early and repeatedly: integrate, deploy, demo, inject faults, watch real use. You cannot search for these; you can only arrange to be surprised sooner and more cheaply — and asking someone who knows a domain you don't is the cheapest exposure there is ([SE1/R8](04-requirements.md#r8)). |
+| K3   | K0     | Evidence: a test that could have failed, an output you actually looked at, a signature you checked, a second person who does not share your assumption. |
+| K4   | chosen | Name the falsehood, write down where it is load-bearing, know the blast radius when it comes due.          |
+
+> **Ask:** "Which category is this part of the problem in — and what is the cheapest way to move it?"
+
+### <a id="u3"></a>SE1/U3. K3 is the one to be afraid of
+
+*Since v1.0 (2026-10-20).*
+
+> **Quick:** K3 costs nothing at the time: no search starts, because you think there is nothing to look for. Only reality and someone who does not share your assumption find it. Run it rather than reason; a guard never seen to refuse has not been seen to work. To show a flaw, show it failing rather than argue it.
+
+K1 and K2 are honest. K3 is expensive precisely because it costs nothing at the time: no search is
+triggered, no question is asked, no ticket is filed. You are not looking, because as far as you know
+there is nothing to look for.
+
+**Only two things find K3: reality, and someone who does not share your assumption.** That is the
+whole justification for running the code instead of reasoning about it, for integrating early, and
+for review by another person rather than by yourself an hour later — and for letting other people
+say what needs testing: you cannot see past your own design, and a reviewer, the client at a demo,
+or an attacker can.
+
+The same reasoning says an attack should be *demonstrated before its defense is trusted*
+([SE1/T8](06-testing.md#t8)). "Users can't see each other's orders" is K3 until you have logged in
+as one user, requested another user's order by ID, and watched the request be refused. The same
+holds for any check that guards against misuse — a signature check, an input validator, a permission
+rule: you have not seen it work until you have seen it say no.
+
+> **Ask:** "What would I see if I were wrong about this — and have I looked?"
+
+### <a id="u4"></a>SE1/U4. Every abstraction rests on chosen falsehoods; write down where they are load-bearing
+
+*Since v1.0 (2026-10-20).*
+
+> **Quick:** "The clock is right," "the token reflects the current role": nothing gets built without such falsehoods. Choose them deliberately; write where each is load-bearing and what breaks when it comes due. Chosen, an asset; held unknowingly, K3.
+
+An abstraction is a simplified picture you agree to work with — "a network call returns a value,"
+"`now()` tells the time" — and every simplified picture is false somewhere. You cannot build
+anything without these K4s. A typical system holds a stack of them:
+
+- The clock is correct.
+- The network delivers.
+- The input is honest.
+- The configuration has not changed since startup.
+- The login token reflects the user's current role. (It reflects their role as of when it was
+  issued — hours ago, perhaps.)
+
+The engineering act is not avoiding these. It is choosing them deliberately, recording them, and
+knowing what breaks when one *comes due* — when the world stops matching the picture. A falsehood is
+**load-bearing** where something important depends on it being true, and its **blast radius** is
+everything that breaks when it stops being true. **An abstraction leaks exactly where its falsehood
+was load-bearing.** A K4 you have chosen is an asset; the same falsehood held unknowingly is K3.
+
+> **Ask:** "What are we assuming here that we know is not quite true — and where is that written?"
+
+### <a id="u5"></a>SE1/U5. Estimate the category, not the task
+
+*Since v1.0 (2026-10-20).*
+
+> **Quick:** "Two days" usually means "if nothing I haven't thought of happens." Mostly-K0 work gets a number, K1 a range, K2 only a time box. Say which you are handing over; when unsure, time-box a spike, then give a range.
+
+"Two days" usually means "two days if nothing I haven't thought of happens" — a K0 statement about a
+schedule governed by K2.
+
+| The work is mostly | It estimates as                        |
+| ------------------ | -------------------------------------- |
+| K0                 | a number                               |
+| K1                 | a range                                |
+| K2                 | nothing; it can only be **time-boxed** |
+
+Say which kind you are handing over. When it is unclear which category the work is in — integrating
+with a vendor's API nobody on the team has used, say — treat it as K2: time-box a short spike to
+find out what you don't know, then give a range for the rest.
+
+> **Ask:** "Is this an estimate, a range, or a time box?"
+
+### <a id="u6"></a>SE1/U6. Nothing important may live only in a head
+
+*Since v1.1 (2026-10-20).*
+
+> **Quick:** A constraint in one head is K3 for its holder, who thinks everyone knows, and K2 for everyone else, who cannot ask about what they do not know exists. Teammates leave; agents were never in the room. Put it in the repository.
+
+A constraint that exists only in one person's head fails in both directions at once. For its holder
+it is K3 — they believe everyone knows it. For everyone else it is K2 — you cannot ask about
+something you have no idea exists.
+
+It used to be a survivable liability: the person holding the constraint sat nearby, saw the change,
+and said "no, not like that." Teammates leave, get sick, and forget. Agents were never in the room
+([SE1/A3](10-agents.md#a3)). So the state of a project has to be **observable from where every party
+stands**, in the repository, versioned with the code ([SE1/W10](08-work.md#w10),
+[templates](../README.md#contents)).
+
+> **Ask:** "If the person who knows this vanished on Friday, what could the rest of us not do on
+> Monday?"
+
+### <a id="u7"></a>SE1/U7. Find the K3 factories: anything that keeps saying "fine" with no way to say "wrong"
+
+*Changed in v1.2 (2026-10-28).*
+
+> **Quick:** A K3 factory keeps saying "fine" with no way to say "wrong": an alert never seen firing, an unversioned citation, a status with no since, a default nobody chose, torn work left looking current. Give it a way to fail and watch it once; make it age visibly; make its source checkable.
+
+A K3 is one wrong belief ([SE1/U3](#u3)). A **K3 factory** is whatever keeps producing them: a signal
+that says "fine," costs nothing to keep believing, and has no path by which it could say "wrong." It
+makes confidence faster than evidence, and every belief it makes is found last. Some that are cheap
+to fix once named:
+
+- **Conversations that never move into documents.** Everyone in the room agreed; nobody else can find
+  out what ([SE1/U6](#u6)).
+- **Unversioned references** to requirements and design. The citation still resolves after the text
+  it pointed at has moved ([SE1/R10](04-requirements.md#r10)).
+- **Agent compaction.** When an agent's context is summarized to make room, the summary replaces what
+  was said, and the agent carries on exactly as confidently ([SE1/A4](10-agents.md#a4)).
+- **Documentation a small model could have written from the code**: a block that restates *what* the
+  code does, away from the line it describes. It reads as documented, carries no *why*, and drifts.
+  Put the comment at the line it explains, and let the code be the document of *what*.
+- **Code and documents that cannot be searched for a concept.** A concept with three names, or none,
+  returns nothing to a search, and "nothing found" reads as "we don't do that"
+  ([SE1/D9](05-design.md#d9)).
+- **A status with no *since*.** "Blocked" reads as current when it is three days old
+  ([SE1/H4](09-people.md#h4)).
+- **An alert never seen firing.** Silence looks exactly like health ([SE1/O4](07-operating.md#o4)).
+- **A default nobody chose** — a timeout, a retention period, an unpinned version. It works, so
+  nobody asks who decided ([SE1/R6](04-requirements.md#r6), [SE1/O2](07-operating.md#o2)).
+- **Torn work.** A change interrupted between started and done: a dropped connection, a closed
+  laptop, a busy server, a compacted context ([SE1/A11](10-agents.md#a11)), a second agent on the
+  same project. What is left — a working tree, a branch, a queue row, a summary — reads as the
+  current state, is neither the old one nor the new, and nothing says so: the interruption rule of
+  [SE1/R7](04-requirements.md#r7), applied to the work instead of the data. Commit or stash the tear
+  with a message that says so, and on resuming treat what you find as torn until shown otherwise.
+
+Three medicines, each the opposite of what makes a factory:
+
+1. **Give the signal a way to fail, and watch it fail once** — a test seen red, an alert seen firing,
+   an attack seen refused ([SE1/T3](06-testing.md#t3)).
+2. **Make it age visibly** — a version on the citation, an age on the cached value, a *since* on the
+   status ([SE1/R10](04-requirements.md#r10), [SE1/D2](05-design.md#d2)).
+3. **Make its source checkable** — who said it, where it is written, and how to check it without
+   asking them again ([SE1/D13](05-design.md#d13)).
+
+> **Ask:** "What here would keep saying 'fine' if it were wrong?"
+
+### <a id="u8"></a>SE1/U8. Leave whitespace: an agenda finds only what it looks for
+
+*New in v1.2 (2026-10-28).*
+
+> **Quick:** An agenda finds only what it looks for; K2 lives in what nobody asks about. Spend time with no task on purpose. For an agent: read the repository and what changed, and report what moved, tore, or went stale to FINDINGS or the queue, not code.
+
+An agenda is a search. It moves K1 to K0: you ask the question, you get the answer. K2 is what
+nobody is asking about, so a calendar with no empty space and a queue that always has a next item
+guarantee that the surprise arrives in the only place left, reality, at full price
+([SE1/U2](#u2)). People say they are thinking of quitting at the bar, not at stand-up: stand-up has
+a format, and even its question about discomfort ([SE1/H4](09-people.md#h4)) finds only what
+someone is ready to name. An agent given only tasks never looks around: it does not notice the
+torn change from last week ([SE1/U7](#u7)), the dependency whose advisory landed on Tuesday, or the
+assumption that came due when the world moved ([SE1/U4](#u4)). Everything it is not pointed at
+reads as fine.
+
+Whitespace is time with no agenda, spent on purpose. For people it is the walk, the lunch, the end
+of the retro after the list is done, and the only question is "what is wrong that nobody has asked
+about?" For an agent it is a session with no task: read the repository and what changed in the
+world since the last session, and report what moved, what is torn, and what has gone stale. What it
+finds goes in `FINDINGS` or the queue, not into code. Slack ([SE1/W7](08-work.md#w7)) is the
+capacity to absorb a surprise; whitespace is the attention that notices it first.
+
+What has been seen, so far: in [trials](../GAPS.md#8-nulls-and-one-move-in-the-wrong-direction),
+an agent given a break with no task raised a real risk nobody had asked about in 4 of 10 runs, and
+never tied it to the work in hand; a jester given the whole project found facts about it and
+nothing about the new work. Wrong if a session with no task finds nothing a tasked one would not.
+
+> **Ask:** "When did someone last look at this with no task in hand, and what did they find?"
+
+### <a id="u9"></a>SE1/U9. Rules change: a rule says who made it, when, and what would show it wrong
+
+*New in v1.2 (2026-10-28).*
+
+> **Quick:** A rule reads the same whether measured, decided, or guessed. Beside one you will rely on, say who claims it, since when, and what would show it wrong. Doubt the newest first; supersede a wrong one with its reason, never edit silently.
+
+People learn, rules change, and what is is not what was. A rule is anything that tells a person or
+an agent what to do: a requirement, a scope decision, a convention, a line in an agent file, a
+checklist item, a principle in this guide. Every one was written by someone, at some time, for a
+reason that may have moved, and every one speaks in the same present tense whether it was
+measured, decided, or guessed. An agent wrote "never forks" into one project's agent file as an
+inference; by that project's own record, which agents also wrote, it was read for weeks with the
+authority of the measured sentence beside it, until the owner retired it in one sentence. A copy of
+this guide pinned [SE1/A11](10-agents.md#a11) at a commit made eighteen minutes after the principle
+was first written; it changed again the next morning, and nothing in the copy said how new it was
+([GAPS](../GAPS.md#1-a-rule-eighteen-minutes-old-frozen-into-a-copy)). A rule with no author, no
+date, and no way to be wrong is one more thing that keeps saying "fine" ([SE1/U7](#u7)), so give it
+the same three medicines:
+
+- **Make its source checkable.** Beside a rule that will be relied on, say who claims it —
+  measured, decided by a named person, or *(inferred)* ([SE1/W12](08-work.md#w12)) — and since
+  when. A rule an agent wrote says so and names the agent: its author's blind spots are the reader's
+  own when the reader is the same model ([SE1/D13](05-design.md#d13)).
+- **Give it a way to fail.** What would show this rule wrong? If nobody can say, that is the
+  finding; write that instead ([SE1/R2](04-requirements.md#r2), [SE1/T3](06-testing.md#t3)).
+- **Make it age visibly, and doubt in order.** Git keeps what a rule's text cannot: when it
+  arrived, who wrote it, what it replaced, and the commit message's *why*; `git log -S` finds the
+  commit. Doubt the newest rules first: they have had the least contact with the world, and a
+  summary or a copy is likeliest to have mangled them. Then the rules written for a world that has
+  since changed — a new tool, a new cost, a new kind of reader. And doubt the most-followed under
+  evidence: a rule cited often was selected by its successes, and the cases where it misled, nobody
+  recorded. When evidence contradicts a well-loved rule, the evidence gets the hearing and the
+  citations do not vote. A rule found wrong is superseded with its reason, never silently edited,
+  so the next reader meets the correction ([SE1/R10](04-requirements.md#r10), extended from
+  requirements to every rule).
+
+> **Ask:** "Which rule here changed last, who measured it, and what would show it wrong?"
+
+
+### <a id="u10"></a>SE1/U10. Some K1 is essential: a proxy taken for K0 is K3
+
+*New in v1.4 (2026-11-02).*
+
+> **Quick:** "Is this usable?" never converts to K0; a measurement near it is a proxy, and "usability is 92" stops the question, which is K3. Convert what converts; for the rest name the judge and the occasion. A proxy may veto; only the judge may pass.
+
+Most K1 ends when someone spends the time ([SE1/U2](#u2)). Some does not. "Is this layout usable
+and appealing?" is not a fact waiting to be looked up; it is a judgment someone makes on meeting the
+thing, and it can change with the next person or the next version. No spike finishes it. Call that
+an **essential K1**.
+
+You can measure something near it: task time, contrast, a layout score. The reading is K0. That it
+is the thing is not. Say "usability is 92" and the question stops being asked, which is K3 with
+nobody dishonest and no target set yet; a target only makes it worse ([SE1/F5](03-feedback.md#f5)).
+Held knowingly, the same proxy is K4: "we take task time to stand in for usable, and it misses
+whether anyone comes back" names what it cannot see ([SE1/U4](#u4)).
+
+- **Convert what converts.** Contrast and load time are ordinary requirements. Only what is left
+  is essential, and this is no license for vague sentences ([SE1/R2](04-requirements.md#r2)).
+- **Name the judge and the occasion.** Who says yes, on what, and when. If nobody can say no, it is
+  a wish, not an essential K1. The requirement is marked *(judged)*: "**UI-4** *(since v2)* *(judged)*
+  Judge: the gate supervisor, on the running page, at each release demo. Veto: a first-time driver
+  finds a lot with space within 30 seconds *(invented)*."
+- **A proxy may veto; only the judge may pass.** A failed proxy stops the work. A perfect one earns
+  a look. The verdict belongs to a version, so a later change makes it stale
+  ([SE1/W11](08-work.md#w11)).
+- **A real project's mission is almost always one.** "Drivers go straight to a lot with space" has no
+  number that finishes it. Arrivals counted and minutes saved may veto it, and neither says it is met.
+  So the mission is a *(judged)* requirement, and its judge is the client
+  ([SE1/D9](05-design.md#d9)). This is the author's judgment, untried.
+
+What has been seen, so far, is nearby and not this. A check of what survived a compaction went 4/4
+on planted gaps, then passed 28 of 29 real compactions, in many of which, by the author's account,
+harm happened ([GAPS](../GAPS.md#1-the-handoff-check-passed-nearly-every-real-compaction)). That is
+a proxy failing, not an essential K1 shown. This principle is the author's decision, with
+[no trial of its own yet](../GAPS.md#decided-without-a-trial-essential-k1-2026-11-02). Wrong if,
+across projects, no proxy is found that judges reject once it is optimized hard.
+
+> **Ask:** "When this number is perfect, what could still be wrong, and who would tell us?"
+
+
+---
+
+Next: [3. Feedback](03-feedback.md) — the cost of a test, and why software has to build its own
+signals.
