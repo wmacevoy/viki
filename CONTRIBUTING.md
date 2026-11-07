@@ -9,6 +9,15 @@ they disagree** -- it knows the local mechanics.
 Adopted 2026-11-07, minimally: no working set was rebuilt. What follows the
 noun map is the former `CLAUDE.md`, moved here verbatim.
 
+**Also the DM1 data-mining guide**, release **v1.3**, vendored at `vendor/dm1`
+(unedited, less its own `vendor/`, which is a second copy of the SE1 v1.7
+already here). Its working agreement is `AGENTS-DM.md` at the root, and
+`dm`/`dm.ps1`/`dm.py` sit beside `se.py`; run `./dm --doctor`. The sandbox
+that keeps an unattended agent session away from everything but one
+directory is `vendor/dm1-self-improvement/sandbox/bwrap-run.sh`, copied
+unedited from `wmacevoy/data-mining-self-improvement` at `a0d7f8f`. Data
+work here is one question per directory: `test/stripped/` is the first.
+
 **Renames, 2026-11-07.** Older text everywhere in this repo (code comments,
 FINDINGS, QUEUE, the section below) says `AGENTS.md` and `CLAUDE.md` meaning
 viki's own files. Read them as:

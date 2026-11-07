@@ -1,0 +1,48 @@
+# Data Mining
+
+> A guide to producing claims from data that are worth acting on, organized as numbered principles
+> with versioned IDs (DM1/F5, DM1/D2, DM1/R6, ...) that people and agents cite. A companion to the
+> Software Engineering guide (SE1): each principle either reframes an SE1 principle for data, and
+> links to it, or is new. The Markdown files linked below are the canonical source; the GitHub Pages site is a rendering of them.
+
+Agents doing data work in a repository that follows this guide: read AGENTS.md here and SE1's
+AGENTS.md, which it extends, then the chapter that bears on the task. Principle anchors are the
+lowercase ID without the version, e.g. DM1/F5 is guide/03-feedback.md#f5.
+
+## Start here
+
+- [AGENTS.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/AGENTS.md): the working agreement for agents doing data work
+- [SE1 AGENTS.md](https://raw.githubusercontent.com/wmacevoy/software-engineering/v1.7/AGENTS.md): the working agreement it extends
+- [README.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/README.md): the argument in ten lines, the running example, the principle index, and the map from SE1
+- [ADOPT.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/ADOPT.md): how to adopt the guide in a new project or one that already has results, and what an agent does where adoption is partial
+- [CHANGELOG.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/CHANGELOG.md): what changed in each release, by principle ID
+
+## Chapters, in reading order
+
+- [1. Purpose](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/01-purpose.md): what data mining is for, and who is affected without seeing it
+- [2. Unknowing](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/02-unknowing.md): why data work manufactures confident error: leakage, and the gap between the question and the data
+- [3. Feedback](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/03-feedback.md): what evidence costs, and why searching for it changes it
+- [4. Requirements](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/04-requirements.md): the decision, the unit, the outcome, the prediction point, the price of each error, and bias
+- [5. Design](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/05-design.md): data and models as state and caches; as-of joins, raw as authority, provenance
+- [6. Testing](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/06-testing.md): checks worth trusting, for pipelines and for models
+- [7. Operating](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/07-operating.md): environments, monitoring without labels, shift, fallbacks, shadow deploys, feedback loops, bias audits
+- [8. Work](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/08-work.md): CRISP-DM as the six steps, time boxes, the pressure to find something, done
+- [9. People](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/09-people.md): the domain expert, the client, nulls, and who owns a definition
+- [10. Agents](https://raw.githubusercontent.com/wmacevoy/data-mining/main/guide/10-agents.md): a fast analyst with no stake in whether the number is true
+
+## Reference
+
+- [CHECKLISTS.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/CHECKLISTS.md): every checklist, in the order a project meets them
+- [GLOSSARY.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/GLOSSARY.md): the terms used precisely
+- [READING.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/READING.md): the longer arguments, one line each
+- [GAPS.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/GAPS.md): where the guide is known to be thin
+
+## Optional
+
+- [templates/QUESTION_v1.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/templates/QUESTION_v1.md): the decision, definitions, bar, and price of errors
+- [templates/PLAN_v1.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/templates/PLAN_v1.md): the analysis plan, written before the outcome is examined
+- [templates/DATASHEET.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/templates/DATASHEET.md): provenance for one data source
+- [templates/MODEL_CARD.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/templates/MODEL_CARD.md): a model's contract
+- [templates/LEDGER.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/templates/LEDGER.md): the log of everything scored
+- [templates/CONTRIBUTING.md](https://raw.githubusercontent.com/wmacevoy/data-mining/main/templates/CONTRIBUTING.md): the repository guide for a data project
+- [dm.py](https://raw.githubusercontent.com/wmacevoy/data-mining/main/dm.py): the data project's doctor, run beside SE1's se.py (`./dm --doctor`)

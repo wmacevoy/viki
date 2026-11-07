@@ -1,3 +1,4 @@
 @AGENTS.md
+@AGENTS-DM.md
 @vendor/se1/QUICKREF.md
 @CONTRIBUTING.md
