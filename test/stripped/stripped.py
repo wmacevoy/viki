@@ -445,7 +445,10 @@ def git_commit():
     try:
         out = subprocess.run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"],
                              capture_output=True, text=True, timeout=10)
-        dirty = subprocess.run(["git", "-C", HERE, "status", "--porcelain", "--", HERE],
+        # The ledger is excluded: it is this code's own output, and counting it
+        # marked every line after the first "+dirty" (LEDGER.md).
+        dirty = subprocess.run(["git", "-C", HERE, "status", "--porcelain", "--", HERE,
+                                ":(exclude)" + LEDGER],
                                capture_output=True, text=True, timeout=10).stdout.strip()
         return out.stdout.strip() + ("+dirty" if dirty else "") if out.returncode == 0 else "unknown"
     except OSError:

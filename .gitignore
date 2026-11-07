@@ -41,3 +41,4 @@ core/build/
 # committed. A diary belongs in ~/.viki or wherever the caller says.
 viki.db
 *.diary
+__pycache__/
