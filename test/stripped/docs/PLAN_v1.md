@@ -3,7 +3,8 @@
 Question: `QUESTION_v1` · Written: 2026-11-07 · Outcome examined yet? no (no librarian has been scored
 on a FINDINGS pile; one pilot was scored on the fixture)
 
-**Draft, inferred.** Written by Claude Opus 5.5 before any librarian result on FINDINGS.md existed.
+Written by Claude Opus 5.5 before any librarian result on FINDINGS.md existed. Its question was
+confirmed by Warren on 2026-11-08, with the go-ahead for the dev runs budgeted below.
 
 ## Split
 

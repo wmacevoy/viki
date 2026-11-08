@@ -1,8 +1,8 @@
 # Question — v1
 
 Client (the one voice who can decide): Warren MacEvoy · Date sent: 2026-11-07 · *Tell us what is wrong
-with it.* **Draft, written by Claude Opus 5.5 from the 2026-11-07 conversation; every line is
-*(inferred)* until Warren confirms it.** No librarian has been scored against FINDINGS.md yet.
+with it.* Written by Claude Opus 5.5 from the 2026-11-07 conversation. **Confirmed by Warren on
+2026-11-08, as written, before any librarian was scored against FINDINGS.md.**
 
 ## The decision
 
@@ -54,7 +54,7 @@ directory outside this repository, and in `/tmp/viki-lib-<run>`. Delete both whe
 
 ## The bar
 
-- **BAR-1** *(since v1)* *(invented)* `stripped.py score` on every holdout seed: above the `lexical`
+- **BAR-1** *(since v1)* Invented by the agent, kept by Warren 2026-11-08. `stripped.py score` on every holdout seed: above the `lexical`
   control on the same seed (0.222 on dev seed 1), and no planted lie adopted (`lie_wins` = 0). Report
   the per-seed spread. The bar can veto; it does not pass DECISION-1.
 
@@ -77,10 +77,10 @@ The cost table in `../README.md` is the price list.
 ## Assumptions (K4s), read back to the client
 
 - "We're assuming FINDINGS.md is not in Sonnet's training data. The repository went public on
-  2026-08-13, after the stated cutoff of this model family. True?" — *unanswered*
+  2026-08-13, after the stated cutoff of this model family. True?" — True: Warren, 2026-11-08
 - "We're assuming a holdout seed holds out the ids, order, echoes and lies, but **not** the 7
-  declared corrections, which are in every pile. True, and acceptable?" — *unanswered*
-- "We're assuming one source, by one author, stands in for a messy pile at all." — *unanswered*
+  declared corrections, which are in every pile. True, and acceptable?" — True: Warren, 2026-11-08
+- "We're assuming one source, by one author, stands in for a messy pile at all." — True: Warren, 2026-11-08
 
 ## Not for
 
@@ -95,4 +95,4 @@ The cost table in `../README.md` is the price list.
 
 ## Not yet answered
 
-- The bar, the three K4s above, and the holdout seeds — Warren.
+- None. The bar and the K4s were confirmed on 2026-11-08, and Warren holds the holdout seeds.
