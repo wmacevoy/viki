@@ -12,7 +12,7 @@ confirmed by Warren on 2026-11-08, with the go-ahead for the dev runs budgeted b
 - **Dev:** seeds 2 to 9, for the prompt and the arms. Seed 1 is excluded from both splits: two runs
   read it before being stopped (Departures).
 - **Holdout:** seeds of 1,000,000 or more, chosen and kept by Warren in `~/.viki-holdout/`, outside the
-  working directory. Only Warren may read it, and he spends it once, at DECISION-1; the scorer refuses
+  working directory. Only Warren may read it, and he spends it once, at Q1/DECISION-1; the scorer refuses
   a holdout seed without a stated reason. The generator is in every clone, so a seed's secrecy is
   the whole fence: anyone who knows one can rebuild its key.
 
@@ -57,3 +57,8 @@ confirmed by Warren on 2026-11-08, with the go-ahead for the dev runs budgeted b
   worktree of this repository, where `FINDINGS.md` was in reach. Both were stopped by Warren's
   instruction, nothing was scored, and their partial output was not opened. Seed 1 is excluded.
   `librarian/run.sh` and the sandbox are the fix.
+- 2026-11-08 — after round 1 (8 of the 24 budgeted runs): the other 16 dev runs are dropped, by
+  Warren's instruction. Instead, the 19 distinct unkeyed claims went to a blind second read
+  (`librarian/check.py`, `claude-haiku-5-5`, two notes per session and never the claim), so that
+  Warren can judge them for key v2. That check scores nothing and changes no label; what would count
+  against it was written before it ran, in its evidence directory.

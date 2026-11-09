@@ -10,7 +10,10 @@ test is and how it scores is in `README.md`; the question and plan are in `docs/
   sandboxed librarian session, and leaves the answer in `OUT/RUN`, outside the repository. Then
   `python3 test/stripped/stripped.py score OUT/RUN/build/key.json OUT/RUN/answer.json --what … --against …`
   scores it and appends to the ledger. The 8-fragment pilot took 12 s; a full pile is unmeasured.
-- **Main product:** `docs/ledger.jsonl` — every score, which is what DECISION-1 reads.
+- **A second read of unkeyed claims:** `python3 test/stripped/librarian/check.py OUT TRIAL` — one
+  sandboxed `claude-haiku-5-5` session per row of `TRIAL/UNKEYED-review.md`, shown the two notes and
+  not the claim; writes `OUT/CHECKED-review.md` with every quote re-found by script. Scores nothing.
+- **Main product:** `docs/ledger.jsonl` — every score, which is what Q1/DECISION-1 reads.
 - **Reset derived data:** `rm -rf OUT/RUN /tmp/viki-lib-RUN` — the source is never touched.
 
 ## Check it
@@ -25,8 +28,8 @@ test is and how it scores is in `README.md`; the question and plan are in `docs/
   git, and every look records its sha256.
 - **The ledger:** `docs/ledger.jsonl` — one line per score, appended by the scorer.
 - **The holdout:** seeds of 1,000,000 or more, chosen and kept by Warren in `~/.viki-holdout/`,
-  outside the working directory. Only he may read it, and he spends it once, at DECISION-1, giving
+  outside the working directory. Only he may read it, and he spends it once, at Q1/DECISION-1, giving
   the scorer a reason. An agent does not go looking for it.
-- **Data about people:** owner-authored notes; sent to Sonnet by the owner's request. Copies live in
-  `OUT/` and `/tmp/viki-lib-*`, and are deleted when the trial closes.
+- **Data about people:** owner-authored notes; sent to Sonnet and Haiku by the owner's request. Copies live in
+  `OUT/`, `/tmp/viki-lib-*` and `/tmp/viki-chk-*`, and are deleted when the trial closes.
 - **Clock:** UTC throughout.

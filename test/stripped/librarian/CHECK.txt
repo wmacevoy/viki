@@ -1,0 +1,19 @@
+Two notes from one software project's pile of notes are in this directory: note-A.md and note-B.md. Someone must decide how they relate before relying on either, and wants evidence they can check, not an opinion.
+
+Read both notes in full. Then decide which ONE of these holds:
+- "A corrects B": A replaces, corrects or retracts a claim in B, so B (or that claim) should no longer be read as current. A is the newer, correcting note. "B corrects A" is the same the other way round.
+- "same": A and B come from the same origin. One restates or copies the other, so they are not independent sources.
+- "contradicts": A and B disagree on a fact, and you cannot tell from the two notes which is right.
+- "none": none of the above. Notes on the same topic that merely discuss it, or one note citing another, are "none".
+
+OUTPUT: write evidence.json in this directory with exactly this shape:
+
+{"relation": "A corrects B", "support": [{"note": "A", "quote": "..."}, {"note": "B", "quote": "..."}], "disagreements": [{"A": "...", "B": "...", "what": "..."}], "doubts": "..."}
+
+- support: the sentences that show the relation you chose, from either note.
+- disagreements: EVERY fact on which the two notes disagree, however small: a number, a name, a count, a claim one makes and the other denies. Quote the conflicting text from each note. Write [] only if you compared them and found none.
+- doubts: one or two sentences on what would change your answer.
+
+Every quote must be copied exactly, character for character, from the note it names. A script checks each one against the note, and a quote that is not there is thrown away. Short exact quotes are better than long paraphrased ones.
+
+Check the file parses as JSON (e.g. `python3 -m json.tool evidence.json`) before you finish. Nobody is available to answer questions, so make your own call. Then reply with the relation only.
