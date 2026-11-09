@@ -18,7 +18,7 @@ What v3 itself adds, in order of weight: a mission, a fundamental shape, a goal 
 completion, signed time (C), search (Q) and relations between assertions (L).
 
 Words are used as v2's glossary defines them; the glossary moves with the first part, and is the one
-part that must. New words: **coverage**, **relation**, **grounds** (defined where first used).
+part that must. New words: **coverage**, **relation**, **grounds**, **originate** (defined where first used).
 
 ---
 
@@ -119,6 +119,34 @@ bytes in truth — because ethics and the law may require forgetting.
 
 ---
 
+## D — Rights (changes to v2)
+
+v2's D-3 had three rights, `r` read, `s` supersede and `x` redact, and folded adding into `s` on
+purpose (reboot `refcore/model.py:9-11`: "adding and superseding are one right"). `core/` has no
+rights at all. v3 splits origination out, from a distinction Warren drew earlier and that reached
+neither: *"the rights are origination, supercession, and read. (a logger may only have supercession,
+but no origination or read privliges)"* — Warren, 2026-11-09.
+
+- **D-3** *(changed in v3 from v2 at 28966cd)* Access is granted **per principal, per diary**, as
+  four rights:
+  - `o` **originate**: write an assertion that supersedes nothing — the first on its chain.
+  - `s` **supersede**: write an assertion that supersedes one or more existing ones.
+  - `r` **read**: every read path (D-3a0).
+  - `x` **erase**: withdraw, seal or erase (W-1).
+  Which right a write needs is decided by its frame alone (an empty `supersedes` list needs `o`, a
+  non-empty one needs `s`), so every peer reaches the same answer without consulting local state,
+  and it is checked where R-4 checks supersession: at write time and again at fold time. There is no
+  intra-diary or per-assertion control.
+- **D-3a** *(changed in v3)* **`s` alone is the load-bearing case.** A logger holding only `s` can
+  extend chains someone else originated and do nothing else: it cannot read, and it cannot start a
+  chain. Its outlet is the fixed set of chains it was given, which is what bounds D-3b's covert
+  channel. Every grant is stated as the capability of an agent already taken over.
+- **D-3f** *(since v3)* **Supersede by chain.** A principal may supersede by naming an akey
+  rather than an id. The new assertion supersedes every current arm of that akey in the writer's
+  store, so a writer without `r` can append to a chain without seeing it; it learns nothing of
+  what it superseded but that it existed. If the akey has no assertion in the store, the write would
+  be an origination and needs `o`; without `o` it is refused (E-3).
+
 ## C — Time: viki's own signed timestamps (additions)
 
 Assumes v2's C-1 to C-5, which are not yet moved. C-1 above all: **the layer calls no clock**; the
@@ -188,7 +216,7 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 
 | ENV-1 says | Requirements | Notes |
 | --- | --- | --- |
-| store | A-1 to A-8; D-1 to D-3e; E-1, E-3; N-7 | A comes first (Not yet answered 9). N-7 (a raw database key) is the "encrypted" in MISSION-1 |
+| store | A-1 to A-8; D-1 to D-3e, with D-3 and D-3a as changed in v3, and D-3f; E-1, E-3; N-7 | A comes first (Not yet answered 9). N-7 (a raw database key) is the "encrypted" in MISSION-1 |
 | resolve | R-1 to R-9; C-1 to C-4; C-6, C-7 | |
 | sign | I-1, I-2, I-5, I-6; N-1 to N-6 | grants and identities, as far as a root |
 | verify | I-3, I-7; A-7; R-4 to R-4b; S-11 | |
@@ -234,6 +262,8 @@ or contradict each other is useful when its claims are checkable.
 - **L-2** *(since v3)* A relation's akey is its **author and the sorted pair** of the two ids. So
   each author revises only their own relation on a pair, by superseding it, and two authors who
   disagree hold two standing relations side by side. That is information, not a fork to heal.
+  **Only the author named in the akey may supersede on it**, whatever `s` others hold: an exception
+  to v2's R-7 ("within a domain everyone may supersede"), checked at fold time like R-4.
 - **L-3** *(since v3)* A relation names both assertions in `derived_from` (V-1) and carries its
   evidence as quotes, each a byte range into the assertion it cites. A reader re-checks every range;
   one that no longer matches makes the relation stale, and one into erased content flags it (W-13).
