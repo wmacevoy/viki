@@ -804,6 +804,30 @@ static void t_q6_grep(void){
     CHECK( count_hits(p,"absent")==0 );
     drop(p);
 }
+static void t_q8(void){
+    Peer p = peer("alice"), ro = peer("mallory");
+    VkId first, second, logged, missing, again; VkCursor c; char key[40];
+    VkAssertion a = mk("alice","k",1,"one"), b = mk("alice","k",2,"two"), r = reading("alice","door",1,key,sizeof key);
+    CHECK( vk_put(p.st,&a,first)==VK_OK );
+    b.supersedes = (const VkId*)&first; b.nSupersedes = 1;
+    b.derivedFrom = (const VkId*)&first; b.nDerivedFrom = 1;
+    CHECK( vk_put(p.st,&b,second)==VK_OK );
+    CHECK( vk_append(p.st,&r,logged)==VK_OK );
+    CHECK( vk_get(p.st,second,&c)==VK_OK );
+    CHECK( id_eq(c.id,second) && c.a.body.n==3 && memcmp(c.a.body.p,"two",3)==0 );
+    CHECK( c.a.nSupersedes==1 && id_eq(c.a.supersedes[0],first) && c.a.nDerivedFrom==1 );
+    vk_assertion_id(&c.a,again);
+    CHECK( id_eq(again,second) );                 /* the whole frame came back */
+    vk_cursor_close(&c);
+    CHECK( vk_get(p.st,logged,&c)==VK_OK && c.a.pos==1 );   /* a logged row: a scan, but found */
+    vk_cursor_close(&c);
+    memset(missing,7,sizeof missing);
+    CHECK( vk_get(p.st,missing,&c)==VK_NOTFOUND );
+    vk_cursor_close(&c);
+    CHECK( vk_get(ro.st,second,&c)==VK_EDENIED );
+    vk_cursor_close(&c);
+    drop(p); drop(ro);
+}
 static void t_q2(void){
     Peer p = peer("alice");
     VkSearch s; VkCoverage c; VkId id;
@@ -985,6 +1009,7 @@ static const Test aTest[] = {
     {"Q-3","a method failing self-check is blind",t_q3},
     {"Q-5","erased content never appears",t_q5},
     {"Q-6","grep is exact and exhaustive",t_q6_grep},
+    {"Q-8","a hit's id reads back as its whole assertion",t_q8},
     {"ENV-2","merge memory does not grow with the store",t_env2},
     {"-","every sqlite call fails in turn; retry reaches the same store",t_fault_sql},
     {"-","every allocation fails in turn; retry reaches the same store",t_fault_mem},

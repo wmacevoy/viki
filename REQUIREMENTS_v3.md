@@ -43,7 +43,8 @@ deletion (FIN-2).
   decided, kept current by supersession and searchable. Served by A, R, Q, L, C.
 - **AS-3** *(since v3)* **Source control.** The history and merging of versioned content across
   peers: R-8's log view, S, M, V-1 provenance. **Content history only**: checkouts and working trees
-  are the host's (see SHAPE says no to; Not yet answered 3).
+  are the host's (see SHAPE says no to; Not yet answered 3, answered 2026-11-09). A host serving it
+  is specified by SCM.
 
 ## Iteration to completion
 
@@ -219,6 +220,35 @@ v2 excluded retrieval. v3 brings it into scope as a projection, under rules that
 - **Q-7** *(since v3)* A query may combine methods. A combined answer states each method's coverage
   separately; it never reports one coverage for the whole.
 
+- **Q-8** *(since v3)* *(invented, 2026-11-09: dogfood needed it)* A hit's id reads back as its whole
+  assertion, frame and links. This needs `r`, like every read (D-3a0). An id that is not held is
+  reported as not found.
+
+## SCM — A sprawled project's source control (new series)
+
+Sample two: viki on its own project (`DOGFOOD_v3.md`). *"what lets viki be a searchable scm for a
+sprawled project. think a fossil substitute with room for discussions, issues, calendar."* and, on
+the proposal, *"chat is fine - that what tombstones are for. yes to the rest."* — Warren, 2026-11-09.
+Decided with it: one diary for the whole sprawl; git keeps the working trees through the first
+slices; checkout is a host's (Not yet answered 3). These are a host's requirements, met through
+core's interface. They are not in the 1.0 scope, which Warren closes (FIN-4).
+
+- **SCM-1** *(since v3)* A git repository's commits and file versions, across every branch and tag,
+  can be ingested into a diary. Ingesting an unchanged repository again adds nothing.
+- **SCM-2** *(since v3)* A search across the diary returns hits from every ingested repository.
+  Each file-version hit names its repository, its path and the commit that introduced it.
+- **SCM-3** *(since v3)* A repository's current check-ins are its heads. Two branches that diverge
+  are a fork (R-5), and a merge commit leaves one head where there were two. A path changed on two
+  branches is likewise one current version again after the merge.
+- **SCM-4** *(since v3)* Coverage names each ingested repository, the commit each ref was read at,
+  and the ignore rules used. A search scoped to a repository that was not ingested reports blind,
+  never not found (Q-2).
+- **SCM-5** *(since v3)* Ingest refuses every path with a component naming a holdout, whatever the
+  ignore rules say, and reports how many it refused. *(Warren's standing rule: no holdout is ever read
+  by an agent.)*
+- **SCM-6** *(since v3)* Chat transcripts may be ingested. Forgetting one is a tombstone (W-1,
+  W-15): *"chat is fine - that what tombstones are for."*
+
 ## W — Forgetting a range (additions)
 
 - **W-15** *(since v3)* A **range tombstone** names a target author, a log and a contiguous range of
@@ -362,8 +392,9 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
    how it is pinned and shipped.
 2. **Guessable content.** The id of an erased "yes" or a date can be recovered by hashing guesses.
    A per-domain salted id hides it but breaks A-1 across domains. Undecided.
-3. **What source control means.** Proposed: content history and merge only (AS-3). Confirm, or say
-   what of Fossil's working-tree model belongs inside.
+3. **What source control means.** *Answered* (Warren, 2026-11-09, on `DOGFOOD_v3.md`: "yes to the
+   rest"): core keeps content history and merge only (AS-3). Checkout and working trees belong to a
+   host. Git keeps the working trees while viki mirrors them (SCM).
 4. **Engines for 1.0.** *Answered* (Warren, 2026-11-09): SQLite only. G-2 to G-6 and other
    engines are viki 2.
 5. *Withdrawn* (2026-11-09): who may give a verdict. L-4 no longer has verdicts.

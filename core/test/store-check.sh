@@ -24,5 +24,8 @@ cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror -shared -fPIC \
    "$ROOT/core/src/sha256.c" -lsqlite3 -o "$OUT/libviki_store.so"
 VIKI_STORE_LIB="$OUT/libviki_store.so" python3 "$ROOT/core/test/test_store.py" \
    | tee -a "$OUT/results.txt" || rc=$?
+# The first host, tools/vk.py, through the same library: REQ3/SCM. Needs git.
+VIKI_STORE_LIB="$OUT/libviki_store.so" python3 "$ROOT/tools/test_vk.py" \
+   | tee -a "$OUT/results.txt" || rc=$?
 python3 "$ROOT/core/test/gate.py" "$ROOT/REQUIREMENTS_v3.md" "$OUT/results.txt" || rc=$?
 exit "$rc"

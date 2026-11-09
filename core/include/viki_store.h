@@ -125,6 +125,10 @@ typedef struct {
 VkStatus vk_cursor_open(VkStore *p, int64_t afterSeq, VkCursor *c);
 VkStatus vk_cursor_next(VkCursor *c);    /* VK_OK or VK_DONE */
 void vk_cursor_close(VkCursor *c);
+/* Q-8: one row by id, read into c as vk_cursor_next would; vk_cursor_close
+** it whatever this returns. VK_NOTFOUND if not held. A logged row has no id
+** index, so finding one this way is a scan (LOG-4). */
+VkStatus vk_get(VkStore *p, const VkId id, VkCursor *c);
 
 /* Merge: one row at a time, re-checking each id on arrival. */
 typedef struct {

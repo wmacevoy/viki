@@ -53,6 +53,26 @@ rest (N-7) is not exercised here.
 - **The range tombstone's body is binary and fixed-layout**: core has no JSON parser and needs none.
   JSON bodies are the host's choice for its own rows (the puck, Warren 2026-11-09).
 
+- **`vk_get` reads one row by id into a cursor** (Q-8), because a search hit is only an id. It shares
+  the cursor's columns. A logged row has no id index, so the statement tries the unlogged rows first,
+  and the scan only runs when they hold nothing.
+
+## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
+
+- **Python through ctypes, not C.** The host shells out to git and keeps a map of every commit's
+  files. In C that is a lot of hand-written parsing and memory for something that never runs on the
+  ESP32. The binding, `tools/vkstore.py`, mirrors `viki_store.h` field for field, so it is one more
+  thing a change to the header must change.
+- **The mapping is in vk.py's header.** File versions supersede the version of the same path in
+  each parent, so a path changed on two branches is a fork until a merge. A check-in supersedes its
+  parents. A deleted path is a `file.gone` row, so that re-adding the path heals rather than forks.
+- **Every row is authored by the host's principal.** Git's author is a claim, kept in the body. A
+  reader who has not granted that principal sees none of its rows (R-4a). The tests ran into this.
+- **Re-ingest reads the whole history each time** and relies on ids to dedupe. viki plus the puck
+  (434 commits, 2,800 rows) takes about 2 s. That is fine at this size and not measured larger.
+- **Unencrypted, behind an explicit `--plaintext`**, because stock SQLite has no codec. A SQLCipher
+  build that exports `sqlite3_key` is the next step for this host.
+
 ## Testing
 
 - `test/store_test.c`: one test per claim, naming its requirement.
@@ -61,11 +81,13 @@ rest (N-7) is not exercised here.
 - `test/test_store.py`: through the C interface with ctypes, 200 seeded random histories against a
   separate Python implementation of the id and of resolution. Python is used where a second
   implementation is the point. Faults and memory stay in C, because they need the test build.
+- `tools/test_vk.py`: the host against scratch git repositories, with fixed names and dates. It is
+  run by the same check.
 - `test/gate.py`: the seed of FIN-3. Prints each in-scope ID as green, red, or not reached.
 
 ## Not done
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
-sync, regex, bm25, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
+sync, regex, bm25, Q-4's current-or-superseded mark on a hit, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
 Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
 row against a range tombstone or walking skip links: nothing reads them yet except the next append.

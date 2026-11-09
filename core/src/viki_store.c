@@ -910,14 +910,15 @@ void vk_row_close(VkRow *r){
 
 /* ---- cursor ---- */
 
-VkStatus vk_cursor_open(VkStore *p, int64_t afterSeq, VkCursor *c){
+#define VK_ROW_COLUMNS "seq,id,author,kind,akey,ts,rank,reference,body_hash,body,log,pos,skip"
+
+/* Prepares c over zRowSql, whose one parameter the caller binds. */
+static VkStatus cursor_prepare(VkStore *p, const char *zRowSql, VkCursor *c){
     int rc;
     memset(c, 0, sizeof(*c));
     c->p = p;
     if( !vk_has_right(p, VK_READ) ) return vk_refuse(p, VK_EDENIED, "D-3a0: every read path requires r");
-    rc = vk_prepare(p,
-        "SELECT seq,id,author,kind,akey,ts,rank,reference,body_hash,body,log,pos,skip"
-        " FROM assertion WHERE seq>?1 ORDER BY seq", &c->pRow);
+    rc = vk_prepare(p, zRowSql, &c->pRow);
     if( rc==SQLITE_OK ) rc = vk_prepare(p,
         "SELECT rel,parent FROM edge WHERE child=?1 ORDER BY rel,parent", &c->pEdge);
     if( rc!=SQLITE_OK ){
@@ -925,8 +926,28 @@ VkStatus vk_cursor_open(VkStore *p, int64_t afterSeq, VkCursor *c){
         vk_cursor_close(c);
         return st;
     }
-    sqlite3_bind_int64(c->pRow, 1, afterSeq);
     return VK_OK;
+}
+
+VkStatus vk_cursor_open(VkStore *p, int64_t afterSeq, VkCursor *c){
+    VkStatus st = cursor_prepare(p,
+        "SELECT " VK_ROW_COLUMNS " FROM assertion WHERE seq>?1 ORDER BY seq", c);
+    if( st==VK_OK ) sqlite3_bind_int64(c->pRow, 1, afterSeq);
+    return st;
+}
+
+VkStatus vk_get(VkStore *p, const VkId id, VkCursor *c){
+    /* The unlogged arm uses the id index; the logged arm is LOG-4's scan, and
+    ** LIMIT 1 stops before it when the first arm found the row. */
+    VkStatus st = cursor_prepare(p,
+        "SELECT " VK_ROW_COLUMNS " FROM assertion WHERE id=?1 AND log=x''"
+        " UNION ALL"
+        " SELECT " VK_ROW_COLUMNS " FROM assertion INDEXED BY assertion_log WHERE log<>x'' AND id=?1"
+        " LIMIT 1", c);
+    if( st!=VK_OK ) return st;
+    sqlite3_bind_blob(c->pRow, 1, id, VK_ID_BYTES, SQLITE_TRANSIENT);
+    st = vk_cursor_next(c);
+    return st==VK_DONE ? VK_NOTFOUND : st;
 }
 
 VkStatus vk_cursor_next(VkCursor *c){
