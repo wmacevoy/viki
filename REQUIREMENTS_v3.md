@@ -259,11 +259,8 @@ or contradict each other is useful when its claims are checkable.
 - **L-1** *(since v3)* A **relation** is an assertion of kind `relation` about two assertions:
   `corrects` (directed), `same`, `contradicts`, or `none`. It is **never a supersession**: no
   relation changes `current()` of either assertion it names. Only an author with `s` supersedes.
-- **L-2** *(since v3)* A relation's akey is its **author and the sorted pair** of the two ids. So
-  each author revises only their own relation on a pair, by superseding it, and two authors who
-  disagree hold two standing relations side by side. That is information, not a fork to heal.
-  **Only the author named in the akey may supersede on it**, whatever `s` others hold: an exception
-  to v2's R-7 ("within a domain everyone may supersede"), checked at fold time like R-4.
+- **L-2** *(since v3)* *(undecided: Not yet answered 11)* A relation's akey, and so who may
+  supersede a relation and whether two authors who disagree on a pair form a fork.
 - **L-3** *(since v3)* A relation names both assertions in `derived_from` (V-1) and carries its
   evidence as quotes, each a byte range into the assertion it cites. A reader re-checks every range;
   one that no longer matches makes the relation stale, and one into erased content flags it (W-13).
@@ -317,3 +314,7 @@ or contradict each other is useful when its claims are checkable.
 9. **What moves first.** Proposed: A (identity and framing) and R-1 to R-5 (resolution), with
    their tests from `reboot/tests/`, because every other series stands on them.
 10. **The ESP32 variant** (ENV-1): in 1.0, decided; which variant and how much PSRAM, not yet.
+11. **A relation's akey** (L-2). Left undecided by Warren, 2026-11-09. Drafted so far: the sorted
+    pair of ids, so disagreeing judgments fork (R-5); or the author and the sorted pair, so they
+    stand side by side, optionally with only that author allowed to supersede, an exception to
+    v2's R-7.
