@@ -132,7 +132,7 @@ host's clock port supplies `ts`.
 
 v2 excluded retrieval. v3 brings it into scope as a projection, under rules that keep it one.
 
-- **Q-1** *(since v3)* Search is a projection (M-5, G-3): rebuilt from truth, never merged, free to
+- **Q-1** *(since v3)* Search is a projection (M-5): rebuilt from truth, never merged, free to
   differ per engine, and discarding it loses nothing.
 - **Q-2** *(since v3)* Every answer states its **coverage**, in three states never conflated:
   **found**; **searched and not found** — which assertions, by which method, at which projection
@@ -200,25 +200,27 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | --- | --- | --- |
 | references and the cache | X-1 to X-8; W-12, W-14 | serves AS-1 (data ingress) |
 | relations | L-1 to L-5 | L-4's verdict needs a grant: who may give one is still open (Not yet answered 5) |
+| a robot's output is untrusted | V-5 | serves AS-1 |
+| one engine: SQLite | G-1a, G-1b (in the merge row) | Warren: SQLite only for 1.0. Other engines are viki 2 |
 
 **In, because the mission or the shape cites them.** FIN-5a says 1.0 may cite no unmoved v2 ID, so
-anything the shape cites has to be in: V-1 and V-1a (SHAPE-4), M-5, W-6, A-4a, C-1, D-1, D-3 and
-I-7. All but V-1 and V-1a are already in a row above, so the scope includes **V-1 and V-1a** and no
-other V requirement.
+anything the shape cites has to be in: V-1 and V-1a (SHAPE-4), V-4a (SHAPE-7), M-5, W-6, A-4a, C-1,
+D-1, D-3 and I-7. All but V-1, V-1a and V-4a are already in a row above, so the scope includes
+**V-1, V-1a, V-4a and V-5**, and no other V requirement.
 
 **Still to be decided**
 
 | Part | For | Against |
 | --- | --- | --- |
-| V-2 to V-6, publication | AS-1 cites V-5 (a robot's output is untrusted), and X is now in | no ENV-1 verb names it; it can be added in 1.x only if it adds no new meaning (FIN-1), which is doubtful |
+| V-2 to V-4, V-6: publication | X and V-5 are in, so ingress is | no ENV-1 verb names it; it can be added in 1.x only if it adds no new meaning (FIN-1), which is doubtful |
 | N-8 to N-17, password-wrapped keys | a person on a phone or a chip needs a way in | it is the largest single part of v2 |
-| G-2 to G-6, engines other than SQLite | — | Not yet answered 4 proposes SQLite only, with Postgres in viki 2 |
 
 **Out of 1.0**
 
 - **vector search**: optional under Q-6, and kept off the ESP32 by ENV-1. It can be built in 1.0,
   but no gate requires it.
 - **v2's "Recursion" note**, which v2 itself marks as not built.
+- **G-2 to G-6, engines other than SQLite** (Warren, 2026-11-09): viki 2.
 
 ## L — Relations between assertions (new series)
 
@@ -259,8 +261,8 @@ or contradict each other is useful when its claims are checkable.
    A per-domain salted id hides it but breaks A-1 across domains. Undecided.
 3. **What source control means.** Proposed: content history and merge only (AS-3). Confirm, or say
    what of Fossil's working-tree model belongs inside.
-4. **Engines for 1.0.** SQLite only, with Postgres as viki 2? (v2 Open 5 decides the G series, if
-   it moves.)
+4. **Engines for 1.0.** *Answered* (Warren, 2026-11-09): SQLite only. G-2 to G-6 and other
+   engines are viki 2.
 5. **Who may give a verdict** (L-4): a grant per diary, or the diary's owner only.
 6. **The 1.0 scope list** (FIN-4). Drafted from ENV-1 under "1.0 scope"; open until Warren closes it.
 7. **The regex dialect and engine** (Q-6): POSIX ERE, as `src/`'s `viki grep` used, or another. On
