@@ -18,7 +18,7 @@ What v3 itself adds, in order of weight: a mission, a fundamental shape, a goal 
 completion, signed time (C), search (Q) and relations between assertions (L).
 
 Words are used as v2's glossary defines them; the glossary moves with the first part, and is the one
-part that must. New words: **coverage**, **relation**, **verdict** (defined where first used).
+part that must. New words: **coverage**, **relation**, **grounds** (defined where first used).
 
 ---
 
@@ -70,6 +70,11 @@ shape that never stops changing means nothing built on it can finish either (SE1
   with no such test has not moved. 1.0 cites no unmoved v2 ID.
 - **FIN-6** *(since v3)* From 1.0, the library's interface and its stored format are promises: a
   field never changes meaning, and a 1.0 store opens in every 1.x (SE1/D11).
+- **FIN-7** *(since v3)* **Before 1.0, nothing is a promise.** *"this is a fast-move phase; nothing
+  important depends on this, so completely changing it to make it better is fine until 1.0"* —
+  Warren, 2026-11-09. Until 1.0, a requirement, an interface or a stored format may be changed or
+  thrown away outright when that makes viki better, with no migration and no compatibility path.
+  The change still goes through FIN-5 (a new version, for mission and shape) and FIN-5a (a test).
 
 ## Fundamental shape
 
@@ -141,8 +146,8 @@ v2 excluded retrieval. v3 brings it into scope as a projection, under rules that
   self-check that finds a planted case, and a method whose self-check fails reports blind, not
   not-found (DM1/U10).
 - **Q-4** *(since v3)* A hit is returned with its resolution context: whether it is current or
-  superseded, and the relations (L) that touch it, each with who claimed it and whether a verdict
-  stands.
+  superseded, and every standing relation (L) that touches it, each with its author, its grounds,
+  and whether those grounds have moved (L-4a).
 - **Q-5** *(since v3)* Withdrawn, sealed and erased content never appears in an answer, and erased
   content is gone from every projection (W-3). Search requires `r` (D-3a0).
 - **Q-6** *(since v3)* **1.0 has four methods:**
@@ -192,15 +197,16 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | withdraw | W-1 to W-11, W-13 | **including `erase`**: MISSION-1 requires forgetting, and W-1 has three tiers, not one |
 | grep, regex, bm25 | Q-1 to Q-7, without vector; E-2 | the regex dialect is still open (Not yet answered 7) |
 | (on an ESP32) | ENV-1, ENV-2, ENV-3 | |
-| (the process) | FIN-1 to FIN-6; C-8 | |
+| (the process) | FIN-1 to FIN-7; C-8 | |
 
 **In: added by Warren** (2026-11-09)
 
 | Part | Requirements | Notes |
 | --- | --- | --- |
 | references and the cache | X-1 to X-8; W-12, W-14 | serves AS-1 (data ingress) |
-| relations | L-1 to L-5 | L-4's verdict needs a grant: who may give one is still open (Not yet answered 5) |
+| relations | L-1 to L-5 | no relation outranks another (L-4), so nothing needs a grant to judge |
 | a robot's output is untrusted | V-5 | serves AS-1 |
+| password-wrapped keys | N-8 to N-17, with their lettered parts | a person on a phone or a chip needs a way in. The largest single part of v2 |
 | one engine: SQLite | G-1a, G-1b (in the merge row) | Warren: SQLite only for 1.0. Other engines are viki 2 |
 
 **In, because the mission or the shape cites them.** FIN-5a says 1.0 may cite no unmoved v2 ID, so
@@ -208,19 +214,14 @@ anything the shape cites has to be in: V-1 and V-1a (SHAPE-4), V-4a (SHAPE-7), M
 D-1, D-3 and I-7. All but V-1, V-1a and V-4a are already in a row above, so the scope includes
 **V-1, V-1a, V-4a and V-5**, and no other V requirement.
 
-**Still to be decided**
-
-| Part | For | Against |
-| --- | --- | --- |
-| V-2 to V-4, V-6: publication | X and V-5 are in, so ingress is | no ENV-1 verb names it; it can be added in 1.x only if it adds no new meaning (FIN-1), which is doubtful |
-| N-8 to N-17, password-wrapped keys | a person on a phone or a chip needs a way in | it is the largest single part of v2 |
-
 **Out of 1.0**
 
 - **vector search**: optional under Q-6, and kept off the ESP32 by ENV-1. It can be built in 1.0,
   but no gate requires it.
 - **v2's "Recursion" note**, which v2 itself marks as not built.
 - **G-2 to G-6, engines other than SQLite** (Warren, 2026-11-09): viki 2.
+- **V-2 to V-4 and V-6, publication** (Warren, 2026-11-09): deferred. Since 1.x adds no new meaning
+  (FIN-1), deferred past 1.0 means viki 2.
 
 ## L — Relations between assertions (new series)
 
@@ -230,15 +231,29 @@ or contradict each other is useful when its claims are checkable.
 - **L-1** *(since v3)* A **relation** is an assertion of kind `relation` about two assertions:
   `corrects` (directed), `same`, `contradicts`, or `none`. It is **never a supersession**: no
   relation changes `current()` of either assertion it names. Only an author with `s` supersedes.
-- **L-2** *(since v3)* A relation's akey is the sorted pair of the two ids. So a later judgment on
-  a pair supersedes an earlier one, and two standing judgments that disagree are a fork (R-5),
-  reported.
+- **L-2** *(since v3)* A relation's akey is its **author and the sorted pair** of the two ids. So
+  each author revises only their own relation on a pair, by superseding it, and two authors who
+  disagree hold two standing relations side by side. That is information, not a fork to heal.
 - **L-3** *(since v3)* A relation names both assertions in `derived_from` (V-1) and carries its
   evidence as quotes, each a byte range into the assertion it cites. A reader re-checks every range;
   one that no longer matches makes the relation stale, and one into erased content flags it (W-13).
-- **L-4** *(since v3)* A model's relation is a **claim**. A **verdict** is a relation written by a
-  principal granted to judge relations in that diary, and a verdict outranks any claim on the same
-  pair *(invented: the grant; Not yet answered 5)*.
+- **L-4** *(since v3)* **No relation outranks another.** Every relation, a person's included, is a
+  claim with an author, a time and **grounds**: the assertions it rests on, named in `derived_from`
+  (V-1). Grounds may include other relations, so a claim can rest on claims. Whoever reads decides
+  what to believe (SHAPE-7). A preference such as "Warren's over the librarian's" is a reader's
+  filter by author, outside viki. *Replaces a draft "verdict" that outranked claims: Warren,
+  2026-11-09, "vedicts sound like k3 in a moving world. what if a verdicts roots are based on
+  claims dertemined to be false? or falser? the structure should avoid rigidness if it can
+  represent reasoning about mushrooms."*
+- **L-4a** *(since v3)* **Grounds that moved are reported.** A ground has moved when it is
+  superseded, withdrawn or erased, or when a standing `corrects` or `contradicts` relation targets
+  it. Every relation resting on it is reported as having moved grounds, with which ground and why,
+  and is never hidden or deleted for it. This widens L-3 from quotes to all grounds.
+- **L-4b** *(since v3)* **How far down is stated.** A read checks grounds to a stated depth, one hop
+  unless the caller asks for more, and its coverage says how deep it looked (Q-2), so that checking
+  stays within ENV-2's bound.
+- **L-4c** *(since v3)* **"Falser" is data, not arithmetic.** A relation may carry its author's
+  stated confidence. viki stores and shows it and never combines, compares or ranks by it.
 - **L-5** *(since v3)* The vocabulary is stated and closed (D-3b): the four kinds above. An agent
   may write relations without reading anything else in the diary only if granted so (D-3a).
 
@@ -263,7 +278,7 @@ or contradict each other is useful when its claims are checkable.
    what of Fossil's working-tree model belongs inside.
 4. **Engines for 1.0.** *Answered* (Warren, 2026-11-09): SQLite only. G-2 to G-6 and other
    engines are viki 2.
-5. **Who may give a verdict** (L-4): a grant per diary, or the diary's owner only.
+5. *Withdrawn* (2026-11-09): who may give a verdict. L-4 no longer has verdicts.
 6. **The 1.0 scope list** (FIN-4). Drafted from ENV-1 under "1.0 scope"; open until Warren closes it.
 7. **The regex dialect and engine** (Q-6): POSIX ERE, as `src/`'s `viki grep` used, or another. On
    ENV-1, an engine has to come from somewhere: the platform's libc, if it has one, or a small
