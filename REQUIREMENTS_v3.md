@@ -84,9 +84,12 @@ Held by: **Warren.** Most of the job is saying no, including to good ideas.
   tasks, references, relations, grants and identities share its shape. Truth is bytes (A-4a).
 - **SHAPE-2** *(since v3)* **Change only by adding.** Supersede or tombstone. Merge is union,
   tombstones included, and nothing brings back what was forgotten (W-6).
-- **SHAPE-3** *(since v3)* **Forget as far as a tombstone.** Content can go; its id and the fact that
-  it was forgotten stay. So signatures and every other proof cover ids, never content alone, and
-  erasure leaves them valid.
+- **SHAPE-3** *(changed in v3, 2026-11-09)* **Forget as far as a tombstone, and a tombstone may be a
+  summary.** Content can go. For one assertion its id and the fact that it was forgotten stay; for a
+  contiguous range of a log (LOG-1) the rows go entirely, frames included, and one tombstone stays,
+  which commits to their ids by the ids it carries (W-15). So signatures and every other proof cover
+  ids, never content alone, and erasure leaves them valid. *"maybe the big move on viki is tombstone
+  as a summary. a tombstone could mark the comlete deltion of a sublog."* — Warren, 2026-11-09.
 - **SHAPE-4** *(since v3)* **Every claim says who, from what, and when.** Author and timestamp are in
   the frame and signed with it (I-1, C-6); signatures per signer (I-2); unsigned is a claim (I-7);
   derived names its sources (V-1).
@@ -147,6 +150,12 @@ but no origination or read privliges)"* — Warren, 2026-11-09.
   what it superseded but that it existed. If the akey has no assertion in the store, the write would
   be an origination and needs `o`; without `o` it is refused (E-3).
 
+## R — Resolution (addition)
+
+- **R-1a** *(since v3)* *(invented, to let a head be found without looking up its parent)* A
+  supersession acts within one akey. A link to a row on another akey is kept in the frame and
+  supersedes nothing.
+
 ## C — Time: viki's own signed timestamps (additions)
 
 Assumes v2's C-1 to C-5, which are not yet moved. C-1 above all: **the layer calls no clock**; the
@@ -160,6 +169,23 @@ host's clock port supplies `ts`.
 - **C-8** *(since v3)* Outside time evidence is optional and is not viki's. An ingress that tracks it
   writes it as an ordinary assertion about other assertions (AS-1), and viki neither requires nor
   interprets it.
+
+## LOG — A writer's log (new series)
+
+*"i think a deterministic skip list might work."* — Warren, 2026-11-09.
+
+- **LOG-1** *(since v3)* A **log** is a named sequence of one author's assertions: `(author, log,
+  pos)` is in the frame, positions counting from 1 with none skipped by that writer. An assertion
+  need not be in a log. A writer that has lost its newest rows reuses their positions, and the
+  two rows at one position are both kept (not yet reported as anything).
+- **LOG-2** *(since v3)* The row at `pos` names, in its frame, the ids at `pos - 2^j` for every `j` up
+  to the trailing zero bits of `pos`, where that position is at least 1. Peers compute the same links,
+  because nothing about them is random.
+- **LOG-3** *(since v3)* The work of appending to a log, and of superseding by chain (D-3f), does not
+  grow with the length of the log or chain beyond the logarithmic cost of an index.
+- **LOG-4** *(since v3)* The pages written per logged row do not grow with the store. A logged row
+  is found by position; finding one by id alone is a scan, and only erasing one row needs it.
+  *"fix the id index first"* — Warren, 2026-11-09.
 
 ## Q — Search (new series)
 
@@ -192,6 +218,18 @@ v2 excluded retrieval. v3 brings it into scope as a projection, under rules that
   vector are ranked, so their "not found" covers only what they returned, and says so (Q-2).
 - **Q-7** *(since v3)* A query may combine methods. A combined answer states each method's coverage
   separately; it never reports one coverage for the whole.
+
+## W — Forgetting a range (additions)
+
+- **W-15** *(since v3)* A **range tombstone** names a target author, a log and a contiguous range of
+  positions. Taking effect, it removes every row of that range, frame and body and outgoing links. It
+  carries the ids at the positions reached from the range's end by clearing its low set bits, one at a
+  time: at most one id per set bit. Those are exactly the ids later appends need (LOG-2), and they
+  commit to the range. It needs `x`; without it, it is stored and ignored (R-4a).
+- **W-16** *(since v3)* A row a range tombstone covers is not stored when it arrives, whichever came
+  first (W-6), and merge counts it as covered. *Decided: Warren, 2026-11-09: contiguous ranges only.*
+- **W-17** *(since v3)* A range that holds a row superseding a row outside the range is refused when
+  written, because a peer that never saw the superseding row would show the superseded one as current.
 
 ## ENV — Where viki runs (new series)
 
@@ -236,6 +274,7 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | a robot's output is untrusted | V-5 | serves AS-1 |
 | password-wrapped keys | N-8 to N-17, with their lettered parts | a person on a phone or a chip needs a way in. The largest single part of v2 |
 | one engine: SQLite | G-1a, G-1b (in the merge row) | Warren: SQLite only for 1.0. Other engines are viki 2 |
+| logs and range tombstones | LOG-1 to LOG-4; R-1a; W-15 to W-17 | Warren, 2026-11-09 |
 
 **In, because the mission or the shape cites them.** FIN-5a says 1.0 may cite no unmoved v2 ID, so
 anything the shape cites has to be in: V-1 and V-1a (SHAPE-4), V-4a (SHAPE-7), M-5, W-6, A-4a, C-1,
@@ -309,6 +348,7 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 
 | Falsehood | Load-bearing in | Blast radius |
 | --- | --- | --- |
+| A range tombstone arriving by merge orphans nothing | W-17 | W-17 is checked only by the writer. A peer holding a superseding row in the range that the writer never saw can show its superseded row as current again |
 | Erased means physically gone | W-3, ENV-1 | On flash, wear levelling can leave erased pages readable to someone with the chip. "Erased" means unreadable through the database; re-keying the diary is what makes old pages useless |
 | A peer's clock is roughly right | C-6, C-3a | A device with no RTC writes plausible wrong times, signed. They are claims (C-7), and are shown as such |
 

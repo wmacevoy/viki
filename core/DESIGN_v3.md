@@ -35,11 +35,29 @@ rest (N-7) is not exercised here.
   *(invented)*; merge and cursors work a row at a time. Every allocation goes through SQLite's.
 - **The undo statements are prepared at open,** so undoing a failed write needs no new memory.
 
+- **A log is a named sequence of one author's rows** (LOG-1). `(log, pos)` and the skip links are in
+  the frame. Skip links are a column, not `edge` rows, because nothing queries them and every extra
+  B-tree row costs a card write.
+- **A range tombstone removes rows entirely** (W-15, SHAPE-3). A later append at `n` links to
+  `n-2^j`, a multiple of `2^j`; if that position has been forgotten it is the largest multiple of
+  `2^j` at or below the tombstone's end. Those are the positions got by clearing the end's low set
+  bits, so carrying those ids is exactly enough to go on appending, and they chain back over the
+  range, so they are also its commitment. It has no Merkle root and no count: the count is
+  `to-from+1` positions.
+- **A logged row has no entry in an id index** (LOG-4). Its uniqueness is `(log, author, pos, id)`,
+  written in position order. `arm`, `edge` and `range_tomb` hold the local `seq` so that following them
+  needs no id lookup. `vk_digest` sums a hash per row, because sorting by id would no longer stream.
+- **`arm` is a projection of the rows no valid assertion supersedes**, so a head is an index lookup
+  (LOG-3). It depends on the grants, so it is rebuilt when their hash in `meta` changes. Its key
+  starts with `akey`: any delete by `id` must also name the akey, or it scans the table.
+- **The range tombstone's body is binary and fixed-layout**: core has no JSON parser and needs none.
+  JSON bodies are the host's choice for its own rows (the puck, Warren 2026-11-09).
+
 ## Testing
 
 - `test/store_test.c`: one test per claim, naming its requirement.
 - **Faults:** the test build fails each SQLite prepare and step, then each allocation, in turn, and
-  requires a retry to reach the same store. Currently 90 and 3,468 points.
+  requires a retry to reach the same store. The counts are printed by the run.
 - `test/test_store.py`: through the C interface with ctypes, 200 seeded random histories against a
   separate Python implementation of the id and of resolution. Python is used where a second
   implementation is the point. Faults and memory stay in C, because they need the test build.
@@ -49,3 +67,5 @@ rest (N-7) is not exercised here.
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
 sync, regex, bm25, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
+Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
+row against a range tombstone or walking skip links: nothing reads them yet except the next append.

@@ -5,12 +5,14 @@
 #include "viki_store.h"
 
 #define VK_TOMBSTONE "tombstone"
+#define VK_RANGE     "tombstone.range"
+#define VK_TOMB_KINDS "(CAST('" VK_TOMBSTONE "' AS BLOB),CAST('" VK_RANGE "' AS BLOB))"
 
 /* An assertion counts only if its author held the right its frame needs
 ** (D-3). It is checked at fold time because rows arrive by merge, where a
 ** refusal is not available: stored and ignored (R-4a). */
 #define VK_VALID(a) \
-    "(CASE WHEN " a ".kind=CAST('" VK_TOMBSTONE "' AS BLOB) THEN vk_rights(" a ".author)&1" \
+    "(CASE WHEN " a ".kind IN " VK_TOMB_KINDS " THEN vk_rights(" a ".author)&1" \
     " WHEN EXISTS(SELECT 1 FROM edge e0 WHERE e0.child=" a ".id AND e0.rel=0)" \
     " THEN vk_rights(" a ".author)&4 ELSE vk_rights(" a ".author)&8 END)"
 

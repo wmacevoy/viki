@@ -21,6 +21,9 @@
 /* invented: limits that keep every operation in fixed memory (ENV-2). */
 #define VK_MAX_LINKS   16
 #define VK_MAX_FIELD   4096
+/* A log position fits 32 bits, so a row has at most this many skip links. */
+#define VK_MAX_SKIP    32
+#define VK_MAX_POS     0xFFFFFFFFu
 
 typedef enum {
     VK_OK = 0,
@@ -55,6 +58,11 @@ typedef struct {
     /* An erased assertion has no body, only the hash its id was made from. */
     int erased;
     uint8_t bodyHash[VK_ID_BYTES];
+    /* LOG-1, LOG-2. Empty log, position 0 and no skips: not in a log.
+    ** vk_append fills pos and skip. */
+    VkBytes log;
+    uint64_t pos;
+    const VkId *skip;  uint32_t nSkip;   /* level order: pos-1, pos-2, pos-4 ... */
 } VkAssertion;
 
 typedef struct VkStore VkStore;
@@ -73,9 +81,19 @@ const char *vk_errmsg(const VkStore *p); /* names the requirement refused */
 VkStatus vk_put(VkStore *p, const VkAssertion *a, VkId idOut);
 /* D-3f: a->supersedes is ignored; supersedes every current arm of a->akey. */
 VkStatus vk_put_chain(VkStore *p, const VkAssertion *a, VkId idOut);
+/* LOG-1: the next position of (a->author, a->log), with its skip links.
+** a->pos and a->skip are ignored. VK_EINVAL if a position it must link to is
+** neither held nor carried by a range tombstone. */
+VkStatus vk_append(VkStore *p, const VkAssertion *a, VkId idOut);
 /* Writes a tombstone. The target's content goes; its frame stays. */
 VkStatus vk_erase(VkStore *p, const VkId target, VkBytes ts,
                   const uint8_t rank[VK_RANK_BYTES], VkId idOut);
+
+/* W-15: a range tombstone over positions from..to of (target, log). Those
+** rows go entirely. VK_EINVAL if an id it must carry is not held, or W-17
+** refuses the range. */
+VkStatus vk_forget(VkStore *p, VkBytes log, VkBytes target, uint64_t from, uint64_t to,
+                   VkBytes ts, const uint8_t rank[VK_RANK_BYTES], VkId idOut);
 
 /* Read. A VkRow holds a statement: vk_row_close it after VK_OK. */
 typedef struct {
@@ -97,6 +115,7 @@ typedef struct {
     VkId id;
     int64_t seq;
     VkId links[2][VK_MAX_LINKS];
+    VkId skip[VK_MAX_SKIP];
 } VkCursor;
 VkStatus vk_cursor_open(VkStore *p, int64_t afterSeq, VkCursor *c);
 VkStatus vk_cursor_next(VkCursor *c);    /* VK_OK or VK_DONE */
@@ -105,6 +124,7 @@ void vk_cursor_close(VkCursor *c);
 /* Merge: one row at a time, re-checking each id on arrival. */
 typedef struct {
     int64_t added, present, quarantined;
+    int64_t covered;   /* W-16: arrived inside a range tombstone, not stored */
     int incomplete;    /* M-3 */
 } VkMergeReport;
 VkStatus vk_ingest(VkStore *dst, const VkAssertion *a, const VkId id,

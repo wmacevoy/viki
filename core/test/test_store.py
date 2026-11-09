@@ -25,7 +25,8 @@ class Assertion(C.Structure):
     _fields_ = [("author", Bytes), ("kind", Bytes), ("akey", Bytes), ("ts", Bytes), ("reference", Bytes),
                 ("rank", C.c_ubyte * 16), ("supersedes", C.POINTER(Id)), ("nSupersedes", C.c_uint32),
                 ("derivedFrom", C.POINTER(Id)), ("nDerivedFrom", C.c_uint32), ("body", Bytes),
-                ("erased", C.c_int), ("bodyHash", C.c_ubyte * 32)]
+                ("erased", C.c_int), ("bodyHash", C.c_ubyte * 32),
+                ("log", Bytes), ("pos", C.c_uint64), ("skip", C.POINTER(Id)), ("nSkip", C.c_uint32)]
 
 
 class Grant(C.Structure):
@@ -37,7 +38,8 @@ class Row(C.Structure):
 
 
 class Report(C.Structure):
-    _fields_ = [("added", C.c_int64), ("present", C.c_int64), ("quarantined", C.c_int64), ("incomplete", C.c_int)]
+    _fields_ = [("added", C.c_int64), ("present", C.c_int64), ("quarantined", C.c_int64), ("covered", C.c_int64),
+                ("incomplete", C.c_int)]
 
 
 class Search(C.Structure):
@@ -59,6 +61,7 @@ SQL.sqlite3_open.argtypes = [C.c_char_p, C.POINTER(C.c_void_p)]
 SQL.sqlite3_close.argtypes = [C.c_void_p]
 GREP = C.addressof(C.c_void_p.in_dll(LIB, "vkGrep"))
 ENTITLED = {b"alice", b"bob"}
+RANGE = b"tombstone.range"
 
 
 def b(v):
@@ -74,6 +77,8 @@ def frame_id(r):
     links = b"".join(len(ls).to_bytes(4, "big") + b"".join(sorted(ls)) for ls in (r["sup"], r["der"]))
     return hashlib.sha256(b"viki.assertion.v3\0" + field(r["author"]) + field(r["kind"]) + field(r["akey"])
                           + field(r["ts"]) + r["rank"] + field(r["ref"]) + links
+                          + field(r["log"]) + r["pos"].to_bytes(8, "big")
+                          + len(r["skip"]).to_bytes(4, "big") + b"".join(r["skip"])
                           + hashlib.sha256(r["body"]).digest()).digest()
 
 
@@ -92,12 +97,15 @@ class Peer:
     def ingest(self, r):
         sup = (Id * max(1, len(r["sup"])))(*[Id(*i) for i in r["sup"]])
         der = (Id * max(1, len(r["der"])))(*[Id(*i) for i in r["der"]])
+        skip = (Id * max(1, len(r["skip"])))(*[Id(*i) for i in r["skip"]])
         a = Assertion(author=b(r["author"]), kind=b(r["kind"]), akey=b(r["akey"]), ts=b(r["ts"]), reference=b(r["ref"]),
                       rank=(C.c_ubyte * 16)(*r["rank"]), body=b(r["body"]),
                       supersedes=C.cast(sup, C.POINTER(Id)), nSupersedes=len(r["sup"]),
-                      derivedFrom=C.cast(der, C.POINTER(Id)), nDerivedFrom=len(r["der"]))
+                      derivedFrom=C.cast(der, C.POINTER(Id)), nDerivedFrom=len(r["der"]),
+                      log=b(r["log"]), pos=r["pos"], skip=C.cast(skip, C.POINTER(Id)), nSkip=len(r["skip"]))
         rep = Report()
         assert LIB.vk_ingest(self.st, C.byref(a), C.byref(Id(*r["id"])), C.byref(rep)) == OK
+        assert rep.quarantined == 0, "a well-formed row was quarantined"
         return rep
 
     def digest(self):
@@ -133,10 +141,18 @@ class Model:
     """What the requirements say the union of these rows means."""
 
     def __init__(self, rows):
-        self.rows = {r["id"]: r for r in rows}
+        self.all = rows
+        self.rows = {r["id"]: r for r in rows if not self.covered(r)}
 
     def valid(self, r):
         return r["author"] in ENTITLED
+
+    def covered(self, r):
+        """W-15, W-16: a valid range tombstone over this row's position."""
+        if not r["log"] or r["kind"] == RANGE:
+            return False
+        return any(t["kind"] == RANGE and t["author"] in ENTITLED and t["log"] == r["log"] and t["ref"] == r["author"]
+                   and int.from_bytes(t["body"][:8], "big") <= r["pos"] <= t["pos"] for t in self.all)
 
     def is_tomb(self, r):
         return r["kind"] == b"tombstone"
@@ -167,7 +183,7 @@ def new_row(rng, n, known):
     akey = rng.choice([b"a", b"b", b"c"])
     same = [i for i, k in known if k == akey]
     k = rng.randint(0, min(3, len(same)))
-    r = dict(author=author, kind=b"note", akey=akey, ts=b"t%d" % n, ref=b"",
+    r = dict(log=b"", pos=0, skip=[], author=author, kind=b"note", akey=akey, ts=b"t%d" % n, ref=b"",
              rank=bytes(15) + bytes([rng.randint(0, 3)]), sup=rng.sample(same, k), der=[],
              body=(b"tok%d \0\xff " % rng.randint(0, 5)) + b"x" * rng.randint(0, 9))
     r["id"] = frame_id(r)
@@ -175,8 +191,37 @@ def new_row(rng, n, known):
 
 
 def tombstone(rng, n, target):
-    r = dict(author=rng.choice([b"alice", b"mallory"]), kind=b"tombstone", akey=target, ts=b"e%d" % n, ref=b"",
+    r = dict(log=b"", pos=0, skip=[], author=rng.choice([b"alice", b"mallory"]), kind=b"tombstone", akey=target,
+             ts=b"e%d" % n, ref=b"",
              rank=bytes(16), sup=[], der=[], body=target)
+    r["id"] = frame_id(r)
+    return r
+
+
+def skips(pos):
+    """LOG-2, from its words: pos - 2^j for j up to the trailing zeros, at least 1."""
+    tz = (pos & -pos).bit_length() - 1
+    return [pos - (1 << j) for j in range(tz + 1) if pos - (1 << j) >= 1]
+
+
+def logged(n, author, ids):
+    pos = len(ids) + 1
+    r = dict(log=b"L", pos=pos, skip=[ids[t] for t in skips(pos)], author=author, kind=b"reading", akey=b"l%d" % n,
+             ts=b"l%d" % n, ref=b"", rank=bytes(16), sup=[], der=[], body=b"tok%d" % (n % 6))
+    r["id"] = frame_id(r)
+    ids[pos] = r["id"]
+    return r
+
+
+def range_tomb(rng, n, target, ids):
+    to = rng.randint(1, len(ids))
+    start, carried, q = rng.randint(1, to), [], to
+    while q:
+        carried.append(ids[q])
+        q &= q - 1
+    akey = hashlib.sha256(b"viki.log.v3\0" + field(target) + field(b"L")).digest()
+    r = dict(log=b"L", pos=to, skip=[], author=rng.choice([b"alice", b"mallory"]), kind=RANGE, akey=akey,
+             ts=b"r%d" % n, ref=target, rank=bytes(16), sup=[], der=[], body=start.to_bytes(8, "big") + b"".join(carried))
     r["id"] = frame_id(r)
     return r
 
@@ -185,8 +230,17 @@ def one_history(seed):
     rng = random.Random(seed)
     peers = [Peer() for _ in range(3)]
     rows, known = [], []
+    logs = {b"alice": {}, b"bob": {}, b"mallory": {}}
     for n in range(40):
-        r = tombstone(rng, n, rng.choice(known)[0]) if known and rng.random() < 0.15 else new_row(rng, n, known)
+        roll, who = rng.random(), rng.choice(list(logs))
+        if roll < 0.25:
+            r = logged(n, who, logs[who])
+        elif roll < 0.35 and logs[who]:
+            r = range_tomb(rng, n, who, logs[who])
+        elif known and roll < 0.5:
+            r = tombstone(rng, n, rng.choice(known)[0])
+        else:
+            r = new_row(rng, n, known)
         rows.append(r)
         if r["kind"] == b"note":
             known.append((r["id"], r["akey"]))
@@ -202,7 +256,7 @@ def one_history(seed):
     assert len({p.digest() for p in peers}) == 1, "peers did not converge"
     for p in peers:
         assert p.bad_ids() == 0, "a stored id does not recompute"
-        for akey in (b"a", b"b", b"c"):
+        for akey in [b"a", b"b", b"c"] + [r["akey"] for r in rows if r["kind"] == b"reading"]:
             assert p.resolve(akey) == model.resolve(akey), f"resolve {akey} seed {seed}"
         for t in range(6):
             q = b"tok%d" % t

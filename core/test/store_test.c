@@ -128,6 +128,12 @@ static void t_a2(void){
     DIFFERS(b.supersedes = (const VkId*)&p1; b.nSupersedes = 1);
     DIFFERS(b.derivedFrom = (const VkId*)&p1; b.nDerivedFrom = 1);
     DIFFERS(b.body = B("other"));
+    DIFFERS(b.log = B("door"));
+    DIFFERS(b.pos = 7);
+    DIFFERS(b.skip = (const VkId*)&p1; b.nSkip = 1);
+    a.skip = (const VkId*)&p1; a.nSkip = 1;
+    vk_assertion_id(&a, base);
+    DIFFERS(b.skip = (const VkId*)&p2);         /* the links themselves, not only how many */
 }
 static void t_a2_sorted(void){
     VkId ab[2], ba[2], x, y;
@@ -372,7 +378,289 @@ static void t_r4a(void){
     drop(m); drop(al);
 }
 
+/* ---- LOG ---- */
+static VkAssertion reading(const char *zWho, const char *zLog, int n, char *zKey, size_t nKey){
+    VkAssertion a;
+    snprintf(zKey,nKey,"%s/%d",zLog,n);
+    a = mk(zWho,zKey,n&0xff,zKey);
+    a.log = B(zLog);
+    return a;
+}
+static void append_n(Peer p, const char *zWho, const char *zLog, int from, int to, VkId *ids){
+    int i; char key[40]; VkId id;
+    for(i=from;i<=to;i++){
+        VkAssertion a = reading(zWho,zLog,i,key,sizeof key);
+        CHECK( vk_append(p.st,&a,id)==VK_OK );
+        if( ids ) memcpy(ids[i],id,32);
+    }
+}
+static void t_log1(void){
+    Peer p = peer("alice");
+    char key[40]; VkId id; VkMergeReport rep;
+    VkAssertion a = reading("alice","door",1,key,sizeof key);
+    append_n(p,"alice","door",1,5,0);
+    append_n(p,"alice","gps",1,2,0);
+    CHECK( rows(p,"SELECT max(pos) FROM assertion WHERE log=CAST('door' AS BLOB)")==5 );
+    CHECK( rows(p,"SELECT max(pos) FROM assertion WHERE log=CAST('gps' AS BLOB)")==2 );
+    CHECK( vk_put(p.st,&a,id)==VK_EINVAL );          /* only vk_append chooses a position */
+    a.log = B("");
+    a.pos = 3;
+    vk_assertion_id(&a,id);
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_ingest(p.st,&a,id,&rep)==VK_OK && rep.quarantined==1 );   /* a position with no log */
+    drop(p);
+}
+static void t_log2(void){
+    Peer p = peer("alice");
+    VkId ids[9], bad; VkCursor c; int nSeen = 0;
+    VkAssertion a; VkMergeReport rep;
+    append_n(p,"alice","door",1,8,ids);
+    CHECK( vk_cursor_open(p.st,0,&c)==VK_OK );
+    while( vk_cursor_next(&c)==VK_OK ){
+        uint64_t q = c.a.pos;
+        if( q==1 ) CHECK( c.a.nSkip==0 );
+        if( q==3 ){ CHECK( c.a.nSkip==1 && id_eq(c.a.skip[0],ids[2]) ); nSeen++; }
+        if( q==6 ){ CHECK( c.a.nSkip==2 && id_eq(c.a.skip[0],ids[5]) && id_eq(c.a.skip[1],ids[4]) ); nSeen++; }
+        if( q==8 ){ CHECK( c.a.nSkip==3 && id_eq(c.a.skip[0],ids[7]) && id_eq(c.a.skip[1],ids[6]) && id_eq(c.a.skip[2],ids[4]) ); nSeen++; }
+    }
+    vk_cursor_close(&c);
+    CHECK( nSeen==3 );
+    a = mk("alice","bad",1,"x");       /* position 6 needs two links; this has one */
+    a.log = B("door"); a.pos = 6;
+    a.skip = (const VkId*)ids; a.nSkip = 1;
+    vk_assertion_id(&a,bad);
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_ingest(p.st,&a,bad,&rep)==VK_OK && rep.quarantined==1 );
+    drop(p);
+}
+static int count_op(void *pv){ (*(long*)pv)++; return 0; }
+static long ops_of_append(Peer p, const char *zLog, int n){
+    long c = 0; char key[40]; VkId id;
+    VkAssertion a = reading("alice",zLog,n,key,sizeof key);
+    sqlite3_progress_handler(p.db,1,count_op,&c);
+    CHECK( vk_append(p.st,&a,id)==VK_OK );
+    sqlite3_progress_handler(p.db,0,0,0);
+    return c;
+}
+static long ops_of_chain(Peer p, int n){
+    long c = 0; VkId id; char body[24];
+    VkAssertion a;
+    snprintf(body,sizeof body,"v%d",n);
+    a = mk("alice","chain",1,body);
+    sqlite3_progress_handler(p.db,1,count_op,&c);
+    CHECK( vk_put_chain(p.st,&a,id)==VK_OK );
+    sqlite3_progress_handler(p.db,0,0,0);
+    return c;
+}
+/* VM operations rather than time, so the test repeats exactly (T5). */
+static void t_log3(void){
+    Peer p = peer("alice");
+    Peer few = peer("alice");
+    long small, big, cSmall = 0, cBig = 0, cFew = 0; int i;
+    for(i=1;i<=300;i++) if( i==300 ) cFew = ops_of_chain(few,i); else (void)ops_of_chain(few,i);
+    sqlite3_exec(p.db,"BEGIN",0,0,0);
+    append_n(p,"alice","door",1,256,0);
+    small = ops_of_append(p,"door",257);        /* both odd: one skip link each */
+    append_n(p,"alice","door",258,8192,0);
+    big = ops_of_append(p,"door",8193);
+    for(i=1;i<=300;i++) if( i==300 ) cSmall = ops_of_chain(p,i); else (void)ops_of_chain(p,i);
+    for(i=301;i<=6000;i++) if( i==6000 ) cBig = ops_of_chain(p,i); else (void)ops_of_chain(p,i);
+    sqlite3_exec(p.db,"COMMIT",0,0,0);
+    printf("  vm ops: append %ld at 257, %ld at 8193; chain %ld at 300 in a small store, %ld at 300, %ld at 6000\n",small,big,cFew,cSmall,cBig);
+    CHECK( big < small + small/2 );
+    CHECK( cBig < cSmall + cSmall/2 );
+    CHECK( cSmall < cFew + cFew/2 );              /* nor with what else the store holds */
+    drop(p); drop(few);
+}
+
+/* Pages written per batch must not follow the store: an index on the random
+** id would dirty a scattered page for each row. CACHE_WRITE is a count, so
+** this repeats exactly. */
+static int pages_of_batch(Peer p, int from, int to){
+    int cur = 0, hi = 0;
+    sqlite3_db_status(p.db,SQLITE_DBSTATUS_CACHE_WRITE,&cur,&hi,1);
+    sqlite3_exec(p.db,"BEGIN",0,0,0);
+    append_n(p,"alice","door",from,to,0);
+    sqlite3_exec(p.db,"COMMIT",0,0,0);
+    sqlite3_db_status(p.db,SQLITE_DBSTATUS_CACHE_WRITE,&cur,&hi,1);
+    return cur;
+}
+static void t_log4(void){
+    Peer p; int small, big, i;
+    CHECK( sqlite3_open("",&p.db)==SQLITE_OK );
+    sqlite3_exec(p.db,"PRAGMA cache_size=32;PRAGMA synchronous=OFF",0,0,0);
+    CHECK( vk_open(p.db,B("alice"),gGrants,7,&p.st)==VK_OK );
+    for(i=0;i<8;i++) (void)pages_of_batch(p,i*256+1,(i+1)*256);
+    small = pages_of_batch(p,2049,2304);
+    for(i=9;i<64;i++) (void)pages_of_batch(p,i*256+1,(i+1)*256);
+    big = pages_of_batch(p,16385,16640);
+    printf("  pages written per 256 rows: %d at 2k rows, %d at 16k rows\n",small,big);
+    CHECK( small>0 );
+    CHECK( big < small + small/2 );
+    drop(p);
+}
+/* A logged row has no id index, so it must still be erasable by id. */
+static void t_w3_logged(void){
+    Peer p = peer("alice"), er = peer("alice"), d = peer("alice");
+    VkId ids[4], t; VkMergeReport rep; char key[40]; VkRow r;
+    memset(&rep,0,sizeof(rep));
+    append_n(p,"alice","door",1,3,ids);
+    CHECK( vk_erase(p.st,ids[2],B("t"),gRank0,t)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE body IS NULL")==1 );
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE kind=CAST('note' AS BLOB)")==3 );
+    snprintf(key,sizeof key,"door/2");
+    CHECK( vk_current(p.st,B(key),&r)==VK_OK ); CHECK( r.erased ); vk_row_close(&r);
+    /* and when the tombstone arrives first */
+    CHECK( vk_erase(er.st,ids[2],B("t"),gRank0,t)==VK_OK );
+    CHECK( vk_merge(d.st,er.st,&rep)==VK_OK );
+    CHECK( vk_merge(d.st,p.st,&rep)==VK_OK );
+    CHECK( rows(d,"SELECT count(*) FROM assertion WHERE body IS NULL")==1 );
+    drop(p); drop(er); drop(d);
+}
+static void t_log4_dedupe(void){
+    Peer p = peer("alice"), q = peer("alice");
+    VkId ids[4], x, y; VkMergeReport rep;
+    memset(&rep,0,sizeof(rep));
+    append_n(p,"alice","door",1,3,ids);
+    CHECK( vk_merge(q.st,p.st,&rep)==VK_OK && rep.added==3 );
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_merge(q.st,p.st,&rep)==VK_OK && rep.present==3 && rep.added==0 );
+    digest(p,x); digest(q,y);
+    CHECK( id_eq(x,y) );
+    drop(p); drop(q);
+}
+static void t_r1a(void){
+    Peer p = peer("alice");
+    VkAssertion a = mk("alice","one",1,"a"), b = mk("alice","two",1,"b");
+    VkId i, j, par[1]; VkRow r;
+    CHECK( vk_put(p.st,&a,i)==VK_OK );
+    memcpy(par[0],i,32); b.supersedes = (const VkId*)par; b.nSupersedes = 1;
+    CHECK( vk_put(p.st,&b,j)==VK_OK );
+    CHECK( vk_current(p.st,B("one"),&r)==VK_OK ); CHECK( id_eq(r.id,i) ); vk_row_close(&r);
+    /* a refold must reach the same answer */
+    { static VkGrant other[1]; VkStore *st2;
+      other[0].principal = B("alice"); other[0].rights = ALL;
+      vk_close(p.st);
+      CHECK( vk_open(p.db,B("alice"),other,1,&st2)==VK_OK );
+      p.st = st2;
+      CHECK( vk_current(p.st,B("one"),&r)==VK_OK ); CHECK( id_eq(r.id,i) ); vk_row_close(&r); }
+    drop(p);
+}
+static void t_digest_erased(void){
+    Peer p = peer("alice");
+    VkAssertion a = mk("alice","k",1,"x");
+    VkId i, before, after;
+    CHECK( vk_put(p.st,&a,i)==VK_OK );
+    digest(p,before);
+    CHECK( sqlite3_exec(p.db,"UPDATE assertion SET body=NULL",0,0,0)==SQLITE_OK );
+    digest(p,after);
+    CHECK( !id_eq(before,after) );
+    drop(p);
+}
+
 /* ---- W: forgetting ---- */
+static void t_w15(void){
+    Peer p = peer("alice"), n = peer("nobody");
+    VkId ids[9], t, d; int64_t bad = -1;
+    append_n(p,"alice","door",1,8,ids);
+    CHECK( vk_forget(n.st,B("door"),B("alice"),1,5,B("t"),gRank0,t)==VK_EDENIED );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),6,5,B("t"),gRank0,t)==VK_EINVAL );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,5,B("t"),gRank0,t)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE kind=CAST('note' AS BLOB)")==3 );   /* frames gone */
+    CHECK( rows(p,"SELECT count(*) FROM assertion")==4 );                                   /* one tombstone */
+    CHECK( rows(p,"SELECT count(*) FROM arm WHERE id NOT IN (SELECT id FROM assertion)")==0 );
+    CHECK( rows(p,"SELECT length(body) FROM assertion WHERE kind=CAST('tombstone.range' AS BLOB)")==8+2*32 );  /* 5=101b: two ids */
+    CHECK( vk_verify(p.st,&bad)==VK_OK && bad==0 );
+    CHECK( vk_digest(p.st,d)==VK_OK );
+    drop(p); drop(n);
+}
+/* The ids a tombstone carries are the ids later appends need. */
+static void t_w15_carry(void){
+    Peer p = peer("alice");
+    VkId ids[17], t, ctl[17]; VkCursor c; int nSeen = 0;
+    Peer q = peer("alice");
+    append_n(p,"alice","door",1,8,ids);
+    append_n(q,"alice","door",1,8,ctl);
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,8,B("t"),gRank0,t)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM assertion")==1 );
+    append_n(p,"alice","door",9,16,ids);
+    append_n(q,"alice","door",9,16,ctl);
+    CHECK( rows(p,"SELECT min(pos) FROM assertion WHERE kind=CAST('note' AS BLOB)")==9 );
+    CHECK( id_eq(ids[16],ctl[16]) );      /* same chain as a log that forgot nothing */
+    CHECK( vk_cursor_open(p.st,0,&c)==VK_OK );
+    while( vk_cursor_next(&c)==VK_OK ){
+        if( c.a.pos==16 && c.a.nSkip==4 ){ CHECK( id_eq(c.a.skip[3],ctl[8]) ); nSeen++; }
+    }
+    vk_cursor_close(&c);
+    CHECK( nSeen==1 );
+    drop(p); drop(q);
+}
+static void t_w15_unentitled(void){
+    Peer m = loose_peer("mallory"), al = peer("alice");
+    VkId ids[6], t; VkMergeReport rep;
+    memset(&rep,0,sizeof(rep));
+    append_n(al,"alice","door",1,5,ids);
+    CHECK( vk_merge(m.st,al.st,&rep)==VK_OK );
+    CHECK( vk_forget(m.st,B("door"),B("alice"),1,5,B("t"),gRank0,t)==VK_OK );
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_merge(al.st,m.st,&rep)==VK_OK );
+    CHECK( rows(al,"SELECT count(*) FROM assertion WHERE kind=CAST('note' AS BLOB)")==5 );   /* stored, ignored */
+    drop(m); drop(al);
+}
+static void t_w16(void){
+    Peer src = peer("alice"), tomb = peer("alice"), x = peer("alice"), y = peer("alice");
+    VkId ids[9], t, dx, dy; VkMergeReport rep;
+    memset(&rep,0,sizeof(rep));
+    append_n(src,"alice","door",1,8,ids);
+    CHECK( vk_merge(tomb.st,src.st,&rep)==VK_OK );
+    CHECK( vk_forget(tomb.st,B("door"),B("alice"),1,5,B("t"),gRank0,t)==VK_OK );
+    CHECK( vk_merge(x.st,src.st,&rep)==VK_OK );            /* rows first */
+    CHECK( vk_merge(x.st,tomb.st,&rep)==VK_OK );
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_merge(y.st,tomb.st,&rep)==VK_OK );           /* tombstone first */
+    CHECK( vk_merge(y.st,src.st,&rep)==VK_OK );
+    CHECK( rep.covered==5 );
+    digest(x,dx); digest(y,dy);
+    CHECK( id_eq(dx,dy) );
+    CHECK( rows(y,"SELECT count(*) FROM assertion")==4 );
+    drop(src); drop(tomb); drop(x); drop(y);
+}
+static void t_w17(void){
+    Peer p = peer("alice");
+    VkAssertion base = mk("alice","k",1,"outside"), up = mk("alice","k",2,"inside");
+    VkId i, j, t, par[1];
+    CHECK( vk_put(p.st,&base,i)==VK_OK );
+    memcpy(par[0],i,32);
+    up.supersedes = (const VkId*)par; up.nSupersedes = 1;
+    up.log = B("door");
+    CHECK( vk_append(p.st,&up,j)==VK_OK );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,1,B("t"),gRank0,t)==VK_EINVAL );
+    CHECK( strstr(vk_errmsg(p.st),"W-17")!=0 );
+    CHECK( rows(p,"SELECT count(*) FROM assertion")==2 );
+    drop(p);
+}
+/* Which rows are heads follows the grants: reopen under others, and re-fold. */
+static void t_arm_rebuild(void){
+    Peer m = loose_peer("mallory"), al = peer("alice");
+    VkAssertion a = mk("alice","k",1,"true"), up = mk("mallory","k",9,"takeover");
+    VkId i, j, par[1]; VkRow r; VkMergeReport rep; VkStore *st2;
+    static VkGrant both[2];
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_put(al.st,&a,i)==VK_OK );
+    memcpy(par[0],i,32); up.supersedes = (const VkId*)par; up.nSupersedes = 1;
+    CHECK( vk_put(m.st,&up,j)==VK_OK );
+    CHECK( vk_merge(al.st,m.st,&rep)==VK_OK );
+    CHECK( vk_current(al.st,B("k"),&r)==VK_OK ); CHECK( id_eq(r.id,i) ); vk_row_close(&r);
+    vk_close(al.st);
+    both[0].principal = B("alice");   both[0].rights = ALL;
+    both[1].principal = B("mallory"); both[1].rights = ALL;
+    CHECK( vk_open(al.db,B("alice"),both,2,&st2)==VK_OK );
+    CHECK( vk_current(st2,B("k"),&r)==VK_OK ); CHECK( id_eq(r.id,j) ); vk_row_close(&r);
+    al.st = st2;
+    drop(m); drop(al);
+}
+
+
 static void t_w3_no_resurrection(void){
     Peer p = peer("alice");
     VkAssertion a = mk("alice","k",1,"old"), b = mk("alice","k",2,"secret");
@@ -580,10 +868,14 @@ static VkStatus script_step(Script *s, int k){
             if(st==VK_OK){ while((st=vk_search_next(&q,id))==VK_OK){} vk_search_close(&q); if(st==VK_DONE) st=VK_OK; }
             return st;
     case 8: return vk_verify(s->p.st,&bad);
+    case 9: { char key[40]; VkAssertion l = reading("alice","door",1,key,sizeof key); return vk_append(s->p.st,&l,id); }
+    case 10: { char key[40]; VkAssertion l = reading("alice","door",2,key,sizeof key); return vk_append(s->p.st,&l,id); }
+    case 11: return vk_forget(s->p.st,B("door"),B("alice"),1,2,B("t"),gRank0,id);
+    case 12: { char key[40]; VkAssertion l = reading("alice","door",3,key,sizeof key); return vk_append(s->p.st,&l,id); }
     }
     return VK_OK;
 }
-#define NSCRIPT 9
+#define NSCRIPT 13
 
 /* Runs the script once, failing the k-th tick; 0 means no fault. A step that
 ** fails must succeed when retried, and the store must end up the same. */
@@ -645,6 +937,20 @@ static const Test aTest[] = {
     {"R-4a","a row from an unentitled author is stored and ignored",t_r4a},
     {"R-5","a fork is reported",t_r5},
     {"R-7","one assertion heals a fork",t_r7},
+    {"LOG-1","positions count per log; a position needs a log",t_log1},
+    {"LOG-2","a row links to pos-2^j, and a wrong link count is refused",t_log2},
+    {"LOG-3","append and chain cost do not follow the length",t_log3},
+    {"LOG-4","pages written per row do not follow the store",t_log4},
+    {"LOG-4","a logged row is deduplicated without an id index",t_log4_dedupe},
+    {"W-3","a logged row can be erased by id, in either order",t_w3_logged},
+    {"M-1","the digest tells an erased row from a held one",t_digest_erased},
+    {"R-1a","a link to another akey supersedes nothing",t_r1a},
+    {"W-15","a range goes entirely and one tombstone stays",t_w15},
+    {"W-15","the ids a tombstone carries let the log continue",t_w15_carry},
+    {"W-15","an unentitled range tombstone is stored and ignored",t_w15_unentitled},
+    {"W-16","a covered row is not stored, in either order",t_w16},
+    {"W-17","a range that would orphan a superseded row is refused",t_w17},
+    {"R-4a","heads are refolded when the grants change",t_arm_rebuild},
     {"W-3","erasing a correction does not bring back the corrected",t_w3_no_resurrection},
     {"W-2","a tombstone cannot be erased",t_w2},
     {"W-6","a tombstone arriving first still takes effect",t_w6},
