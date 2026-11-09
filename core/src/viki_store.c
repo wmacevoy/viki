@@ -12,6 +12,7 @@ struct VkStore {
     const VkGrant *grants;
     uint32_t nGrants;
     const char *zErr;
+    int rcSql;      /* kept because undoing a failed write clears SQLite's own */
     /* Prepared once, because undoing a failed write must not need memory
     ** that may be exactly what ran out. */
     sqlite3_stmt *pBegin, *pCommit, *pUndo, *pEnd;
@@ -41,10 +42,12 @@ VkStatus vk_refuse(VkStore *p, VkStatus rc, const char *zWhy){
 
 VkStatus vk_sql_status(VkStore *p, int rc){
     p->zErr = "sqlite failure";
+    p->rcSql = rc;
     return (rc & 0xff)==SQLITE_NOMEM ? VK_ENOMEM : VK_ESQL;
 }
 
 const char *vk_errmsg(const VkStore *p){ return p->zErr ? p->zErr : ""; }
+int vk_sqlite_code(const VkStore *p){ return p->rcSql; }
 
 void vk_bind_bytes(sqlite3_stmt *pSt, int i, VkBytes b){
     /* A NULL pointer would bind SQL NULL, not an empty value. */
@@ -470,26 +473,29 @@ static int run_range(VkStore *p, const char *zSql, VkBytes log, VkBytes target, 
 
 /* The row goes entirely. Edges from a surviving child to a gone parent stay:
 ** that child's frame names them and its id must still recompute. */
-static int apply_range(VkStore *p, const VkAssertion *a, const VkId id, sqlite3_int64 seq){
-    sqlite3_stmt *pSt = 0;
+static int delete_range(VkStore *p, const VkAssertion *a){
     uint64_t from = get_be64(a->body.p);
-    int rc = vk_prepare(p, "INSERT OR IGNORE INTO range_tomb(log,target,pto,pfrom,author,id,seq)"
-                           " VALUES(?1,?2,?3,?4,?5,?6,?7)", &pSt);
-    if( rc!=SQLITE_OK ) return rc;
-    bind_range(pSt, a->log, a->reference, a->pos, from);
-    vk_bind_bytes(pSt, 5, a->author);
-    sqlite3_bind_blob(pSt, 6, id, VK_ID_BYTES, SQLITE_STATIC);
-    sqlite3_bind_int64(pSt, 7, seq);
-    rc = vk_step(pSt);
-    sqlite3_finalize(pSt);
-    if( rc!=SQLITE_DONE ) return rc;
-    rc = run_range(p, "DELETE FROM arm WHERE (akey,id) IN (SELECT akey,id FROM assertion WHERE " VK_IN_RANGE("") ")",
+    int rc = run_range(p, "DELETE FROM arm WHERE (akey,id) IN (SELECT akey,id FROM assertion WHERE " VK_IN_RANGE("") ")",
                    a->log, a->reference, from, a->pos);
     if( rc==SQLITE_OK ) rc = run_range(p, "DELETE FROM edge WHERE child IN (SELECT id FROM assertion WHERE " VK_IN_RANGE("") ")",
                    a->log, a->reference, from, a->pos);
     if( rc==SQLITE_OK ) rc = run_range(p, "DELETE FROM assertion WHERE " VK_IN_RANGE(""),
                    a->log, a->reference, from, a->pos);
     return rc;
+}
+
+static int record_range(VkStore *p, const VkAssertion *a, const VkId id, sqlite3_int64 seq){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, "INSERT OR IGNORE INTO range_tomb(log,target,pto,pfrom,author,id,seq)"
+                           " VALUES(?1,?2,?3,?4,?5,?6,?7)", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    bind_range(pSt, a->log, a->reference, a->pos, get_be64(a->body.p));
+    vk_bind_bytes(pSt, 5, a->author);
+    sqlite3_bind_blob(pSt, 6, id, VK_ID_BYTES, SQLITE_STATIC);
+    sqlite3_bind_int64(pSt, 7, seq);
+    rc = vk_step(pSt);
+    sqlite3_finalize(pSt);
+    return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 /* W-16. Rights are checked here, at use, like every other fold (R-4a). */
@@ -572,6 +578,13 @@ static int store_row(VkStore *p, const VkAssertion *a, const VkId id, int *pbAdd
     rc = begin(p);
     if( rc!=SQLITE_OK ) return rc;
 
+    /* Deleting first, because on a full database the deleted rows' pages are
+    ** the only room there is for the tombstone (W-15). */
+    if( bRange && (rights_of(p, a->author) & VK_ERASE) ){
+        rc = delete_range(p, a);
+        if( rc!=SQLITE_OK ){ undo(p); return rc; }
+    }
+
     if( a->erased ){
         memcpy(aHash, a->bodyHash, VK_ID_BYTES);
     }else{
@@ -608,7 +621,7 @@ static int store_row(VkStore *p, const VkAssertion *a, const VkId id, int *pbAdd
     }
     if( rc==SQLITE_OK && *pbAdded ){
         if( bRange ){
-            if( rights_of(p, a->author) & VK_ERASE ) rc = apply_range(p, a, id, seq);
+            if( rights_of(p, a->author) & VK_ERASE ) rc = record_range(p, a, id, seq);
         }else if( bTomb && (rights_of(p, a->author) & VK_ERASE) ){
             rc = erase_by_id(p, a->body.p);    /* W-2: never a tombstone */
         }else if( !bTomb ){
@@ -754,6 +767,32 @@ static VkStatus log_head(VkStore *p, VkBytes author, VkBytes log, uint64_t *pPos
         }
         sqlite3_finalize(pSt);
         if( rc!=SQLITE_ROW && rc!=SQLITE_DONE ) return vk_sql_status(p, rc);
+    }
+    return VK_OK;
+}
+
+VkStatus vk_log_span(VkStore *p, VkBytes log, VkBytes author, uint64_t *pLow, uint64_t *pHigh){
+    static const char *azSql[2] = {
+        "SELECT pos FROM assertion WHERE log=?1 AND log<>x'' AND author=?2"
+        " AND kind NOT IN " VK_TOMB_KINDS " ORDER BY pos ASC LIMIT 1",
+        "SELECT pos FROM assertion WHERE log=?1 AND log<>x'' AND author=?2"
+        " AND kind NOT IN " VK_TOMB_KINDS " ORDER BY pos DESC LIMIT 1"
+    };
+    int i;
+    if( !vk_has_right(p, VK_READ) ) return vk_refuse(p, VK_EDENIED, "D-3a0: every read path requires r");
+    for(i=0; i<2; i++){
+        sqlite3_stmt *pSt = 0;
+        uint64_t v = 0;
+        int rc = vk_prepare(p, azSql[i], &pSt);
+        if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+        vk_bind_bytes(pSt, 1, log);
+        vk_bind_bytes(pSt, 2, author);
+        rc = vk_step(pSt);
+        if( rc==SQLITE_ROW ) v = (uint64_t)sqlite3_column_int64(pSt, 0);
+        sqlite3_finalize(pSt);
+        if( rc==SQLITE_DONE ) return VK_NOTFOUND;
+        if( rc!=SQLITE_ROW ) return vk_sql_status(p, rc);
+        if( i==0 ) *pLow = v; else *pHigh = v;
     }
     return VK_OK;
 }

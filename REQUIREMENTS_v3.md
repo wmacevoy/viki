@@ -225,7 +225,9 @@ v2 excluded retrieval. v3 brings it into scope as a projection, under rules that
   positions. Taking effect, it removes every row of that range, frame and body and outgoing links. It
   carries the ids at the positions reached from the range's end by clearing its low set bits, one at a
   time: at most one id per set bit. Those are exactly the ids later appends need (LOG-2), and they
-  commit to the range. It needs `x`; without it, it is stored and ignored (R-4a).
+  commit to the range. It needs `x`; without it, it is stored and ignored (R-4a). It can be written
+  on a full database whose range frees enough space to hold it: forgetting must not need the room
+  it exists to make.
 - **W-16** *(since v3)* A row a range tombstone covers is not stored when it arrives, whichever came
   first (W-6), and merge counts it as covered. *Decided: Warren, 2026-11-09: contiguous ranges only.*
 - **W-17** *(since v3)* A range that holds a row superseding a row outside the range is refused when

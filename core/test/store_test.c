@@ -395,12 +395,17 @@ static void append_n(Peer p, const char *zWho, const char *zLog, int from, int t
     }
 }
 static void t_log1(void){
-    Peer p = peer("alice");
-    char key[40]; VkId id; VkMergeReport rep;
+    Peer p = peer("alice"), log = peer("logger");
+    char key[40]; VkId id; VkMergeReport rep; uint64_t lo = 0, hi = 0;
     VkAssertion a = reading("alice","door",1,key,sizeof key);
+    CHECK( vk_log_span(p.st,B("door"),B("alice"),&lo,&hi)==VK_NOTFOUND );
     append_n(p,"alice","door",1,5,0);
+    CHECK( vk_log_span(p.st,B("door"),B("alice"),&lo,&hi)==VK_OK && lo==1 && hi==5 );
+    CHECK( vk_log_span(log.st,B("door"),B("alice"),&lo,&hi)==VK_EDENIED );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,2,B("t"),gRank0,id)==VK_OK );
+    CHECK( vk_log_span(p.st,B("door"),B("alice"),&lo,&hi)==VK_OK && lo==3 && hi==5 );
     append_n(p,"alice","gps",1,2,0);
-    CHECK( rows(p,"SELECT max(pos) FROM assertion WHERE log=CAST('door' AS BLOB)")==5 );
+    CHECK( rows(p,"SELECT max(pos) FROM assertion WHERE log=CAST('door' AS BLOB) AND kind=CAST('note' AS BLOB)")==5 );
     CHECK( rows(p,"SELECT max(pos) FROM assertion WHERE log=CAST('gps' AS BLOB)")==2 );
     CHECK( vk_put(p.st,&a,id)==VK_EINVAL );          /* only vk_append chooses a position */
     a.log = B("");
@@ -408,7 +413,7 @@ static void t_log1(void){
     vk_assertion_id(&a,id);
     memset(&rep,0,sizeof(rep));
     CHECK( vk_ingest(p.st,&a,id,&rep)==VK_OK && rep.quarantined==1 );   /* a position with no log */
-    drop(p);
+    drop(p); drop(log);
 }
 static void t_log2(void){
     Peer p = peer("alice");
@@ -528,6 +533,23 @@ static void t_log4_dedupe(void){
     digest(p,x); digest(q,y);
     CHECK( id_eq(x,y) );
     drop(p); drop(q);
+}
+/* A write that fails for lack of space must say so, after its undo. */
+static void t_e_full(void){
+    Peer p; int i; VkStatus st = VK_OK; VkId id; char key[32], body[900];
+    CHECK( sqlite3_open("",&p.db)==SQLITE_OK );
+    CHECK( vk_open(p.db,B("alice"),gGrants,7,&p.st)==VK_OK );
+    CHECK( sqlite3_exec(p.db,"PRAGMA max_page_count=32",0,0,0)==SQLITE_OK );
+    memset(body,'x',899); body[899] = 0;
+    for(i=0;i<500 && st==VK_OK;i++){
+        VkAssertion a;
+        snprintf(key,sizeof key,"k%d",i);
+        a = mk("alice",key,1,body);
+        st = vk_put(p.st,&a,id);
+    }
+    CHECK( st==VK_ESQL );
+    CHECK( (vk_sqlite_code(p.st)&0xff)==SQLITE_FULL );
+    drop(p);
 }
 static void t_r1a(void){
     Peer p = peer("alice");
@@ -944,6 +966,7 @@ static const Test aTest[] = {
     {"LOG-4","a logged row is deduplicated without an id index",t_log4_dedupe},
     {"W-3","a logged row can be erased by id, in either order",t_w3_logged},
     {"M-1","the digest tells an erased row from a held one",t_digest_erased},
+    {"E-1","a failed write reports the SQLite cause after its undo",t_e_full},
     {"R-1a","a link to another akey supersedes nothing",t_r1a},
     {"W-15","a range goes entirely and one tombstone stays",t_w15},
     {"W-15","the ids a tombstone carries let the log continue",t_w15_carry},

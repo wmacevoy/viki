@@ -76,6 +76,7 @@ VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
                  uint32_t nGrants, VkStore **ppOut);
 int  vk_close(VkStore *p);              /* the sqlite3_finalize-style rc */
 const char *vk_errmsg(const VkStore *p); /* names the requirement refused */
+int vk_sqlite_code(const VkStore *p);    /* the SQLite code behind the last VK_ESQL */
 
 /* Write. VK_OK, or VK_EXISTS if already held; the id is set for both. */
 VkStatus vk_put(VkStore *p, const VkAssertion *a, VkId idOut);
@@ -94,6 +95,10 @@ VkStatus vk_erase(VkStore *p, const VkId target, VkBytes ts,
 ** refuses the range. */
 VkStatus vk_forget(VkStore *p, VkBytes log, VkBytes target, uint64_t from, uint64_t to,
                    VkBytes ts, const uint8_t rank[VK_RANK_BYTES], VkId idOut);
+
+/* The lowest and highest positions of (author, log) held as rows. VK_NOTFOUND
+** if there are none. */
+VkStatus vk_log_span(VkStore *p, VkBytes log, VkBytes author, uint64_t *pLow, uint64_t *pHigh);
 
 /* Read. A VkRow holds a statement: vk_row_close it after VK_OK. */
 typedef struct {
