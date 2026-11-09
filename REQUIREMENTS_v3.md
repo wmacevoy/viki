@@ -173,6 +173,53 @@ v2 excluded retrieval. v3 brings it into scope as a projection, under rules that
 - **ENV-3** *(since v3)* Optional parts are optional at build time: a build without vectors links no
   embedding runtime and carries no model.
 
+## 1.0 scope — DRAFT, not closed (FIN-4)
+
+Drafted by Claude Opus 5.5 on 2026-11-09, from ENV-1's list. **Warren closes it, and until he does
+this document still has no 1.0.** Each verb in ENV-1 maps to the v2 series that define it. Under
+FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red and then green.
+
+**In: named by ENV-1**
+
+| ENV-1 says | Requirements | Notes |
+| --- | --- | --- |
+| store | A-1 to A-8; D-1 to D-3e; E-1, E-3; N-7 | A comes first (Not yet answered 9). N-7 (a raw database key) is the "encrypted" in MISSION-1 |
+| resolve | R-1 to R-9; C-1 to C-4; C-6, C-7 | |
+| sign | I-1, I-2, I-5, I-6; N-1 to N-6 | grants and identities, as far as a root |
+| verify | I-3, I-7; A-7; R-4 to R-4b; S-11 | |
+| merge | M-1 to M-8; G-1a, G-1b; E-4 | |
+| sync | S-1 to S-11; D-4, D-6 | S-3 and S-8 are where ENV-2 bites first |
+| withdraw | W-1 to W-11, W-13 | **including `erase`**: MISSION-1 requires forgetting, and W-1 has three tiers, not one |
+| grep, regex, bm25 | Q-1 to Q-7, without vector; E-2 | the regex dialect is still open (Not yet answered 7) |
+| (on an ESP32) | ENV-1, ENV-2, ENV-3 | |
+| (the process) | FIN-1 to FIN-6; C-8 | |
+
+**In: added by Warren** (2026-11-09)
+
+| Part | Requirements | Notes |
+| --- | --- | --- |
+| references and the cache | X-1 to X-8; W-12, W-14 | serves AS-1 (data ingress) |
+| relations | L-1 to L-5 | L-4's verdict needs a grant: who may give one is still open (Not yet answered 5) |
+
+**In, because the mission or the shape cites them.** FIN-5a says 1.0 may cite no unmoved v2 ID, so
+anything the shape cites has to be in: V-1 and V-1a (SHAPE-4), M-5, W-6, A-4a, C-1, D-1, D-3 and
+I-7. All but V-1 and V-1a are already in a row above, so the scope includes **V-1 and V-1a** and no
+other V requirement.
+
+**Still to be decided**
+
+| Part | For | Against |
+| --- | --- | --- |
+| V-2 to V-6, publication | AS-1 cites V-5 (a robot's output is untrusted), and X is now in | no ENV-1 verb names it; it can be added in 1.x only if it adds no new meaning (FIN-1), which is doubtful |
+| N-8 to N-17, password-wrapped keys | a person on a phone or a chip needs a way in | it is the largest single part of v2 |
+| G-2 to G-6, engines other than SQLite | — | Not yet answered 4 proposes SQLite only, with Postgres in viki 2 |
+
+**Out of 1.0**
+
+- **vector search**: optional under Q-6, and kept off the ESP32 by ENV-1. It can be built in 1.0,
+  but no gate requires it.
+- **v2's "Recursion" note**, which v2 itself marks as not built.
+
 ## L — Relations between assertions (new series)
 
 From the stripped-structure trial (`test/stripped/`): a librarian that says which notes correct, copy
@@ -215,7 +262,7 @@ or contradict each other is useful when its claims are checkable.
 4. **Engines for 1.0.** SQLite only, with Postgres as viki 2? (v2 Open 5 decides the G series, if
    it moves.)
 5. **Who may give a verdict** (L-4): a grant per diary, or the diary's owner only.
-6. **The 1.0 scope list** (FIN-4). Empty until Warren closes it.
+6. **The 1.0 scope list** (FIN-4). Drafted from ENV-1 under "1.0 scope"; open until Warren closes it.
 7. **The regex dialect and engine** (Q-6): POSIX ERE, as `src/`'s `viki grep` used, or another. On
    ENV-1, an engine has to come from somewhere: the platform's libc, if it has one, or a small
    vendored engine, which is a dependency.
