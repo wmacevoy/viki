@@ -42,3 +42,4 @@ core/build/
 viki.db
 *.diary
 __pycache__/
+core/build-store/

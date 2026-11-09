@@ -216,7 +216,7 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 
 | ENV-1 says | Requirements | Notes |
 | --- | --- | --- |
-| store | A-1 to A-8; D-1 to D-3e, with D-3 and D-3a as changed in v3, and D-3f; E-1, E-3; N-7 | A comes first (Not yet answered 9). N-7 (a raw database key) is the "encrypted" in MISSION-1 |
+| store | A-1 to A-7; D-1 to D-3e, with D-3 and D-3a as changed in v3, and D-3f; E-1, E-3; N-7 | A comes first (Not yet answered 9). N-7 (a raw database key) is the "encrypted" in MISSION-1 |
 | resolve | R-1 to R-9; C-1 to C-4; C-6, C-7 | |
 | sign | I-1, I-2, I-5, I-6; N-1 to N-6 | grants and identities, as far as a root |
 | verify | I-3, I-7; A-7; R-4 to R-4b; S-11 | |
@@ -285,6 +285,25 @@ or contradict each other is useful when its claims are checkable.
   may write relations without reading anything else in the diary only if granted so (D-3a).
 
 ---
+
+## Moved so far (FIN-5a)
+
+Moved from v2 at 28966cd, each with a test named for it and seen red then green by breaking the
+code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed have not moved.
+
+- **As written:** A-1, A-3, A-4a, A-5, A-7; R-1, R-2, R-3, R-5, R-7; M-1, M-2, M-3, M-7; W-2, W-6.
+- **R-4a:** moved for rights supplied by the host. Grants read from the diary are not built.
+- **A-2** *(changed in v3)*: the frame covers the body **by its hash**, so an id can be recomputed after
+  erasure (SHAPE-3).
+- **A-4** *(narrowed in v3, for now)*: viki hashes the bytes it is given, and normalizing text is the
+  caller's job. Two spellings of one word are two assertions.
+- **W-3** *(changed in v3)*: erasure destroys the body and keeps the frame and its links, so erasing a
+  correction does not bring back what it corrected.
+- **A-8** *(dropped in v3)*: a tombstone is an ordinary assertion of kind `tombstone` (Warren,
+  2026-11-09), as SHAPE-1 says. v2 gave it separate framing so that no other signature could
+  authorize an erasure (F-2). Here the kind is inside the framed id, so a signature over the id
+  already covers it.
+- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep alone; ENV-2 is measured for merge alone.
 
 ## Chosen falsehoods (K4)
 

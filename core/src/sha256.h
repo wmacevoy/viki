@@ -22,4 +22,16 @@
 ** cache is worse than a loud, immediate exit. */
 void viki_sha256_hex(const void *data, size_t len, char hexout[65]);
 
+/* Streaming form, so a frame can be hashed without first being built in
+** memory (REQ3/ENV-2). */
+typedef struct {
+    unsigned int state[8];
+    unsigned long long bitlen;
+    unsigned char buf[64];
+    unsigned int buflen;
+} sha256_ctx;
+void sha256_init(sha256_ctx *ctx);
+void sha256_update(sha256_ctx *ctx, const unsigned char *data, size_t len);
+void sha256_final(sha256_ctx *ctx, unsigned char out[32]);
+
 #endif
