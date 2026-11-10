@@ -76,6 +76,12 @@ VkStatus vk_search_next(VkSearch *s, VkId out){
 VkStatus vk_search_hit(VkSearch *s, VkHit *out){
     int rc;
     memset(out, 0, sizeof(*out));
+    if( s->pSt && sqlite3_column_count(s->pSt)>=4 && sqlite3_column_type(s->pSt, 2)!=SQLITE_NULL ){
+        out->bRange = 1;                       /* vector: the span that matched */
+        out->lo = sqlite3_column_int64(s->pSt, 2);
+        out->hi = sqlite3_column_int64(s->pSt, 3);
+        return VK_OK;
+    }
     if( !s->pSt || sqlite3_column_count(s->pSt)<2 || sqlite3_column_type(s->pSt, 1)==SQLITE_NULL ) return VK_OK;
     if( !s->pNode ){
         rc = vk_prepare(s->p, "SELECT lo, hi, depth, path FROM vk_onode WHERE rowid=?1", &s->pNode);
@@ -98,11 +104,14 @@ VkStatus vk_search_hit(VkSearch *s, VkHit *out){
 VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out){
     sqlite3_stmt *pSt = 0;
     VkStatus st = VK_OK;
-    int rc = vk_prepare(s->p,
-        "SELECT count(*), coalesce(sum(NOT EXISTS(SELECT 1 FROM vk_onode o WHERE o.target=a.id AND o.author=?1)),0)"
-        " FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a"), &pSt);
+    int bVec = s->pMethod==&vkVector;
+    int rc = vk_prepare(s->p, bVec
+        ? "SELECT count(*), 0 FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a")
+          " AND EXISTS(SELECT 1 FROM vk_vec v WHERE v.seq=a.seq AND v.model=?1)"
+        : "SELECT count(*), coalesce(sum(NOT EXISTS(SELECT 1 FROM vk_onode o WHERE o.target=a.id AND o.author=?1)),0)"
+          " FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a"), &pSt);
     if( rc!=SQLITE_OK ) return vk_sql_status(s->p, rc);
-    vk_bind_bytes(pSt, 1, vk_outline_author(s->p));
+    vk_bind_bytes(pSt, 1, bVec ? vk_vector_model(s->p) : vk_outline_author(s->p));
     rc = vk_step(pSt);
     if( rc==SQLITE_ROW ){
         out->zMethod = s->pMethod->zName;

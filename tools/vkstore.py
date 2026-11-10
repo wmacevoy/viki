@@ -51,7 +51,8 @@ class Coverage(C.Structure):
 
 
 class Hit(C.Structure):
-    _fields_ = [("bNode", C.c_int), ("lo", C.c_int64), ("hi", C.c_int64), ("depth", C.c_int), ("path", Bytes)]
+    _fields_ = [("bNode", C.c_int), ("lo", C.c_int64), ("hi", C.c_int64), ("depth", C.c_int), ("path", Bytes),
+                ("bRange", C.c_int)]
 
 
 def _default_lib():
@@ -82,6 +83,8 @@ for name, args, res in [
     ("vk_search_next", [C.POINTER(Search), C.POINTER(Id)], C.c_int),
     ("vk_search_hit", [C.POINTER(Search), C.POINTER(Hit)], C.c_int),
     ("vk_use_outlines", [P, Bytes], None),
+    ("vk_use_vectors", [P, Bytes], None),
+    ("vk_vector_put", [P, C.POINTER(Id), Bytes, C.c_uint32, C.c_uint32, C.POINTER(C.c_float), C.c_uint32], C.c_int),
     ("vk_outline_key", [C.POINTER(Id), Bytes, C.POINTER(Id)], None),
     ("vk_search_coverage", [C.POINTER(Search), C.POINTER(Coverage)], C.c_int),
     ("vk_search_close", [C.POINTER(Search)], None),
@@ -94,6 +97,7 @@ for name, args, res in [
     fn.argtypes, fn.restype = args, res
 GREP = C.addressof(C.c_void_p.in_dll(LIB, "vkGrep"))
 BM25 = C.addressof(C.c_void_p.in_dll(LIB, "vkBm25"))
+VECTOR = C.addressof(C.c_void_p.in_dll(LIB, "vkVector"))
 
 
 def outline_key(target, author):
@@ -288,6 +292,23 @@ class Store:
         self._outlines = author
         LIB.vk_use_outlines(self.st, _b(author))
 
+    def use_vectors(self, model):
+        """Q-6: which model the vector method uses; b"" for none. Kept alive here: the store borrows it."""
+        self._vectors = model
+        LIB.vk_use_vectors(self.st, _b(model))
+
+    def vector_put(self, id_, model, lo, hi, vec):
+        """One vector (a sequence of floats) of the span lo..hi of id_'s body."""
+        buf = (C.c_float * len(vec))(*vec)
+        rc = LIB.vk_vector_put(self.st, C.byref(Id(*id_)), _b(model), lo, hi, buf, len(vec))
+        if rc != OK:
+            raise VkError(f"vector put: {self.errmsg()}")
+
+    def vector(self, vec):
+        """(hits, coverage), nearest first; (None, None) if blind. A hit's node is (None, lo, hi, None)."""
+        import array
+        return self.search(VECTOR, array.array("f", vec).tobytes())
+
     def grep(self, text):
         """(hits, coverage) for an exact substring of any readable body."""
         return self.search(GREP, text)
@@ -310,7 +331,9 @@ class Store:
                 if LIB.vk_search_hit(C.byref(s), C.byref(hit)) != OK:
                     raise VkError(f"search: {self.errmsg()}")
                 node = None
-                if hit.bNode:
+                if hit.bRange:
+                    node = (None, hit.lo, hit.hi, None)
+                elif hit.bNode:
                     path = json.loads(C.string_at(hit.path.p, hit.path.n).decode("utf-8", "replace"))
                     node = (path, hit.lo, hit.hi, hit.depth)
                 ids.append((bytes(out), node))

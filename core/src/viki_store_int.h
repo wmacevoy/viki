@@ -44,6 +44,10 @@ int vk_delta_apply(const uint8_t *src, uint32_t nSrc, const uint8_t *d, uint32_t
     "(SELECT group_concat(substr(" bodyExpr ", s.lo+1, s.hi-s.lo), '' ORDER BY s.lo)" \
     " FROM vk_oseg s WHERE s.node=" nodeExpr ")"
 VkBytes vk_outline_author(const VkStore *p);
+VkBytes vk_vector_model(const VkStore *p);
+/* vk_cosine(a, b): the cosine of two float32 vectors; NULL if their lengths differ. */
+void vk_cosine_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+int vk_has_held_body(VkStore *p, const uint8_t *id, sqlite3_int64 *pSeq, sqlite3_int64 *pLen);
 int vk_bm25_on(VkStore *p, int *pb);   /* *pb is 1 if the bm25 index exists */
 
 #ifdef VK_TEST_FAULTS

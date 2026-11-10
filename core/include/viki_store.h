@@ -180,6 +180,24 @@ extern const VkSearchMethod vkGrep;
 extern const VkSearchMethod vkBm25;
 VkStatus vk_bm25_enable(VkStore *p);
 
+/* vector: nearest neighbours by embedding (Q-6), optional. core runs no model:
+** the host embeds, under one model per diary, and hands core the vectors.
+** model names the model by its bytes and the chunking (the host composes it);
+** a vector is float32, little-endian, any scale (ranked by cosine). Vectors are
+** a projection: kept per store, never merged (M-5), deleted with the body they
+** were made from when it is erased or forgotten (W-3). The method's query is a
+** vector under the model vk_use_vectors chose; with no model chosen, or no
+** vectors under it, the method is blind (Q-2). */
+#define VK_MAX_DIM 4096   /* invented */
+extern const VkSearchMethod vkVector;
+/* One vector of the span lo..hi (hi exclusive) of a held, unerased body.
+** VK_NOTFOUND if target is not held with a body; VK_EINVAL for a bad span, an
+** empty model, a dimension of 0 or over VK_MAX_DIM, or one that differs from
+** the model's earlier vectors. A second vector of the same span replaces it. */
+VkStatus vk_vector_put(VkStore *p, const VkId target, VkBytes model, uint32_t lo, uint32_t hi,
+                       const float *v, uint32_t dim);
+void vk_use_vectors(VkStore *p, VkBytes model);   /* model is borrowed */
+
 /* OL-4: whose outlines this store's searches use; author is borrowed. Empty,
 ** the default: none, and every hit is a whole assertion. A target with no
 ** current outline by that author is searched and returned whole. */
@@ -201,10 +219,12 @@ typedef struct {
     int64_t lo, hi;
     int depth;
     VkBytes path;
+    int bRange;   /* vector: lo..hi is the span whose vector matched; bNode is 0 */
 } VkHit;
 
 /* What a search covered (Q-2). nWhole: how many of those were searched whole,
-** with no outline by the reader's chosen author (OL-4). */
+** with no outline by the reader's chosen author (OL-4). For vector, nSearched
+** counts the assertions with a vector under the chosen model, and nWhole is 0. */
 typedef struct {
     const char *zMethod;
     int bExhaustive;

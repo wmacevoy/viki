@@ -54,6 +54,11 @@ GRANTS = [(principal, RIGHTS) for _, principal in JUDGES.values()]
 CHAT = b"vk.ingest.chat"
 CHAT_RIGHTS = RIGHTS | vk.ERASE
 GRANTS.append((CHAT, CHAT_RIGHTS))
+# The librarian (Warren, 2026-11-10): a model that writes questions and answers about each file, so a search
+# in a reader's own words finds it. One principal per model, as the judges.
+LIBRARIANS = {"haiku": ("claude-haiku-5-5", b"vk.librarian.haiku"),
+              "sonnet": ("claude-sonnet-5-5", b"vk.librarian.sonnet")}
+GRANTS += [(principal, RIGHTS) for _, principal in LIBRARIANS.values()]
 
 
 # ---- the host's clock and the world (SHAPE-6: core reads neither) ----
@@ -695,6 +700,250 @@ def cmd_search(store, text, repo, method, show_all, k):
     return 0 if matched else 1
 
 
+# ---- vectors (Q-6) and the librarian ----
+
+# The chunking is part of the model's name (Q-6): a file head is embedded in windows of 20 lines advancing 15
+# (invented: the model reads at most 256 wordpieces, and 40 lines of code exceed it), a librarian's entry whole.
+CHUNKING = "viki-chunk-1"
+CHUNK_LINES, CHUNK_STRIDE = 20, 15
+MODEL_DIR = os.environ.get("VIKI_MODEL_DIR", "/opt/viki-bin/model")
+
+
+def is_text(body):
+    try:
+        body.decode("utf-8")
+        return b"\0" not in body
+    except UnicodeDecodeError:
+        return False
+
+
+def line_spans(body):
+    """Byte spans of 20-line windows advancing 15, the last ending at the end."""
+    starts = [0] + [i + 1 for i, c in enumerate(body) if c == 10 and i + 1 < len(body)]
+    out = []
+    for a in range(0, len(starts), CHUNK_STRIDE):
+        b = a + CHUNK_LINES
+        out.append((starts[a], starts[b] if b < len(starts) else len(body)))
+        if b >= len(starts):
+            break
+    return out
+
+
+def entry_spans(body):
+    """Byte spans of a librarian's entries: blocks separated by a blank line."""
+    out, at = [], 0
+    for block in body.split(b"\n\n"):
+        if block.strip():
+            out.append((at, at + len(block)))
+        at += len(block) + 2
+    return out
+
+
+def text_heads(store, kinds, repo=None):
+    """The current, readable text bodies of these kinds (a fork's heads all count)."""
+    for r in store.walk():
+        if r.kind not in kinds or not r.body or not is_text(r.body):
+            continue
+        akey = r.akey.decode("utf-8", "replace")
+        if repo is not None and not (akey.startswith(repo + "/") or akey.startswith(f"qa/{repo}/")):
+            continue
+        if store.standing(r.akey, r.id)[0]:
+            yield r
+
+
+def vector_model(emb):
+    return f"{emb.id}/{CHUNKING}".encode()
+
+
+def cmd_embed(store, repo, kinds):
+    import vkembed
+    emb = vkembed.Embedder(MODEL_DIR)
+    model, n, rows = vector_model(emb), 0, 0
+    store.exec("BEGIN")
+    try:
+        for r in text_heads(store, kinds, repo):
+            for lo, hi in (entry_spans if r.kind == b"qa" else line_spans)(r.body):
+                store.vector_put(r.id, model, lo, hi, emb.embed(r.body[lo:hi].decode("utf-8", "replace")))
+                n += 1
+            rows += 1
+        store.exec("COMMIT")
+    except BaseException:
+        store.exec("ROLLBACK")
+        raise
+    print(f"{n} vectors of {rows} bodies under {model.decode()}")
+    return 0
+
+
+LIBRARIAN_PROMPT = (
+    "You are the librarian of a software project's repository. For each file below, write the entries a developer "
+    "would look for that the file answers. Each entry gives questions in two styles: a question (\"where is the "
+    "embedding computed?\") and a search phrase (\"function that computes the embedding\"). Word them as someone who "
+    "has not read the file would, and also with the file's own names. Cover what the file defines, decides, explains "
+    "and warns about. Each entry names the lines it rests on (the numbers shown) and gives a one-sentence answer "
+    "that names the identifiers. About one entry per 20 to 40 lines of substance; at most 30 per part.\n"
+    'Answer with only JSON: {"<part label>": [{"lo": N, "hi": N, "questions": ["...", "..."], "answer": "..."}]}\n\n')
+PART_CHARS = 60_000   # (invented) the most file text in one part, and in one call
+
+
+def parts_of(akey, body):
+    """(label, first line, numbered text) pieces of one file, each within PART_CHARS."""
+    lines = body.decode("utf-8", "replace").split("\n")
+    out, a = [], 0
+    while a < len(lines):
+        b, size = a, 0
+        while b < len(lines) and (b == a or size + len(lines[b]) + 8 <= PART_CHARS):
+            size += len(lines[b]) + 8
+            b += 1
+        label = akey if a == 0 and b == len(lines) else f"{akey} (lines {a + 1}-{b})"
+        out.append((label, "\n".join(f"{i + 1}: {lines[i]}" for i in range(a, b))))
+        a = b
+    return out
+
+
+def qa_body(path, entries, n_lines):
+    """The librarian's entries as text: one block per entry, a blank line between."""
+    blocks = []
+    for e in sorted(entries, key=lambda e: (e["lo"], e["hi"])):
+        qs = [" ".join(str(q).split()) for q in e.get("questions") or [] if str(q).strip()]
+        if not qs:
+            continue
+        lo, hi = max(1, int(e["lo"])), min(n_lines, int(e["hi"]))
+        blocks.append("\n".join([f"{path} lines {lo}-{hi}"] + [f"Q: {q}" for q in qs]
+                                + [f"A: {' '.join(str(e.get('answer', '')).split())}"]))
+    return "\n\n".join(blocks).encode()
+
+
+def cmd_librarian(store, repo, name, limit, cmd, skip=(), jobs=4):
+    """skip: file akeys the librarian must not read (an evaluation's own question file, with its held-out half)."""
+    model, principal = LIBRARIANS[name]
+    cmd = cmd or f"claude -p --model {model} --tools \"\" --no-session-persistence --output-format text"
+    todo = []
+    for r in text_heads(store, {b"file"}, repo):
+        if r.akey.decode("utf-8", "replace") in skip:
+            continue
+        key = b"qa/" + r.akey
+        head = store.head_id(key)
+        if head and r.id in (store.get(head).derived_from or []):
+            continue   # this version already has its entries
+        todo.append(r)
+    batches, cur, size = [], [], 0
+    for r in todo:
+        for label, text in parts_of(r.akey.decode(), r.body):
+            if cur and size + len(text) > PART_CHARS:
+                batches.append(cur)
+                cur, size = [], 0
+            cur.append((r, label, text))
+            size += len(text)
+    if cur:
+        batches.append(cur)
+    if limit is not None:
+        batches = batches[:limit]
+    got, calls, bad = {}, 0, 0
+
+    def ask(batch):   # the calls run in parallel; the store is written from this thread only, below
+        prompt = LIBRARIAN_PROMPT + "\n\n".join(f"=== {label} ===\n{text}" for _, label, text in batch)
+        try:
+            return batch, ask_judge(cmd, prompt)
+        except (vk.VkError, subprocess.TimeoutExpired) as e:
+            print(f"  a librarian call failed: {e}", file=sys.stderr)
+            return batch, ""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+        answers = list(pool.map(ask, batches))
+    for batch, answer in answers:
+        calls += 1
+        m = re.search(r"\{.*\}", answer, re.S)
+        try:
+            parsed = json.loads(m.group(0)) if m else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        for r, label, _ in batch:
+            entries = parsed.get(label)
+            if not isinstance(entries, list):
+                bad += 1
+                continue
+            ok = [e for e in entries if isinstance(e, dict) and isinstance(e.get("lo"), int)
+                  and isinstance(e.get("hi"), int) and e["lo"] <= e["hi"]]
+            got.setdefault(r.id, (r, []))[1].extend(ok)
+    written = 0
+    for r, entries in got.values():
+        body = qa_body(r.akey.decode(), entries, r.body.count(b"\n") + 1)
+        if not body:
+            continue
+        t = now_utc()
+        store.put(b"qa", b"qa/" + r.akey, body, ts=t.isoformat().encode(), rank=rank_of(t.timestamp()),
+                  reference=r.id.hex().encode(), derived_from=[r.id], chain=True)
+        written += 1
+    print(f"librarian {principal.decode()}: {written} files given entries, {calls} calls, {bad} parts unanswered, "
+          f"{len(todo)} files were due")
+    return 0
+
+
+def place(store, id_, node, cache):
+    """Where a hit points: (file akey, first line, last line), lines None for a whole file. A librarian's entry
+    points at the lines it names in its file."""
+    r = cache.get(id_) or cache.setdefault(id_, store.get(id_))
+    if r is None:
+        return None
+    if r.kind == b"qa":
+        span = node[1:3] if node else (0, len(r.body))
+        head = r.body[span[0]:span[1]].split(b"\n", 1)[0].decode("utf-8", "replace")
+        m = re.match(r"(.*) lines (\d+)-(\d+)$", head)
+        return (m.group(1), int(m.group(2)), int(m.group(3))) if m and node else (r.akey[3:].decode(), None, None)
+    if r.kind != b"file" or not store.standing(r.akey, r.id)[0]:
+        return None   # only current files are answers here
+    if node and node[0] is None:
+        lo, hi = node[1], node[2]
+        return (r.akey.decode(), r.body.count(b"\n", 0, lo) + 1, r.body.count(b"\n", 0, max(lo, hi - 1)) + 1)
+    return (r.akey.decode(), None, None)
+
+
+def ranked(store, emb, text, method, cache, with_qa=True):
+    """The places one method returns for text, best first, one per file (its best place). with_qa False
+    leaves the librarian's entries out, as if there were none. None if the method is blind (Q-2)."""
+    if method == "bm25":
+        hits, _ = store.bm25(text.encode())
+    else:
+        hits, _ = store.vector(emb.embed(text))
+    if hits is None:
+        return None
+    out, seen = [], set()
+    for id_, node in hits or []:
+        if not with_qa:
+            r = cache.get(id_) or cache.setdefault(id_, store.get(id_))
+            if r is not None and r.kind == b"qa":
+                continue
+        p = place(store, id_, node, cache)
+        if p and p[0] not in seen:
+            seen.add(p[0])
+            out.append(p)
+    return out
+
+
+def fuse(lists, k=60):
+    """Reciprocal-rank fusion by file, as src/ fused its legs (k=60)."""
+    score, best = {}, {}
+    for lst in lists:
+        for rank, p in enumerate(lst, 1):
+            score[p[0]] = score.get(p[0], 0) + 1 / (k + rank)
+            best.setdefault(p[0], p)
+    return [best[f] for f in sorted(score, key=lambda f: -score[f])]
+
+
+def cmd_ask(store, text, k):
+    import vkembed
+    emb = vkembed.Embedder(MODEL_DIR)
+    store.use_vectors(vector_model(emb))
+    cache = {}
+    legs = {m: ranked(store, emb, text, m, cache) for m in ("bm25", "vector")}
+    blind = [m for m, lst in legs.items() if lst is None]
+    for i, (f, a, b) in enumerate(fuse([lst for lst in legs.values() if lst])[:k], 1):
+        print(f"[{i}] {f}" + (f"  lines {a}-{b}" if a else ""))
+    print("legs: " + ", ".join(f"{m} {len(lst)} files" for m, lst in legs.items() if lst is not None)
+          + (f"; blind: {', '.join(blind)} (vector: run embed)" if blind else ""))
+    return 0 if any(legs.values()) else (3 if blind else 1)
+
+
 def cmd_coverage(store):
     seen = ingested(store)
     if not seen:
@@ -753,6 +1002,19 @@ def main(argv):
     fc.add_argument("session")
     fc.add_argument("--from", dest="frm", type=int)
     fc.add_argument("--to", type=int)
+    em = sub.add_parser("embed", help="vectors of current text bodies (Q-6), with the host's pinned model")
+    em.add_argument("--repo")
+    em.add_argument("--kinds", default="file,qa")
+    lb = sub.add_parser("librarian", help="a model writes questions and answers about each current file")
+    lb.add_argument("--repo")
+    lb.add_argument("--model", choices=sorted(LIBRARIANS), default="haiku")
+    lb.add_argument("--limit", type=int, help="at most this many calls this run")
+    lb.add_argument("--judge-cmd", help="the command that answers a prompt on stdin (default: the claude CLI)")
+    lb.add_argument("--skip", action="append", default=[], metavar="AKEY", help="a file the librarian must not read")
+    lb.add_argument("--jobs", type=int, default=4, help="calls in parallel")
+    ak = sub.add_parser("ask", help="bm25 and vector, fused by file")
+    ak.add_argument("text")
+    ak.add_argument("--k", type=int, default=10)
     sub.add_parser("coverage")
     h = sub.add_parser("heads")
     h.add_argument("name")
@@ -773,6 +1035,10 @@ def main(argv):
         if args.cmd in ("ingest-transcript", "forget-chat"):
             store = vk.Store(args.store, CHAT, CHAT_RIGHTS, key=key,
                              others=[(PRINCIPAL, RIGHTS)] + [g for g in GRANTS if g[0] != CHAT])
+        elif args.cmd == "librarian":
+            lib = LIBRARIANS[args.model][1]
+            store = vk.Store(args.store, lib, RIGHTS, key=key,
+                             others=[(PRINCIPAL, RIGHTS)] + [g for g in GRANTS if g[0] != lib])
         elif args.cmd == "outline":   # the judge writes as itself; the ingester and the judges are entitled
             judge = JUDGES[args.judge][1]
             others = [(PRINCIPAL, RIGHTS)] + [g for g in GRANTS if g[0] != judge]
@@ -796,6 +1062,12 @@ def main(argv):
             return cmd_search(store, args.text, args.repo, args.cmd, args.all, args.k)
         if args.cmd == "coverage":
             return cmd_coverage(store)
+        if args.cmd == "embed":
+            return cmd_embed(store, args.repo, {k.encode() for k in args.kinds.split(",")})
+        if args.cmd == "librarian":
+            return cmd_librarian(store, args.repo, args.model, args.limit, args.judge_cmd, args.skip, args.jobs)
+        if args.cmd == "ask":
+            return cmd_ask(store, args.text, args.k)
         if args.cmd == "outline":
             return cmd_outline(store, args.repo, args.judge, args.history, args.limit, args.judge_cmd)
         if args.cmd == "ingest-transcript":
@@ -813,7 +1085,7 @@ def main(argv):
         if args.cmd == "forget-chat":
             return cmd_forget_chat(store, args.session, args.frm, args.to)
         return cmd_heads(store, args.name)
-    except (vk.VkError, subprocess.CalledProcessError) as e:
+    except (vk.VkError, subprocess.CalledProcessError, ValueError) as e:   # ValueError: a model that fails its pin
         print(f"vk: {e}", file=sys.stderr)
         return 2
     finally:

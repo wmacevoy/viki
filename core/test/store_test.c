@@ -1245,6 +1245,74 @@ static int64_t line_at(const char *zDoc, int line){
     return z ? (int64_t)(z - zDoc) : -1;
 }
 static int find_hit(Hit *a, int n, const VkId id){ int i; for(i=0;i<n;i++) if( id_eq(a[i].id,id) ) return i; return -1; }
+/* Q-6 vector: the query is raw float32 bytes, so it has its own helper. */
+static int vec_hits(Peer p, const float *q, int dim, Hit *a, int nMax, int *bRange, VkCoverage *cov, VkStatus *pSt){
+    VkSearch s; VkId id; VkHit h; VkBytes qb; int n = 0;
+    qb.p = (const uint8_t*)q; qb.n = (uint32_t)(dim*4);
+    *pSt = vk_search_open(p.st,&vkVector,qb,&s);
+    if( *pSt!=VK_OK ){ vk_search_close(&s); return -1; }
+    while( vk_search_next(&s,id)==VK_OK ){
+        if( n<nMax ){
+            memset(&a[n],0,sizeof a[n]);
+            memcpy(a[n].id,id,32);
+            CHECK( vk_search_hit(&s,&h)==VK_OK );
+            a[n].bNode = h.bNode; a[n].lo = h.lo; a[n].hi = h.hi; bRange[n] = h.bRange;
+        }
+        n++;
+    }
+    if( cov ) vk_search_coverage(&s,cov);
+    vk_search_close(&s);
+    return n;
+}
+static void t_q6_vector(void){
+    Peer p = peer("alice"), q = peer("alice");
+    VkId ia, ib, ic, t; VkAssertion a; Hit h[8]; int br[8], n; VkCoverage cov; VkStatus st; VkMergeReport rep;
+    static const float va[3] = {1,0,0}, vb[3] = {0,1,0}, vc[3] = {9,1,0}, q1[3] = {1,0,0}, q2[2] = {1,0};
+    static const float big[3] = {2,0,0};   /* any scale: ranked by cosine */
+    a = mk("alice","a",1,"horses at the trough"); CHECK( vk_put(p.st,&a,ia)==VK_OK );
+    a = mk("alice","b",1,"the tax filing deadline"); CHECK( vk_put(p.st,&a,ib)==VK_OK );
+    a = mk("alice","c",1,"horses at the watering hole"); a.log = B("chat");
+    CHECK( vk_append(p.st,&a,ic)==VK_OK );                                   /* a logged row has vectors too */
+
+    CHECK( vec_hits(p,q1,3,h,8,br,0,&st)==-1 && st==VK_BLIND );              /* no model chosen */
+    vk_use_vectors(p.st,B("m1"));
+    CHECK( vec_hits(p,q1,3,h,8,br,0,&st)==-1 && st==VK_BLIND );              /* none held under it */
+
+    CHECK( vk_vector_put(p.st,ia,B("m1"),0,20,big,3)==VK_OK );
+    CHECK( vk_vector_put(p.st,ia,B("m1"),0,20,va,3)==VK_OK );                /* the same span: replaced */
+    CHECK( vk_vector_put(p.st,ib,B("m1"),4,7,vb,3)==VK_OK );
+    CHECK( vk_vector_put(p.st,ic,B("m1"),0,6,vc,3)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==3 );
+    CHECK( vk_vector_put(p.st,ia,B("m1"),0,20,q2,2)==VK_EINVAL );            /* one model, one dimension */
+    CHECK( vk_vector_put(p.st,ia,B("m1"),5,5,va,3)==VK_EINVAL );             /* an empty span */
+    CHECK( vk_vector_put(p.st,ia,B("m1"),0,21,va,3)==VK_EINVAL );            /* past the body */
+    CHECK( vk_vector_put(p.st,ia,B(""),0,20,va,3)==VK_EINVAL );
+    CHECK( vk_vector_put(p.st,ia,B("m1"),0,20,va,0)==VK_EINVAL );
+    memset(t,7,sizeof t);
+    CHECK( vk_vector_put(p.st,t,B("m1"),0,1,va,3)==VK_NOTFOUND );
+
+    n = vec_hits(p,q1,3,h,8,br,&cov,&st);
+    CHECK( n==3 && id_eq(h[0].id,ia) && id_eq(h[1].id,ic) && id_eq(h[2].id,ib) );   /* nearest first */
+    CHECK( br[2]==1 && h[2].bNode==0 && h[2].lo==4 && h[2].hi==7 );          /* the span that matched */
+    CHECK( cov.nSearched==3 && cov.nWhole==0 && !cov.bExhaustive && strcmp(cov.zMethod,"vector")==0 );
+    CHECK( vec_hits(p,q2,2,h,8,br,0,&st)==-1 && st==VK_EINVAL );             /* the query's dimension */
+    vk_use_vectors(p.st,B("m2"));
+    CHECK( vec_hits(p,q1,3,h,8,br,0,&st)==-1 && st==VK_BLIND );              /* another model's vectors are not these */
+    vk_use_vectors(p.st,B("m1"));
+
+    memset(&rep,0,sizeof rep);
+    CHECK( vk_merge(q.st,p.st,&rep)==VK_OK && rep.added==3 );
+    CHECK( rows(q,"SELECT count(*) FROM vk_vec")==0 );                       /* a projection: not merged (M-5) */
+
+    CHECK( vk_erase(p.st,ia,B("t"),gRank0,t)==VK_OK );
+    n = vec_hits(p,q1,3,h,8,br,0,&st);
+    CHECK( n==2 && id_eq(h[0].id,ic) );                                      /* erased: its vector went (W-3) */
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==2 );
+    CHECK( vk_vector_put(p.st,ia,B("m1"),0,1,va,3)==VK_NOTFOUND );           /* and none can be made of it */
+    CHECK( vk_forget(p.st,B("chat"),B("alice"),1,1,B("t"),gRank0,t)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==1 );                       /* forgotten: gone with the row */
+    drop(p); drop(q);
+}
 static void t_ol4(void){
     Peer p = peer("alice"), q = peer("alice");
     char buf[4000], json[600], other[200];
@@ -1544,6 +1612,7 @@ static const Test aTest[] = {
     {"DS-4","erasing a middle version or a head loses only that version",t_ds4},
     {"ENV-4","the SQLite underneath is SQLCipher, 3.44 or later, with FTS5",t_env4},
     {"Q-6","bm25 is ranked, OR'd, quoted, and blind until indexed",t_q6_bm25},
+    {"Q-6","vector ranks by cosine under one model, blind without one, and goes with its body",t_q6_vector},
     {"Q-5","erased and forgotten content leaves the bm25 index",t_q5_bm25},
     {"ENV-2","merge memory does not grow with the store",t_env2},
     {"-","every sqlite call fails in turn; retry reaches the same store",t_fault_sql},

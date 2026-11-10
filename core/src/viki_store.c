@@ -18,6 +18,7 @@ struct VkStore {
     sqlite3_stmt *pBegin, *pCommit, *pUndo, *pEnd;
     sqlite3_stmt *pBody;   /* one stored row's body and delta base, for vk_body */
     VkBytes outlines;      /* OL-4: whose outlines searches use; empty is none */
+    VkBytes vectors;       /* Q-6: which model the vector method uses; empty is none */
 };
 
 /* DS: when a superseded body is stored as a delta. invented, until measured. */
@@ -57,6 +58,8 @@ int vk_sqlite_code(const VkStore *p){ return p->rcSql; }
 sqlite3 *vk_store_db(VkStore *p){ return p->db; }
 VkBytes vk_outline_author(const VkStore *p){ return p->outlines; }
 void vk_use_outlines(VkStore *p, VkBytes author){ p->outlines = author; }
+VkBytes vk_vector_model(const VkStore *p){ return p->vectors; }
+void vk_use_vectors(VkStore *p, VkBytes model){ p->vectors = model; }
 
 void vk_bind_bytes(sqlite3_stmt *pSt, int i, VkBytes b){
     /* A NULL pointer would bind SQL NULL, not an empty value. */
@@ -325,7 +328,17 @@ static const char zSchema[] =
     "CREATE INDEX IF NOT EXISTS vk_onode_target ON vk_onode(target, author, depth);"
     "CREATE INDEX IF NOT EXISTS vk_onode_akey ON vk_onode(akey);"
     "CREATE TABLE IF NOT EXISTS vk_oseg(node INTEGER NOT NULL, lo INTEGER NOT NULL, hi INTEGER NOT NULL);"
-    "CREATE INDEX IF NOT EXISTS vk_oseg_node ON vk_oseg(node, lo);";
+    "CREATE INDEX IF NOT EXISTS vk_oseg_node ON vk_oseg(node, lo);"
+    /* Q-6, a projection: vectors the host made of spans of bodies, keyed by the
+    ** row's local seq (a logged row has no id index). They go with the body:
+    ** an embedding of erased text would be a copy of it (W-3). */
+    "CREATE TABLE IF NOT EXISTS vk_vec(model BLOB NOT NULL, seq INTEGER NOT NULL, lo INTEGER NOT NULL,"
+    " hi INTEGER NOT NULL, v BLOB NOT NULL, PRIMARY KEY(model, seq, lo, hi)) WITHOUT ROWID;"
+    "CREATE INDEX IF NOT EXISTS vk_vec_seq ON vk_vec(seq);"
+    "CREATE TRIGGER IF NOT EXISTS vk_vec_au AFTER UPDATE OF body ON assertion WHEN new.body IS NULL"
+    " BEGIN DELETE FROM vk_vec WHERE seq=old.seq; END;"
+    "CREATE TRIGGER IF NOT EXISTS vk_vec_ad AFTER DELETE ON assertion"
+    " BEGIN DELETE FROM vk_vec WHERE seq=old.seq; END;";
 
 static int exec_schema(VkStore *p){
     const char *zSql = zSchema;
@@ -355,6 +368,7 @@ int vk_close(VkStore *p){
     sqlite3_finalize(p->pUndo);
     sqlite3_finalize(p->pEnd);
     sqlite3_create_function(p->db, "vk_rights", 1, SQLITE_UTF8, 0, 0, 0, 0);
+    sqlite3_create_function(p->db, "vk_cosine", 2, SQLITE_UTF8, 0, 0, 0, 0);
     sqlite3_free(p);
     return SQLITE_OK;
 }
@@ -683,6 +697,8 @@ VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
     p->grants = grants; p->nGrants = nGrants;
     rc = sqlite3_create_function(db, "vk_rights", 1, SQLITE_UTF8, p, rights_func, 0, 0);
     if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_body", 2, SQLITE_UTF8, p, body_func, 0, 0);
+    if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_cosine", 2, SQLITE_UTF8|SQLITE_DETERMINISTIC, 0,
+                                                     vk_cosine_func, 0, 0);
     if( rc==SQLITE_OK ) rc = exec_schema(p);
     if( rc==SQLITE_OK ) rc = ensure_dbase(p);
     if( rc==SQLITE_OK ) rc = vk_prepare(p, "SELECT body, dbase FROM assertion WHERE seq=?1", &p->pBody);
@@ -876,6 +892,32 @@ static int forget_body(VkStore *p, sqlite3_int64 seq){
     }
     sqlite3_finalize(pSt);
     return (rc==SQLITE_ROW || rc==SQLITE_DONE) ? SQLITE_OK : rc;
+}
+
+/* A held row with a body, by id: its seq and body length. 1 found, 0 not, or
+** an SQLite error code below 0. */
+int vk_has_held_body(VkStore *p, const uint8_t *id, sqlite3_int64 *pSeq, sqlite3_int64 *pLen){
+    static const char *azFind[2] = {
+        "SELECT seq, length(" VK_BODY("") ") FROM assertion WHERE id=?1 AND log=x'' AND body IS NOT NULL",
+        "SELECT seq, length(" VK_BODY("") ") FROM assertion INDEXED BY assertion_log"
+        " WHERE log<>x'' AND id=?1 AND body IS NOT NULL"
+    };
+    int i, rc;
+    for(i=0; i<2; i++){
+        sqlite3_stmt *pSt = 0;
+        rc = vk_prepare(p, azFind[i], &pSt);
+        if( rc!=SQLITE_OK ) return -rc;
+        sqlite3_bind_blob(pSt, 1, id, VK_ID_BYTES, SQLITE_STATIC);
+        rc = vk_step(pSt);
+        if( rc==SQLITE_ROW ){
+            *pSeq = sqlite3_column_int64(pSt, 0);
+            *pLen = sqlite3_column_int64(pSt, 1);
+        }
+        sqlite3_finalize(pSt);
+        if( rc==SQLITE_ROW ) return 1;
+        if( rc!=SQLITE_DONE ) return -rc;
+    }
+    return 0;
 }
 
 /* W-3 for a target known only by id. */

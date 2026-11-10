@@ -41,7 +41,7 @@ cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror \
    -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer \
    -DVK_TEST_FAULTS -D_POSIX_C_SOURCE=200809L \
    -I"$ROOT/core/include" -I"$ROOT/core/src" \
-   "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" \
+   "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" "$ROOT/core/src/viki_vector.c" \
    "$ROOT/core/src/sha256.c" "$ROOT/core/test/store_test.c" \
    $SQLITE -o "$OUT/store_test"
 rc=0
@@ -52,7 +52,7 @@ rc=0
 # the library, so Python reaches it through the same handle.
 cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror -shared -fPIC \
    -I"$ROOT/core/include" -I"$ROOT/core/src" \
-   "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" \
+   "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" "$ROOT/core/src/viki_vector.c" \
    "$ROOT/core/src/sha256.c" $SQLITE -o "$OUT/libviki_store.so"
 VIKI_STORE_LIB="$OUT/libviki_store.so" python3 "$ROOT/core/test/test_store.py" \
    | tee -a "$OUT/results.txt" || rc=$?

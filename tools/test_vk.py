@@ -367,6 +367,78 @@ def t_ol_cmd(s):
     check(rc == 0 and "1 judge calls" in out and "1 left for a later run" in out, "--limit stops and says so", out)
 
 
+FAKE_LIBRARIAN = r"""
+import json, os, re, sys
+prompt = sys.stdin.read()
+labels = re.findall(r"^=== (.+) ===$", prompt, re.M)
+with open(os.environ["VK_FAKE_LOG"], "a") as f:
+    f.write("\n".join(labels) + "\n")
+print(json.dumps({l: [{"lo": 1, "hi": 2, "questions": ["where is the marker defined?", "marker definition"],
+                       "answer": "the first lines"}] for l in labels}))
+"""
+
+
+def t_librarian(s):
+    lib = os.path.join(s.root, "librarian.py")
+    with open(lib, "w") as f:
+        f.write(FAKE_LIBRARIAN)
+    log = os.path.join(s.root, "librarian.log")
+    os.environ["VK_FAKE_LOG"] = log
+    cmd = f"{sys.executable} {lib}"
+    a = s.repo("alpha")
+    s.write(a, "notes.md", "# Notes\nthe marker is here\nmore\n")
+    s.write(a, "code.py", "def marker():\n    return 1\n")
+    s.write(a, "questions.tsv", "held out: never to be read\n")
+    s.commit(a, "one")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
+    check(rc == 0 and "2 files given entries" in out and "1 calls" in out, "each current file gets entries", out)
+    with open(log) as f:
+        sent = f.read()
+    check("alpha/notes.md" in sent and "questions.tsv" not in sent, "a skipped file is never sent", sent)
+    rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
+    check(rc == 0 and "0 files were due" in out and "0 calls" in out, "a second run asks nothing", out)
+    s.write(a, "notes.md", "# Notes\nthe marker moved\nmore\n")
+    s.commit(a, "two")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
+    check(rc == 0 and "1 files were due" in out, "only the changed file is asked about again", out)
+    rc, out = s.vk("grep", "Q: where is the marker defined?")
+    check(rc == 0 and "qa" in out, "the entries are in the diary, in question form", out)
+
+
+MODEL_DIR = os.environ.get("VIKI_MODEL_DIR", "/opt/viki-bin/model")
+
+
+def t_vector(s):
+    if not os.path.isfile(os.path.join(MODEL_DIR, "model.onnx")):
+        check(False, f"no pinned model at {MODEL_DIR} (set VIKI_MODEL_DIR): not run, and not a pass")
+        return
+    a = s.repo("alpha")
+    s.write(a, "pasture.md", "Six horses were grazing near the water trough at dawn.\n")
+    s.write(a, "taxes.md", "The quarterly tax filing deadline is in April.\n")
+    s.commit(a, "one")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("ask", "animals drinking")
+    check(rc == 3 and "blind: vector" in out and "bm25 0 files" in out,
+          "before embed, the vector leg is blind and says so, apart from bm25 finding nothing", out)
+    rc, out = s.vk("embed")
+    check(rc == 0 and "2 vectors of 2 bodies" in out, "each current text body is embedded", out)
+    rc, out = s.vk("ask", "animals drinking")
+    check(rc == 0 and out.startswith("[1] alpha/pasture.md") and "bm25 0 files" in out,
+          "a query sharing no word with the file finds it by vector", out)
+    bad = os.path.join(s.root, "badmodel")
+    os.makedirs(bad)
+    for f in ("model.onnx", "viki-manifest.json"):
+        os.symlink(os.path.join(MODEL_DIR, f), os.path.join(bad, f))
+    with open(os.path.join(bad, "vocab.txt"), "w") as f:
+        f.write("[PAD]\n")
+    env = dict(os.environ, VIKI_MODEL_DIR=bad)
+    r = subprocess.run(VK + ["--store", s.store, "--plaintext", "embed"], capture_output=True, text=True, env=env)
+    check(r.returncode == 2 and "does not match viki-manifest.json" in r.stderr, "a model that fails its pin is refused",
+          r.stdout + r.stderr)
+
+
 def transcript_lines(session, n0, n):
     """n Claude Code transcript records from number n0: user, assistant (with a thinking block that
     has only a signature, text and a tool call), and the tool's result. And noise between them."""
@@ -464,7 +536,9 @@ def main():
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
     run("OL-3", "vk.py outline asks a judge, carries outlines forward, and writes each once", t_ol_cmd)
     run("SCM-7", "a transcript goes in as a log, once, and a range of it can be forgotten", t_scm7)
-    print(f"{failed} of 11 failed")
+    run("Q-6", "vk.py embed and ask: a query in other words finds the file by vector", t_vector)
+    run("LIB-1", "vk.py librarian writes entries per current file, skips what it is told, asks once", t_librarian)
+    print(f"{failed} of 13 failed")
     return failed != 0
 
 

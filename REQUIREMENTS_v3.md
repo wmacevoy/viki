@@ -291,6 +291,23 @@ did (DS).
   and nothing is withheld until an outline exists. A peer with no judge, such as the puck (ENV-1),
   stores, merges and searches every assertion, whole where no outline is held.
 
+## LIB — The librarian (new series, drafted 2026-11-10, not yet read back)
+
+Warren, 2026-11-10: "sonnet as librarian. access to a viki database, a goal of concept mapping and outlining with
+summaries, and a preference to leave old maps around with changes so they can be tracked. open to use of
+sub-models"; then "add a vector embedding first ... have the librarian write in question/answer styles: function
+defining embedding ... and where is embedding defined? to improve query retrieval."
+
+- **LIB-1** *(drafted 2026-11-10)* **A librarian writes, for each current text file, entries a reader would
+  look for:** each has questions in two styles, a question and a search phrase, the lines it rests on, and a
+  one-sentence answer. They are ordinary assertions by the librarian's own principal, derived from the version
+  they describe. A newer set supersedes the older, which stays readable, so changes can be tracked (SHAPE-2). A
+  version already described is not asked about again. A file it is told to skip is never sent to the model.
+  Search finds an entry and returns the file and lines it names.
+- **LIB-2** *(drafted 2026-11-10, not built)* **Concept maps:** concepts with summaries, where each is mentioned,
+  and how they relate, kept by supersession, the old maps readable. The word "concept" and "map" enter the
+  vocabulary with this requirement.
+
 ## DS — How versions are stored (new series)
 
 **Status: confirmed and built**, 2026-11-10: *"commit, then build the DS storage, you might cap when
@@ -463,7 +480,13 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   model call.
 - **DS-1 to DS-4** (new in v3, built 2026-11-10): `core/src/viki_delta.c` and `vk_body`, tested in
   `store_test.c` and in the fault script.
-- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep and bm25, not yet for regex; ENV-2 is measured for
+- **Q-6 vector** (built 2026-11-10): `core/src/viki_vector.c`. Core embeds nothing: the host hands it float32
+  vectors of byte spans, under a model it names by the model's bytes and the chunking. Core ranks by cosine,
+  reports blind with no model chosen or no vectors under it, deletes a body's vectors when it is erased or
+  forgotten, and merges none. The host's embedder is `src/`'s, built by `tools/build-embed.sh` against the pinned
+  ONNX Runtime and MiniLM, which run on x86 too (the selftest's cosines reproduce exactly).
+- **LIB-1** (drafted and built 2026-11-10): `vk.py librarian`, tested with a fake model.
+- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, bm25 and vector, not yet for regex; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.
 
