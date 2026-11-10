@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """vk.py -- a host over viki_store.h for a sprawled project (REQ3/SCM, DOGFOOD_v3.md).
 
+  vk.py keygen KEYFILE
+  vk.py --store DIARY --keyfile KEYFILE ingest-git REPO_DIR [--name NAME]
+  (every command takes --keyfile KEYFILE, or --plaintext to say an unencrypted
+  diary was meant; one of the two is required)
   vk.py --store DIARY --plaintext ingest-git REPO_DIR [--name NAME]
   vk.py --store DIARY --plaintext grep TEXT [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext find WORDS [--repo NAME] [--all] [--k N]
@@ -68,6 +72,48 @@ class Blobs:
     def close(self):
         self.p.stdin.close()
         self.p.wait()
+
+
+# ---- the key (N-7) ----
+
+class KeyError_(Exception):
+    pass
+
+
+def read_keyfile(path):
+    """The diary key as SQLCipher's raw form, x'<64 hex>', in a bytearray the
+    store zeroes once applied. Refused, the way ssh refuses a private key,
+    when anyone but the owner can read or write the file. Only a raw key is
+    taken: the database key is full-entropy and gets no KDF (N-7), and a
+    password is a different input on a different path (N-8, not built)."""
+    try:
+        st = os.stat(path)
+    except OSError as e:
+        raise KeyError_(f"cannot read {path}: {e.strerror}")
+    if st.st_mode & 0o077:
+        raise KeyError_(f"{path} is group/world accessible (mode {st.st_mode & 0o7777:04o}): refusing. chmod 600 {path}")
+    with open(path, "rb") as f:
+        raw = bytearray(f.read(1024))
+    while raw and raw[-1:] in (b"\n", b"\r"):
+        del raw[-1]
+    ok = len(raw) == 64 and all(c in b"0123456789abcdefABCDEF" for c in raw)
+    if not ok:
+        raw[:] = bytes(len(raw))
+        raise KeyError_(f"{path} does not hold a raw key (64 hex characters). A passphrase is not a "
+                        "database key (N-7, N-8); make one with: vk.py keygen PATH")
+    key = bytearray(b"x'") + raw + bytearray(b"'")
+    raw[:] = bytes(len(raw))
+    return key
+
+
+def keygen(path):
+    """A new full-entropy key, in a file created mode 600, never readable by others for a moment."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise KeyError_(f"{path} exists: refusing to overwrite a key")
+    with os.fdopen(fd, "w") as f:
+        f.write(os.urandom(32).hex() + "\n")
 
 
 # ---- which paths go in (pure) ----
@@ -342,10 +388,13 @@ def cmd_heads(store, name):
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="vk.py", description=__doc__.split("\n")[0])
-    ap.add_argument("--store", required=True)
+    ap.add_argument("--store")
+    ap.add_argument("--keyfile", help="the diary's raw key (mode 600); make one with keygen")
     ap.add_argument("--plaintext", action="store_true",
-                    help="required: this host sets no key yet, and a default nobody chose is refused")
+                    help="say an UNENCRYPTED diary was meant: a default nobody chose is refused")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    kg = sub.add_parser("keygen", help="write a new raw key to a new file, mode 600")
+    kg.add_argument("path")
     g = sub.add_parser("ingest-git")
     g.add_argument("dir")
     g.add_argument("--name")
@@ -359,10 +408,23 @@ def main(argv):
     h = sub.add_parser("heads")
     h.add_argument("name")
     args = ap.parse_args(argv)
-    if not args.plaintext:
-        print("vk: refusing to open an unencrypted diary without --plaintext", file=sys.stderr)
+    try:
+        if args.cmd == "keygen":
+            keygen(args.path)
+            print(f"wrote a new key to {args.path} (mode 600)")
+            return 0
+        if not args.store:
+            raise KeyError_("--store DIARY is required")
+        if args.keyfile and args.plaintext:
+            raise KeyError_("--keyfile and --plaintext contradict each other")
+        if not args.keyfile and not args.plaintext:
+            raise KeyError_(f"refusing to open {args.store} without a key: --keyfile PATH, "
+                            "or --plaintext to say an unencrypted diary was meant")
+        key = read_keyfile(args.keyfile) if args.keyfile else None
+        store = vk.Store(args.store, PRINCIPAL, RIGHTS, key=key)
+    except (KeyError_, vk.VkError) as e:
+        print(f"vk: {e}", file=sys.stderr)
         return 2
-    store = vk.Store(args.store, PRINCIPAL, RIGHTS)
     try:
         if args.cmd == "ingest-git":
             name = args.name or os.path.basename(os.path.abspath(args.dir))

@@ -1,0 +1,93 @@
+[
+ {"title":"File header and includes","start":1,"end":27,"children":[
+  {"title":"Header comment","start":1,"end":10,"children":[]},
+  {"title":"Includes","start":11,"end":25,"children":[]},
+  {"title":"Version macro","start":27,"end":27,"children":[]}
+ ]},
+ {"title":"usage()","start":29,"end":136,"children":[
+  {"title":"Usage header","start":30,"end":31,"children":[]},
+  {"title":"index and ask docs","start":32,"end":60,"children":[
+   {"title":"sql docs","start":41,"end":45,"children":[]},
+   {"title":"coverage docs","start":46,"end":48,"children":[]},
+   {"title":"promises and why docs","start":49,"end":53,"children":[]}
+  ]},
+  {"title":"cache push/pull docs","start":61,"end":70,"children":[]},
+  {"title":"muse docs","start":71,"end":83,"children":[]},
+  {"title":"grep docs","start":84,"end":93,"children":[]},
+  {"title":"capture docs","start":94,"end":99,"children":[]},
+  {"title":"structure docs","start":100,"end":110,"children":[]},
+  {"title":"notes docs","start":111,"end":120,"children":[]},
+  {"title":"serve, version, help docs","start":121,"end":127,"children":[]},
+  {"title":"Cache db and model directory notes","start":128,"end":135,"children":[]}
+ ]},
+ {"title":"Helpers","start":138,"end":170,"children":[
+  {"title":"open_embedder_if_available()","start":138,"end":153,"children":[]},
+  {"title":"ensure_viki_dir()","start":155,"end":170,"children":[]}
+ ]},
+ {"title":"main()","start":172,"end":614,"children":[
+  {"title":"Setup and early exits","start":173,"end":196,"children":[
+   {"title":"Shutdown hook registration","start":176,"end":182,"children":[]},
+   {"title":"Argument check","start":184,"end":185,"children":[]},
+   {"title":"version and help","start":187,"end":194,"children":[]},
+   {"title":"ndvss registration","start":196,"end":196,"children":[]}
+  ]},
+  {"title":"index subcommand","start":198,"end":218,"children":[
+   {"title":"Parse --since","start":201,"end":209,"children":[]},
+   {"title":"Open cache and embedder","start":210,"end":213,"children":[]},
+   {"title":"Run index and clean up","start":214,"end":217,"children":[]}
+  ]},
+  {"title":"ask subcommand","start":220,"end":258,"children":[
+   {"title":"Option parsing","start":223,"end":232,"children":[]},
+   {"title":"Verse (all-project) ask","start":233,"end":250,"children":[]},
+   {"title":"Open and run","start":251,"end":257,"children":[]}
+  ]},
+  {"title":"capture subcommand","start":260,"end":275,"children":[
+   {"title":"Option parsing","start":261,"end":271,"children":[]},
+   {"title":"Offline capture call","start":272,"end":274,"children":[]}
+  ]},
+  {"title":"structure subcommand","start":277,"end":315,"children":[
+   {"title":"Option parsing","start":279,"end":300,"children":[]},
+   {"title":"Usage validation","start":301,"end":306,"children":[]},
+   {"title":"Open db and dispatch","start":307,"end":314,"children":[]}
+  ]},
+  {"title":"promises subcommand","start":317,"end":333,"children":[]},
+  {"title":"sql subcommand","start":335,"end":346,"children":[]},
+  {"title":"coverage subcommand","start":348,"end":357,"children":[]},
+  {"title":"why subcommand","start":359,"end":367,"children":[]},
+  {"title":"notes subcommand","start":369,"end":409,"children":[
+   {"title":"Option parsing","start":371,"end":392,"children":[]},
+   {"title":"Open db","start":393,"end":394,"children":[]},
+   {"title":"Filter struct and query","start":395,"end":406,"children":[]},
+   {"title":"Close","start":407,"end":408,"children":[]}
+  ]},
+  {"title":"grep subcommand","start":411,"end":440,"children":[
+   {"title":"Option parsing","start":415,"end":429,"children":[]},
+   {"title":"Open db and register regexp","start":430,"end":436,"children":[]},
+   {"title":"Run grep","start":437,"end":439,"children":[]}
+  ]},
+  {"title":"muse subcommand","start":442,"end":496,"children":[
+   {"title":"Option parsing","start":451,"end":490,"children":[
+    {"title":"Simple options","start":456,"end":460,"children":[]},
+    {"title":"--bias","start":461,"end":468,"children":[]},
+    {"title":"--same-source","start":469,"end":469,"children":[]},
+    {"title":"--from seed parsing","start":470,"end":485,"children":[]},
+    {"title":"Unknown option error","start":486,"end":489,"children":[]}
+   ]},
+   {"title":"Open db and run","start":491,"end":495,"children":[]}
+  ]},
+  {"title":"serve subcommand","start":498,"end":516,"children":[]},
+  {"title":"cache subcommand","start":518,"end":537,"children":[
+   {"title":"Flag vs path parsing","start":519,"end":531,"children":[]},
+   {"title":"Dispatch push/pull","start":532,"end":536,"children":[]}
+  ]},
+  {"title":"fossilsee-status debug command","start":539,"end":548,"children":[]},
+  {"title":"ndvss-selftest debug command","start":550,"end":569,"children":[]},
+  {"title":"embed-selftest debug command","start":571,"end":609,"children":[
+   {"title":"Open model","start":579,"end":588,"children":[]},
+   {"title":"Embed test sentences","start":590,"end":596,"children":[]},
+   {"title":"Compute and report cosines","start":598,"end":601,"children":[]},
+   {"title":"Pass/fail verdict","start":603,"end":608,"children":[]}
+  ]},
+  {"title":"Unknown subcommand fallback","start":611,"end":613,"children":[]}
+ ]}
+]

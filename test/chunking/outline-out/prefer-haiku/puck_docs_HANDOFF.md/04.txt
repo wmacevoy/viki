@@ -1,0 +1,65 @@
+```json
+[
+ {"title": "If you are an agent: read this first", "start": 5, "end": 17, "children": []},
+ {"title": "Rules", "start": 19, "end": 35, "children": []},
+ {"title": "Where things stand", "start": 37, "end": 47, "children": []},
+ {"title": "Repository layout", "start": 49, "end": 59, "children": []},
+ {
+  "title": "Work queue",
+  "start": 61,
+  "end": 107,
+  "children": [
+   {"title": "Queue table", "start": 66, "end": 89, "children": []},
+   {"title": "R1 as done, and what is left of it", "start": 91, "end": 107, "children": []}
+  ]
+ },
+ {"title": "Environment (pinned)", "start": 109, "end": 119, "children": []},
+ {"title": "Tests", "start": 121, "end": 140, "children": []},
+ {
+  "title": "Hardware",
+  "start": 142,
+  "end": 170,
+  "children": [
+   {"title": "Flashing and boot", "start": 144, "end": 151, "children": []},
+   {"title": "Safety rules for the board", "start": 152, "end": 157, "children": []},
+   {"title": "Other firmware and build options", "start": 158, "end": 170, "children": []}
+  ]
+ },
+ {
+  "title": "Wi-Fi and the power HAT",
+  "start": 172,
+  "end": 184,
+  "children": [
+   {"title": "Credentials and build", "start": 174, "end": 177, "children": []},
+   {"title": "The power HAT", "start": 178, "end": 181, "children": []},
+   {"title": "Running from the HAT", "start": 182, "end": 184, "children": []}
+  ]
+ },
+ {
+  "title": "Power",
+  "start": 186,
+  "end": 214,
+  "children": [
+   {"title": "Measured states", "start": 188, "end": 195, "children": []},
+   {"title": "Power save", "start": 197, "end": 203, "children": []},
+   {"title": "Sleep-safe pads", "start": 204, "end": 206, "children": []},
+   {"title": "The ~80 mA floor", "start": 207, "end": 209, "children": []},
+   {"title": "Measuring again", "start": 210, "end": 214, "children": []}
+  ]
+ },
+ {"title": "Door sensor (Grid-EYE)", "start": 216, "end": 233, "children": []},
+ {
+  "title": "Door sensor and HAT on the LP core",
+  "start": 235,
+  "end": 279,
+  "children": [
+   {"title": "Build and boot console", "start": 246, "end": 260, "children": []},
+   {"title": "Morning steps", "start": 262, "end": 279, "children": []}
+  ]
+ },
+ {"title": "Reset torture", "start": 281, "end": 286, "children": []},
+ {"title": "BLE demo", "start": 288, "end": 299, "children": []},
+ {"title": "Our time server (fts.vikiverse.net)", "start": 301, "end": 322, "children": []},
+ {"title": "Gotchas", "start": 324, "end": 335, "children": []}
+]
+```

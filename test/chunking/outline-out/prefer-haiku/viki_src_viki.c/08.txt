@@ -1,0 +1,162 @@
+```json
+[
+ {
+  "title": "Module header comment",
+  "start": 1,
+  "end": 10,
+  "children": []
+ },
+ {
+  "title": "Includes and version constant",
+  "start": 11,
+  "end": 27,
+  "children": []
+ },
+ {
+  "title": "usage() help text",
+  "start": 29,
+  "end": 140,
+  "children": []
+ },
+ {
+  "title": "Model directory and embedder opening",
+  "start": 142,
+  "end": 157,
+  "children": []
+ },
+ {
+  "title": "Cache directory creation",
+  "start": 159,
+  "end": 174,
+  "children": []
+ },
+ {
+  "title": "main() subcommand dispatch",
+  "start": 176,
+  "end": 652,
+  "children": [
+   {
+    "title": "Exit hook note, version and help",
+    "start": 180,
+    "end": 199,
+    "children": []
+   },
+   {
+    "title": "index subcommand",
+    "start": 203,
+    "end": 223,
+    "children": []
+   },
+   {
+    "title": "ask subcommand",
+    "start": 225,
+    "end": 263,
+    "children": [
+     {
+      "title": "ask --verse cross-project search",
+      "start": 238,
+      "end": 255,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "capture subcommand",
+    "start": 265,
+    "end": 280,
+    "children": []
+   },
+   {
+    "title": "structure subcommand",
+    "start": 282,
+    "end": 320,
+    "children": []
+   },
+   {
+    "title": "promises subcommand",
+    "start": 322,
+    "end": 338,
+    "children": []
+   },
+   {
+    "title": "sql subcommand",
+    "start": 340,
+    "end": 351,
+    "children": []
+   },
+   {
+    "title": "coverage subcommand",
+    "start": 353,
+    "end": 362,
+    "children": []
+   },
+   {
+    "title": "why subcommand",
+    "start": 364,
+    "end": 372,
+    "children": []
+   },
+   {
+    "title": "notes subcommand",
+    "start": 374,
+    "end": 414,
+    "children": []
+   },
+   {
+    "title": "grep subcommand",
+    "start": 416,
+    "end": 445,
+    "children": []
+   },
+   {
+    "title": "muse subcommand",
+    "start": 447,
+    "end": 501,
+    "children": []
+   },
+   {
+    "title": "serve subcommand",
+    "start": 503,
+    "end": 521,
+    "children": []
+   },
+   {
+    "title": "cache push and pull subcommand",
+    "start": 523,
+    "end": 555,
+    "children": []
+   },
+   {
+    "title": "fts-query hidden debug command",
+    "start": 557,
+    "end": 576,
+    "children": []
+   },
+   {
+    "title": "fossilsee-status debug command",
+    "start": 578,
+    "end": 587,
+    "children": []
+   },
+   {
+    "title": "ndvss-selftest debug command",
+    "start": 589,
+    "end": 608,
+    "children": []
+   },
+   {
+    "title": "embed-selftest debug command",
+    "start": 610,
+    "end": 648,
+    "children": []
+   },
+   {
+    "title": "Unknown subcommand fallback",
+    "start": 650,
+    "end": 652,
+    "children": []
+   }
+  ]
+ }
+]
+```

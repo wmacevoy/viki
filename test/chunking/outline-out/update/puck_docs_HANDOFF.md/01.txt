@@ -1,0 +1,72 @@
+[
+{"title": "Hand-off intro", "start": 1, "end": 4, "children": []},
+{"title": "If you are an agent: read this first", "start": 5, "end": 17, "children": []},
+{"title": "Blank line", "start": 18, "end": 18, "children": []},
+{"title": "Rules", "start": 19, "end": 35, "children": []},
+{"title": "Blank line", "start": 36, "end": 36, "children": []},
+{"title": "Work queue", "start": 37, "end": 80, "children": [
+  {"title": "Queue table", "start": 42, "end": 62, "children": []},
+  {"title": "R1 as done, and what is left of it", "start": 64, "end": 80, "children": []}
+]},
+{"title": "Blank line", "start": 81, "end": 81, "children": []},
+{"title": "Environment (pinned)", "start": 82, "end": 92, "children": []},
+{"title": "Blank line", "start": 93, "end": 93, "children": []},
+{"title": "Tests", "start": 94, "end": 112, "children": []},
+{"title": "Blank line", "start": 113, "end": 113, "children": []},
+{"title": "Hardware", "start": 114, "end": 142, "children": [
+  {"title": "Flashing and boot", "start": 116, "end": 123, "children": []},
+  {"title": "Safety rules for the board", "start": 124, "end": 129, "children": []},
+  {"title": "Other firmware and build options", "start": 130, "end": 138, "children": []},
+  {"title": "Board state and next steps", "start": 139, "end": 142, "children": []}
+]},
+{"title": "Blank line", "start": 143, "end": 143, "children": []},
+{"title": "Wi-Fi and the power HAT", "start": 144, "end": 156, "children": [
+  {"title": "Credentials and build", "start": 146, "end": 149, "children": []},
+  {"title": "The power HAT", "start": 150, "end": 153, "children": []},
+  {"title": "Running from the HAT", "start": 154, "end": 156, "children": []}
+]},
+{"title": "Blank line", "start": 157, "end": 157, "children": []},
+{"title": "Power", "start": 158, "end": 186, "children": [
+  {"title": "Measured states", "start": 163, "end": 167, "children": []},
+  {"title": "Power save on battery", "start": 169, "end": 175, "children": []},
+  {"title": "Sleep-safe pads", "start": 176, "end": 178, "children": []},
+  {"title": "The ~80 mA floor", "start": 179, "end": 181, "children": []},
+  {"title": "Measuring again", "start": 182, "end": 186, "children": []}
+]},
+{"title": "Blank line", "start": 187, "end": 187, "children": []},
+{"title": "Door sensor (Grid-EYE)", "start": 188, "end": 205, "children": []},
+{"title": "Blank line", "start": 206, "end": 206, "children": []},
+{"title": "Door sensor and HAT on the LP core", "start": 207, "end": 251, "children": [
+  {"title": "Build", "start": 218, "end": 220, "children": []},
+  {"title": "Console and fallbacks", "start": 221, "end": 232, "children": []},
+  {"title": "Morning steps", "start": 234, "end": 251, "children": [
+    {"title": "Crossings", "start": 236, "end": 239, "children": []},
+    {"title": "Read back the rows", "start": 240, "end": 242, "children": []},
+    {"title": "Button shutdown", "start": 243, "end": 245, "children": []},
+    {"title": "HAT-only power", "start": 246, "end": 250, "children": []},
+    {"title": "Record results", "start": 251, "end": 251, "children": []}
+  ]}
+]},
+{"title": "Blank line", "start": 252, "end": 252, "children": []},
+{"title": "Reset torture", "start": 253, "end": 258, "children": []},
+{"title": "Blank line", "start": 259, "end": 259, "children": []},
+{"title": "BLE demo", "start": 260, "end": 271, "children": [
+  {"title": "Build", "start": 262, "end": 264, "children": []},
+  {"title": "Laptop", "start": 265, "end": 266, "children": []},
+  {"title": "Demo limits", "start": 267, "end": 267, "children": []},
+  {"title": "Time", "start": 268, "end": 269, "children": []},
+  {"title": "Board port and time servers", "start": 270, "end": 271, "children": []}
+]},
+{"title": "Blank line", "start": 272, "end": 272, "children": []},
+{"title": "Our time server", "start": 273, "end": 294, "children": [
+  {"title": "Server facts", "start": 278, "end": 284, "children": []},
+  {"title": "Logs and updates", "start": 286, "end": 288, "children": []},
+  {"title": "Key file", "start": 289, "end": 290, "children": []},
+  {"title": "Checks", "start": 291, "end": 292, "children": []},
+  {"title": "Local test server", "start": 293, "end": 294, "children": []}
+]},
+{"title": "Blank line", "start": 295, "end": 295, "children": []},
+{"title": "Gotchas", "start": 296, "end": 305, "children": []},
+{"title": "Agent worktrees", "start": 306, "end": 306, "children": []},
+{"title": "puck_ble.py needs bleak", "start": 307, "end": 307, "children": []}
+]

@@ -1,0 +1,192 @@
+```json
+[
+ {
+  "title": "Header and includes",
+  "start": 1,
+  "end": 53,
+  "children": []
+ },
+ {
+  "title": "UUIDs and shared state",
+  "start": 56,
+  "end": 71,
+  "children": []
+ },
+ {
+  "title": "Result stream",
+  "start": 73,
+  "end": 129,
+  "children": [
+   {
+    "title": "ble_relay_notify",
+    "start": 78,
+    "end": 87,
+    "children": []
+   },
+   {
+    "title": "ble_relay_notify_chunks",
+    "start": 89,
+    "end": 101,
+    "children": []
+   },
+   {
+    "title": "out_flush",
+    "start": 103,
+    "end": 118,
+    "children": []
+   },
+   {
+    "title": "out_str",
+    "start": 120,
+    "end": 129,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "Row formatting callback",
+  "start": 131,
+  "end": 156,
+  "children": []
+ },
+ {
+  "title": "Database task: queries and heartbeat",
+  "start": 158,
+  "end": 417,
+  "children": [
+   {
+    "title": "wall_at",
+    "start": 160,
+    "end": 170,
+    "children": []
+   },
+   {
+    "title": "Door logging (CONFIG_PUCK_DOOR)",
+    "start": 174,
+    "end": 221,
+    "children": [
+     {
+      "title": "log_crossings",
+      "start": 178,
+      "end": 207,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "GPS logging (CONFIG_PUCK_GPS)",
+    "start": 223,
+    "end": 279,
+    "children": [
+     {
+      "title": "log_gps",
+      "start": 228,
+      "end": 275,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "Power columns on hb (CONFIG_PUCK_POWER_SWEEP)",
+    "start": 281,
+    "end": 305,
+    "children": []
+   },
+   {
+    "title": "shut_down",
+    "start": 307,
+    "end": 328,
+    "children": []
+   },
+   {
+    "title": "db_task",
+    "start": 330,
+    "end": 417,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "GATT service",
+  "start": 419,
+  "end": 477,
+  "children": [
+   {
+    "title": "chr_access",
+    "start": 421,
+    "end": 464,
+    "children": []
+   },
+   {
+    "title": "services table",
+    "start": 466,
+    "end": 477,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "GAP: advertising and connections",
+  "start": 479,
+  "end": 537,
+  "children": [
+   {
+    "title": "advertise",
+    "start": 483,
+    "end": 512,
+    "children": []
+   },
+   {
+    "title": "gap_event",
+    "start": 514,
+    "end": 537,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "on_sync (address and device name)",
+  "start": 539,
+  "end": 553,
+  "children": []
+ },
+ {
+  "title": "Wi-Fi radio check (CONFIG_PUCK_NET)",
+  "start": 555,
+  "end": 582,
+  "children": [
+   {
+    "title": "wifi_scan_report",
+    "start": 561,
+    "end": 581,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "host_task",
+  "start": 584,
+  "end": 589,
+  "children": []
+ },
+ {
+  "title": "Database repair and startup",
+  "start": 591,
+  "end": 655,
+  "children": [
+   {
+    "title": "puckapp_ble_prepare",
+    "start": 593,
+    "end": 606,
+    "children": []
+   },
+   {
+    "title": "puckapp_ble",
+    "start": 608,
+    "end": 655,
+    "children": []
+   }
+  ]
+ }
+]
+```

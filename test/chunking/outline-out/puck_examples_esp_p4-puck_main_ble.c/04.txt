@@ -1,0 +1,50 @@
+```json
+[
+  {"title": "Module overview", "start": 1, "end": 19, "children": []},
+  {"title": "Includes and build guard", "start": 20, "end": 47, "children": []},
+  {"title": "GATT UUIDs", "start": 50, "end": 58, "children": []},
+  {"title": "Shared state", "start": 60, "end": 65, "children": []},
+  {"title": "Result stream", "start": 67, "end": 150, "children": [
+    {"title": "Relay notify", "start": 72, "end": 95, "children": [
+      {"title": "ble_relay_notify", "start": 72, "end": 81, "children": []},
+      {"title": "ble_relay_notify_chunks", "start": 83, "end": 95, "children": []}
+    ]},
+    {"title": "Output buffer", "start": 97, "end": 123, "children": [
+      {"title": "out_flush", "start": 97, "end": 112, "children": []},
+      {"title": "out_str", "start": 114, "end": 123, "children": []}
+    ]},
+    {"title": "Row formatting", "start": 125, "end": 150, "children": [
+      {"title": "row_cb", "start": 125, "end": 150, "children": []}
+    ]}
+  ]},
+  {"title": "Database task", "start": 152, "end": 296, "children": [
+    {"title": "wall_at", "start": 154, "end": 164, "children": []},
+    {"title": "Door logging", "start": 168, "end": 207, "children": [
+      {"title": "log_crossings", "start": 172, "end": 201, "children": []}
+    ]},
+    {"title": "Power-off handling", "start": 209, "end": 228, "children": [
+      {"title": "shut_down", "start": 211, "end": 228, "children": []}
+    ]},
+    {"title": "db_task", "start": 230, "end": 296, "children": []}
+  ]},
+  {"title": "GATT", "start": 298, "end": 353, "children": [
+    {"title": "chr_access", "start": 300, "end": 340, "children": []},
+    {"title": "Services table", "start": 342, "end": 353, "children": []}
+  ]},
+  {"title": "GAP: advertise and connections", "start": 355, "end": 428, "children": [
+    {"title": "advertise", "start": 359, "end": 388, "children": []},
+    {"title": "gap_event", "start": 390, "end": 412, "children": []},
+    {"title": "on_sync", "start": 414, "end": 428, "children": []}
+  ]},
+  {"title": "Wi-Fi radio check", "start": 430, "end": 457, "children": [
+    {"title": "wifi_scan_report", "start": 434, "end": 456, "children": []}
+  ]},
+  {"title": "NimBLE host task", "start": 459, "end": 464, "children": []},
+  {"title": "One-time database repair", "start": 466, "end": 481, "children": [
+    {"title": "puckapp_ble_prepare", "start": 468, "end": 481, "children": []}
+  ]},
+  {"title": "Startup", "start": 483, "end": 526, "children": [
+    {"title": "puckapp_ble", "start": 483, "end": 526, "children": []}
+  ]}
+]
+```

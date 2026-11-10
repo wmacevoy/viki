@@ -1,0 +1,37 @@
+[
+ {"title": "Header and includes", "start": 1, "end": 50, "children": []},
+ {"title": "UUIDs and shared state", "start": 53, "end": 68, "children": []},
+ {"title": "Result stream", "start": 70, "end": 126, "children": [
+   {"title": "ble_relay_notify", "start": 75, "end": 84, "children": []},
+   {"title": "ble_relay_notify_chunks", "start": 86, "end": 98, "children": []},
+   {"title": "out_flush", "start": 100, "end": 115, "children": []},
+   {"title": "out_str", "start": 117, "end": 126, "children": []}
+ ]},
+ {"title": "Row formatting callback", "start": 128, "end": 153, "children": []},
+ {"title": "Database task: queries and heartbeat", "start": 155, "end": 349, "children": [
+   {"title": "wall_at", "start": 157, "end": 167, "children": []},
+   {"title": "Door logging (CONFIG_PUCK_DOOR)", "start": 171, "end": 214, "children": [
+     {"title": "log_crossings", "start": 175, "end": 204, "children": []}
+   ]},
+   {"title": "Power columns on hb (CONFIG_PUCK_POWER_SWEEP)", "start": 216, "end": 240, "children": []},
+   {"title": "shut_down", "start": 242, "end": 261, "children": []},
+   {"title": "db_task", "start": 263, "end": 349, "children": []}
+ ]},
+ {"title": "GATT service", "start": 351, "end": 408, "children": [
+   {"title": "chr_access", "start": 353, "end": 395, "children": []},
+   {"title": "services table", "start": 397, "end": 408, "children": []}
+ ]},
+ {"title": "GAP: advertising and connections", "start": 410, "end": 468, "children": [
+   {"title": "advertise", "start": 414, "end": 443, "children": []},
+   {"title": "gap_event", "start": 445, "end": 468, "children": []}
+ ]},
+ {"title": "on_sync (address and device name)", "start": 470, "end": 484, "children": []},
+ {"title": "Wi-Fi radio check (CONFIG_PUCK_NET)", "start": 486, "end": 513, "children": [
+   {"title": "wifi_scan_report", "start": 492, "end": 512, "children": []}
+ ]},
+ {"title": "host_task", "start": 515, "end": 520, "children": []},
+ {"title": "Database repair and startup", "start": 522, "end": 583, "children": [
+   {"title": "puckapp_ble_prepare", "start": 524, "end": 537, "children": []},
+   {"title": "puckapp_ble", "start": 539, "end": 583, "children": []}
+ ]}
+]

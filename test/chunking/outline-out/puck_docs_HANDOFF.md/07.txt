@@ -1,0 +1,74 @@
+```json
+[
+  {"title": "Agent orientation", "start": 5, "end": 17, "children": [
+    {"title": "Reading order", "start": 11, "end": 13, "children": []},
+    {"title": "Checking the last committer's trailers", "start": 14, "end": 16, "children": []},
+    {"title": "Identifying yourself as a successor", "start": 17, "end": 17, "children": []}
+  ]},
+  {"title": "Rules", "start": 19, "end": 35, "children": [
+    {"title": "Branching and green master", "start": 21, "end": 24, "children": []},
+    {"title": "Commit trailers", "start": 25, "end": 33, "children": []},
+    {"title": "Work queue updates", "start": 34, "end": 34, "children": []},
+    {"title": "Forbidden changes (GPL, SQLCipher src)", "start": 35, "end": 35, "children": []}
+  ]},
+  {"title": "Where things stand", "start": 37, "end": 48, "children": []},
+  {"title": "Repository layout", "start": 50, "end": 60, "children": []},
+  {"title": "Work queue", "start": 62, "end": 109, "children": [
+    {"title": "Queue table", "start": 67, "end": 91, "children": []},
+    {"title": "R1 as done, and what is left", "start": 93, "end": 109, "children": [
+      {"title": "Envelope and fallback copies", "start": 95, "end": 101, "children": []},
+      {"title": "Crash test", "start": 102, "end": 104, "children": []},
+      {"title": "Recovery wrap", "start": 105, "end": 109, "children": []}
+    ]}
+  ]},
+  {"title": "Environment (pinned)", "start": 111, "end": 121, "children": []},
+  {"title": "Tests", "start": 123, "end": 142, "children": []},
+  {"title": "Hardware", "start": 144, "end": 172, "children": [
+    {"title": "Board", "start": 146, "end": 147, "children": []},
+    {"title": "Flashing and safety rules", "start": 148, "end": 158, "children": []},
+    {"title": "C6 firmware", "start": 159, "end": 162, "children": []},
+    {"title": "Throughput and journal settings", "start": 163, "end": 168, "children": []},
+    {"title": "Board status", "start": 169, "end": 172, "children": []}
+  ]},
+  {"title": "Wi-Fi and the power HAT", "start": 174, "end": 186, "children": [
+    {"title": "Wi-Fi build", "start": 176, "end": 179, "children": []},
+    {"title": "HAT power, registers and write hazard", "start": 180, "end": 183, "children": []},
+    {"title": "Running from the HAT", "start": 184, "end": 186, "children": []}
+  ]},
+  {"title": "Power", "start": 188, "end": 216, "children": [
+    {"title": "Measured states", "start": 193, "end": 197, "children": []},
+    {"title": "Power save", "start": 199, "end": 205, "children": []},
+    {"title": "Sleep-safe pads", "start": 206, "end": 208, "children": []},
+    {"title": "The ~80 mA floor", "start": 209, "end": 211, "children": []},
+    {"title": "Measuring again", "start": 212, "end": 216, "children": []}
+  ]},
+  {"title": "GPS (u-blox MAX-M10S)", "start": 218, "end": 249, "children": [
+    {"title": "Hardware and PPS wiring", "start": 220, "end": 225, "children": []},
+    {"title": "Build and checks", "start": 226, "end": 234, "children": []},
+    {"title": "PPS and light sleep", "start": 235, "end": 236, "children": []},
+    {"title": "Fresh test database", "start": 237, "end": 239, "children": []},
+    {"title": "Parser tests", "start": 240, "end": 240, "children": []},
+    {"title": "Clock watching", "start": 241, "end": 247, "children": []},
+    {"title": "Day run", "start": 248, "end": 249, "children": []}
+  ]},
+  {"title": "Door sensor (Grid-EYE)", "start": 251, "end": 267, "children": [
+    {"title": "Hardware and build", "start": 252, "end": 257, "children": []},
+    {"title": "Mounting and orientation", "start": 258, "end": 264, "children": []},
+    {"title": "Checking the sensor", "start": 265, "end": 267, "children": []}
+  ]},
+  {"title": "Door sensor and HAT on the LP core", "start": 270, "end": 314, "children": [
+    {"title": "Design", "start": 272, "end": 279, "children": []},
+    {"title": "Build and expected console output", "start": 281, "end": 295, "children": []},
+    {"title": "Morning steps (need a person)", "start": 297, "end": 314, "children": []}
+  ]},
+  {"title": "Reset torture", "start": 316, "end": 321, "children": []},
+  {"title": "BLE demo", "start": 323, "end": 334, "children": []},
+  {"title": "Our time server (fts.vikiverse.net)", "start": 336, "end": 357, "children": [
+    {"title": "Host, ports, key and clock", "start": 340, "end": 347, "children": []},
+    {"title": "Logs and updates", "start": 349, "end": 350, "children": []},
+    {"title": "The key file", "start": 352, "end": 353, "children": []},
+    {"title": "Checks", "start": 354, "end": 357, "children": []}
+  ]},
+  {"title": "Gotchas", "start": 359, "end": 370, "children": []}
+]
+```

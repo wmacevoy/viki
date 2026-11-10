@@ -1,0 +1,253 @@
+```json
+[
+ {
+  "title": "Header and includes",
+  "start": 1,
+  "end": 53,
+  "children": [
+   {"title": "File header comment", "start": 1, "end": 23, "children": []},
+   {"title": "Includes", "start": 24, "end": 53, "children": []}
+  ]
+ },
+ {"title": "Log tag", "start": 54, "end": 55, "children": []},
+ {"title": "UUIDs and shared state", "start": 56, "end": 71, "children": []},
+ {"title": "Blank line", "start": 72, "end": 72, "children": []},
+ {
+  "title": "Result stream",
+  "start": 73,
+  "end": 129,
+  "children": [
+   {"title": "ble_relay_notify", "start": 78, "end": 87, "children": []},
+   {"title": "ble_relay_notify_chunks", "start": 89, "end": 101, "children": []},
+   {"title": "out_flush", "start": 103, "end": 118, "children": []},
+   {"title": "out_str", "start": 120, "end": 129, "children": []}
+  ]
+ },
+ {"title": "Blank line", "start": 130, "end": 130, "children": []},
+ {"title": "Row formatting callback", "start": 131, "end": 156, "children": []},
+ {"title": "Blank line", "start": 157, "end": 157, "children": []},
+ {
+  "title": "Database task: queries and heartbeat",
+  "start": 158,
+  "end": 417,
+  "children": [
+   {"title": "Section header", "start": 158, "end": 159, "children": []},
+   {"title": "wall_at", "start": 160, "end": 170, "children": []},
+   {"title": "Blank line", "start": 171, "end": 171, "children": []},
+   {"title": "HAT running flag", "start": 172, "end": 172, "children": []},
+   {"title": "Blank line", "start": 173, "end": 173, "children": []},
+   {
+    "title": "Door logging (CONFIG_PUCK_DOOR)",
+    "start": 174,
+    "end": 280,
+    "children": [
+     {"title": "Door insert statement", "start": 175, "end": 176, "children": []},
+     {"title": "log_crossings", "start": 177, "end": 207, "children": []},
+     {"title": "Poll interval with door", "start": 208, "end": 208, "children": []},
+     {
+      "title": "No-door stub",
+      "start": 213,
+      "end": 279,
+      "children": [
+       {"title": "No-door state stub", "start": 213, "end": 215, "children": []},
+       {"title": "Poll interval without door", "start": 216, "end": 279, "children": []}
+      ]
+     }
+    ]
+   },
+   {
+    "title": "Power sweep heartbeat columns",
+    "start": 281,
+    "end": 305,
+    "children": [
+     {"title": "Power column comment and insert statement", "start": 281, "end": 286, "children": []},
+     {"title": "hb_power_columns", "start": 287, "end": 296, "children": []},
+     {"title": "bind_int_or_null", "start": 297, "end": 301, "children": []},
+     {"title": "No-sweep schema and insert", "start": 302, "end": 305, "children": []}
+    ]
+   },
+   {"title": "Blank line", "start": 306, "end": 306, "children": []},
+   {"title": "shut_down", "start": 307, "end": 328, "children": []},
+   {"title": "Blank line", "start": 329, "end": 329, "children": []},
+   {
+    "title": "db_task",
+    "start": 330,
+    "end": 417,
+    "children": [
+     {"title": "db_task signature", "start": 330, "end": 331, "children": []},
+     {"title": "Statement and buffers", "start": 332, "end": 335, "children": []},
+     {"title": "Blank line", "start": 336, "end": 336, "children": []},
+     {
+      "title": "Schema and insert statement",
+      "start": 337,
+      "end": 343,
+      "children": [
+       {"title": "Table hb and wall columns", "start": 337, "end": 340, "children": []},
+       {"title": "Power columns", "start": 341, "end": 341, "children": []},
+       {"title": "Insert statement", "start": 342, "end": 343, "children": []}
+      ]
+     },
+     {"title": "Initial row total", "start": 344, "end": 350, "children": []},
+     {"title": "Heartbeat timer start", "start": 351, "end": 351, "children": []},
+     {
+      "title": "Event loop",
+      "start": 352,
+      "end": 416,
+      "children": [
+       {"title": "Query request", "start": 353, "end": 363, "children": []},
+       {"title": "Door crossings", "start": 364, "end": 364, "children": []},
+       {"title": "Heartbeat schedule", "start": 366, "end": 367, "children": []},
+       {"title": "Heartbeat text", "start": 368, "end": 374, "children": []},
+       {
+        "title": "HAT readings and shutdown",
+        "start": 375,
+        "end": 380,
+        "children": [
+         {"title": "HAT readings", "start": 375, "end": 378, "children": []},
+         {"title": "HAT cut-off shutdown", "start": 379, "end": 379, "children": []}
+        ]
+       },
+       {
+        "title": "Power sweep binds",
+        "start": 381,
+        "end": 393,
+        "children": [
+         {"title": "Mode text bind", "start": 382, "end": 383, "children": []},
+         {"title": "Power counter binds", "start": 384, "end": 390, "children": []},
+         {"title": "No-sweep stub", "start": 391, "end": 393, "children": []}
+        ]
+       },
+       {"title": "Heartbeat ts and note binds", "start": 394, "end": 395, "children": []},
+       {"title": "Heartbeat wall binds", "start": 396, "end": 406, "children": []},
+       {
+        "title": "Heartbeat insert and row total",
+        "start": 407,
+        "end": 414,
+        "children": [
+         {"title": "Insert succeeded", "start": 407, "end": 412, "children": []},
+         {"title": "Row total update", "start": 413, "end": 413, "children": []},
+         {"title": "Insert end", "start": 414, "end": 414, "children": []}
+        ]
+       },
+       {"title": "Statement reset", "start": 415, "end": 415, "children": []},
+       {"title": "Loop end", "start": 416, "end": 416, "children": []}
+      ]
+     },
+     {"title": "Function end", "start": 417, "end": 417, "children": []}
+    ]
+   }
+  ]
+ },
+ {"title": "Blank line", "start": 418, "end": 418, "children": []},
+ {
+  "title": "GATT service",
+  "start": 419,
+  "end": 477,
+  "children": [
+   {"title": "GATT section header", "start": 419, "end": 420, "children": []},
+   {
+    "title": "chr_access",
+    "start": 421,
+    "end": 464,
+    "children": [
+     {"title": "Access callback signature", "start": 421, "end": 423, "children": []},
+     {"title": "Unused arguments", "start": 424, "end": 424, "children": []},
+     {
+      "title": "Status read",
+      "start": 425,
+      "end": 446,
+      "children": [
+       {"title": "Status counters and heap", "start": 426, "end": 434, "children": []},
+       {"title": "Status clock", "start": 435, "end": 439, "children": []},
+       {"title": "Status door count", "start": 440, "end": 441, "children": []},
+       {"title": "Status power sweep", "start": 443, "end": 444, "children": []},
+       {"title": "Status reply", "start": 445, "end": 445, "children": []}
+      ]
+     },
+     {"title": "Query write", "start": 447, "end": 454, "children": []},
+     {"title": "Relay write", "start": 455, "end": 462, "children": []},
+     {"title": "Result write rejected", "start": 463, "end": 463, "children": []}
+    ]
+   },
+   {"title": "Blank line", "start": 465, "end": 465, "children": []},
+   {"title": "services table", "start": 466, "end": 477, "children": []}
+  ]
+ },
+ {"title": "Blank line", "start": 478, "end": 478, "children": []},
+ {
+  "title": "GAP: advertising and connections",
+  "start": 479,
+  "end": 537,
+  "children": [
+   {"title": "GAP section header", "start": 479, "end": 480, "children": []},
+   {"title": "Forward declaration of gap_event", "start": 481, "end": 481, "children": []},
+   {"title": "Blank line", "start": 482, "end": 482, "children": []},
+   {"title": "advertise", "start": 483, "end": 512, "children": []},
+   {"title": "Blank line", "start": 513, "end": 513, "children": []},
+   {
+    "title": "gap_event",
+    "start": 514,
+    "end": 537,
+    "children": [
+     {"title": "Event signature and dispatch", "start": 514, "end": 517, "children": []},
+     {"title": "Connect event", "start": 518, "end": 522, "children": []},
+     {"title": "Disconnect event", "start": 523, "end": 528, "children": []},
+     {"title": "Advertising complete event", "start": 529, "end": 531, "children": []},
+     {"title": "MTU event", "start": 532, "end": 534, "children": []},
+     {"title": "Switch end and return", "start": 535, "end": 536, "children": []}
+    ]
+   }
+  ]
+ },
+ {"title": "Blank line", "start": 538, "end": 538, "children": []},
+ {"title": "on_sync (address and device name)", "start": 539, "end": 553, "children": []},
+ {"title": "Blank line", "start": 554, "end": 554, "children": []},
+ {
+  "title": "Wi-Fi radio check (CONFIG_PUCK_NET)",
+  "start": 555,
+  "end": 582,
+  "children": [
+   {"title": "wifi_scan_report", "start": 561, "end": 581, "children": []}
+  ]
+ },
+ {"title": "Blank line", "start": 583, "end": 583, "children": []},
+ {"title": "host_task", "start": 584, "end": 589, "children": []},
+ {"title": "Blank line", "start": 590, "end": 590, "children": []},
+ {
+  "title": "Database repair and startup",
+  "start": 591,
+  "end": 655,
+  "children": [
+   {"title": "One-time repair comment", "start": 591, "end": 592, "children": []},
+   {"title": "puckapp_ble_prepare", "start": 593, "end": 606, "children": []},
+   {"title": "Blank line", "start": 607, "end": 607, "children": []},
+   {
+    "title": "puckapp_ble",
+    "start": 608,
+    "end": 655,
+    "children": [
+     {"title": "puckapp_ble signature", "start": 608, "end": 609, "children": []},
+     {"title": "Database open", "start": 610, "end": 613, "children": []},
+     {"title": "Radio check", "start": 614, "end": 616, "children": []},
+     {"title": "Work queue and NVS", "start": 617, "end": 623, "children": []},
+     {"title": "BLE stack and GATT setup", "start": 624, "end": 635, "children": []},
+     {"title": "HAT startup", "start": 636, "end": 642, "children": []},
+     {"title": "Grid-EYE start", "start": 643, "end": 645, "children": []},
+     {"title": "Power sweep and radio start", "start": 649, "end": 650, "children": []},
+     {
+      "title": "Task launch",
+      "start": 651,
+      "end": 654,
+      "children": [
+       {"title": "SQLite stack note", "start": 651, "end": 652, "children": []},
+       {"title": "Database task launch", "start": 653, "end": 653, "children": []},
+       {"title": "NimBLE host launch", "start": 654, "end": 654, "children": []}
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {"title": "End of CONFIG_PUCK_BLE guard", "start": 656, "end": 657, "children": []}
+]
+```

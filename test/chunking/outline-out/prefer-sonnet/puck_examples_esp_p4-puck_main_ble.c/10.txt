@@ -1,0 +1,101 @@
+[
+ {"title":"File header and demo-grade warning","start":1,"end":23,"children":[]},
+ {"title":"Includes and feature guard","start":24,"end":54,"children":[]},
+ {"title":"Constants, UUIDs and shared state","start":55,"end":72,"children":[
+  {"title":"Log tag","start":55,"end":55,"children":[]},
+  {"title":"GATT UUID definitions","start":57,"end":65,"children":[]},
+  {"title":"Query size limit","start":67,"end":67,"children":[]},
+  {"title":"Connection and queue state","start":69,"end":72,"children":[]}
+ ]},
+ {"title":"Result stream","start":74,"end":157,"children":[
+  {"title":"Output buffer","start":76,"end":77,"children":[]},
+  {"title":"ble_relay_notify","start":79,"end":88,"children":[]},
+  {"title":"ble_relay_notify_chunks","start":90,"end":102,"children":[]},
+  {"title":"out_flush","start":104,"end":119,"children":[]},
+  {"title":"out_str","start":121,"end":130,"children":[]},
+  {"title":"row_cb","start":132,"end":157,"children":[
+   {"title":"Per-column cell formatting by type","start":136,"end":151,"children":[]},
+   {"title":"Emit separators, newline, stop if client left","start":152,"end":156,"children":[]}
+  ]}
+ ]},
+ {"title":"Database task: queries and heartbeat","start":159,"end":559,"children":[
+  {"title":"wall_at","start":161,"end":171,"children":[]},
+  {"title":"hat_running flag","start":173,"end":173,"children":[]},
+  {"title":"Door logging and poll interval (conditional)","start":175,"end":222,"children":[
+   {"title":"CONFIG_PUCK_DOOR: log_crossings","start":175,"end":209,"children":[
+    {"title":"door_ins statement","start":176,"end":176,"children":[]},
+    {"title":"log_crossings","start":178,"end":208,"children":[
+     {"title":"Lazy table and statement creation","start":183,"end":189,"children":[]},
+     {"title":"Bind and insert each queued crossing","start":190,"end":207,"children":[]}
+    ]},
+    {"title":"POLL_MS for door","start":209,"end":209,"children":[]}
+   ]},
+   {"title":"GPS only: stubs and POLL_MS","start":210,"end":213,"children":[]},
+   {"title":"No door: stubs and POLL_MS variants","start":214,"end":222,"children":[]}
+  ]},
+  {"title":"GPS logging (conditional)","start":224,"end":299,"children":[
+   {"title":"log_gps","start":224,"end":295,"children":[
+    {"title":"Lazy table and statement creation","start":232,"end":251,"children":[]},
+    {"title":"Bind and insert each queued snapshot","start":252,"end":294,"children":[]}
+   ]},
+   {"title":"No GPS: stubs","start":296,"end":299,"children":[]}
+  ]},
+  {"title":"Clock watch logging (conditional)","start":301,"end":417,"children":[
+   {"title":"log_clock","start":301,"end":413,"children":[
+    {"title":"Lazy table and statement creation","start":324,"end":345,"children":[]},
+    {"title":"Bind and insert each clock record","start":346,"end":392,"children":[]},
+    {"title":"Bind and insert each Roughtime sample","start":393,"end":412,"children":[]}
+   ]},
+   {"title":"No clock watch: stubs","start":414,"end":417,"children":[]}
+  ]},
+  {"title":"Power sweep heartbeat columns (conditional)","start":419,"end":443,"children":[]},
+  {"title":"shut_down","start":445,"end":469,"children":[]},
+  {"title":"db_task","start":471,"end":559,"children":[
+   {"title":"Setup: hb table, columns, prepared insert","start":478,"end":492,"children":[]},
+   {"title":"Main loop","start":493,"end":558,"children":[
+    {"title":"Handle a queued query","start":494,"end":504,"children":[]},
+    {"title":"Log crossings and GPS and wait for heartbeat time","start":505,"end":508,"children":[]},
+    {"title":"Build heartbeat note and read HAT","start":509,"end":522,"children":[]},
+    {"title":"Bind power sweep columns","start":523,"end":535,"children":[]},
+    {"title":"Bind ts, note and wall time","start":536,"end":548,"children":[]},
+    {"title":"Insert and refresh row total","start":549,"end":557,"children":[]}
+   ]}
+  ]}
+ ]},
+ {"title":"GATT","start":561,"end":619,"children":[
+  {"title":"chr_access","start":563,"end":606,"children":[
+   {"title":"Status read","start":567,"end":588,"children":[]},
+   {"title":"Query write","start":589,"end":596,"children":[]},
+   {"title":"Relay write","start":597,"end":604,"children":[]},
+   {"title":"Default: result is notify only","start":605,"end":605,"children":[]}
+  ]},
+  {"title":"services table","start":608,"end":619,"children":[]}
+ ]},
+ {"title":"GAP: advertise and connection events","start":621,"end":695,"children":[
+  {"title":"gap_event forward declaration","start":623,"end":623,"children":[]},
+  {"title":"advertise","start":625,"end":654,"children":[
+   {"title":"Advertising fields","start":627,"end":636,"children":[]},
+   {"title":"Scan response with service UUID","start":638,"end":642,"children":[]},
+   {"title":"Parameters and start","start":644,"end":653,"children":[]}
+  ]},
+  {"title":"gap_event","start":656,"end":679,"children":[]},
+  {"title":"on_sync","start":681,"end":695,"children":[]}
+ ]},
+ {"title":"Wi-Fi scan radio check (CONFIG_PUCK_NET)","start":697,"end":724,"children":[
+  {"title":"Wi-Fi includes","start":698,"end":700,"children":[]},
+  {"title":"wifi_scan_report","start":701,"end":723,"children":[]}
+ ]},
+ {"title":"host_task","start":726,"end":731,"children":[]},
+ {"title":"puckapp_ble_prepare","start":733,"end":748,"children":[]},
+ {"title":"puckapp_ble","start":750,"end":800,"children":[
+  {"title":"Open database and optional radio check","start":752,"end":759,"children":[]},
+  {"title":"NVS initialization","start":761,"end":765,"children":[]},
+  {"title":"Host stack and NimBLE init","start":766,"end":771,"children":[]},
+  {"title":"GAP/GATT service registration","start":772,"end":777,"children":[]},
+  {"title":"HAT initialization","start":778,"end":784,"children":[]},
+  {"title":"Door start","start":785,"end":787,"children":[]},
+  {"title":"GPS start","start":788,"end":790,"children":[]},
+  {"title":"Clock watch start","start":791,"end":793,"children":[]},
+  {"title":"Start power sweep, relay, db task and host","start":794,"end":799,"children":[]}
+ ]}
+]

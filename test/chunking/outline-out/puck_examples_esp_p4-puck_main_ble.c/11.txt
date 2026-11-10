@@ -1,0 +1,54 @@
+[
+  {"title": "File overview and includes", "start": 1, "end": 54, "children": [
+    {"title": "Module comment: GATT contract and demo scope", "start": 1, "end": 23, "children": []},
+    {"title": "Includes", "start": 24, "end": 54, "children": []}
+  ]},
+  {"title": "UUIDs, handles and shared state", "start": 56, "end": 73, "children": [
+    {"title": "Characteristic UUIDs", "start": 58, "end": 66, "children": []},
+    {"title": "Handles and shared state", "start": 68, "end": 73, "children": []}
+  ]},
+  {"title": "Result stream", "start": 75, "end": 158, "children": [
+    {"title": "Relay notifications", "start": 80, "end": 103, "children": [
+      {"title": "ble_relay_notify", "start": 80, "end": 89, "children": []},
+      {"title": "ble_relay_notify_chunks", "start": 91, "end": 103, "children": []}
+    ]},
+    {"title": "Result output buffer", "start": 105, "end": 131, "children": [
+      {"title": "out_flush", "start": 105, "end": 120, "children": []},
+      {"title": "out_str", "start": 122, "end": 131, "children": []}
+    ]},
+    {"title": "Row formatting callback", "start": 133, "end": 158, "children": []}
+  ]},
+  {"title": "Database task: queries and heartbeat", "start": 160, "end": 654, "children": [
+    {"title": "wall_at", "start": 162, "end": 175, "children": []},
+    {"title": "Door crossings log", "start": 177, "end": 226, "children": []},
+    {"title": "GPS log", "start": 228, "end": 303, "children": []},
+    {"title": "Clock and time model logs", "start": 305, "end": 510, "children": [
+      {"title": "Time model log", "start": 308, "end": 394, "children": []},
+      {"title": "Clock log", "start": 396, "end": 506, "children": []}
+    ]},
+    {"title": "Power sweep heartbeat columns", "start": 512, "end": 536, "children": []},
+    {"title": "shut_down", "start": 538, "end": 564, "children": []},
+    {"title": "db_task", "start": 566, "end": 654, "children": [
+      {"title": "Schema and row count setup", "start": 573, "end": 587, "children": []},
+      {"title": "Main loop: queries and logs", "start": 588, "end": 602, "children": []},
+      {"title": "Heartbeat row", "start": 603, "end": 652, "children": []}
+    ]}
+  ]},
+  {"title": "GATT service", "start": 656, "end": 718, "children": [
+    {"title": "chr_access", "start": 658, "end": 705, "children": []},
+    {"title": "Service table", "start": 707, "end": 718, "children": []}
+  ]},
+  {"title": "GAP: advertising and connections", "start": 720, "end": 778, "children": [
+    {"title": "advertise", "start": 724, "end": 753, "children": []},
+    {"title": "gap_event", "start": 755, "end": 778, "children": []}
+  ]},
+  {"title": "Sync and device name", "start": 780, "end": 794, "children": []},
+  {"title": "Wi-Fi radio check", "start": 796, "end": 823, "children": [
+    {"title": "wifi_scan_report", "start": 800, "end": 822, "children": []}
+  ]},
+  {"title": "Host task", "start": 825, "end": 830, "children": []},
+  {"title": "Startup", "start": 832, "end": 899, "children": [
+    {"title": "puckapp_ble_prepare: one-time repair", "start": 832, "end": 847, "children": []},
+    {"title": "puckapp_ble: stack and task bring-up", "start": 849, "end": 899, "children": []}
+  ]}
+]

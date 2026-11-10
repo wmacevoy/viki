@@ -1,0 +1,168 @@
+```json
+[
+ {
+  "title": "Module header comment",
+  "start": 1,
+  "end": 10,
+  "children": []
+ },
+ {
+  "title": "Includes and version constant",
+  "start": 11,
+  "end": 27,
+  "children": []
+ },
+ {
+  "title": "Blank line",
+  "start": 28,
+  "end": 28,
+  "children": []
+ },
+ {
+  "title": "usage() help text",
+  "start": 29,
+  "end": 120,
+  "children": []
+ },
+ {
+  "title": "Blank line",
+  "start": 121,
+  "end": 121,
+  "children": []
+ },
+ {
+  "title": "Model directory and embedder opening",
+  "start": 122,
+  "end": 137,
+  "children": []
+ },
+ {
+  "title": "Blank line",
+  "start": 138,
+  "end": 138,
+  "children": []
+ },
+ {
+  "title": "Cache directory creation",
+  "start": 139,
+  "end": 154,
+  "children": [
+   {
+    "title": "Existing .viki check",
+    "start": 139,
+    "end": 141,
+    "children": []
+   },
+   {
+    "title": "0700 permission rationale",
+    "start": 142,
+    "end": 148,
+    "children": []
+   },
+   {
+    "title": "Create .viki directory",
+    "start": 149,
+    "end": 153,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "Blank line",
+  "start": 155,
+  "end": 155,
+  "children": []
+ },
+ {
+  "title": "main() subcommand dispatch",
+  "start": 156,
+  "end": 527,
+  "children": [
+   {
+    "title": "Exit hook, version and help",
+    "start": 160,
+    "end": 178,
+    "children": []
+   },
+   {
+    "title": "index subcommand",
+    "start": 182,
+    "end": 202,
+    "children": []
+   },
+   {
+    "title": "ask subcommand",
+    "start": 204,
+    "end": 223,
+    "children": []
+   },
+   {
+    "title": "capture subcommand",
+    "start": 225,
+    "end": 240,
+    "children": []
+   },
+   {
+    "title": "structure subcommand",
+    "start": 242,
+    "end": 280,
+    "children": []
+   },
+   {
+    "title": "notes subcommand",
+    "start": 282,
+    "end": 322,
+    "children": []
+   },
+   {
+    "title": "grep subcommand",
+    "start": 324,
+    "end": 353,
+    "children": []
+   },
+   {
+    "title": "muse subcommand",
+    "start": 355,
+    "end": 409,
+    "children": []
+   },
+   {
+    "title": "serve subcommand",
+    "start": 411,
+    "end": 429,
+    "children": []
+   },
+   {
+    "title": "cache push and pull subcommand",
+    "start": 431,
+    "end": 450,
+    "children": []
+   },
+   {
+    "title": "fossilsee-status debug command",
+    "start": 452,
+    "end": 461,
+    "children": []
+   },
+   {
+    "title": "ndvss-selftest debug command",
+    "start": 463,
+    "end": 482,
+    "children": []
+   },
+   {
+    "title": "embed-selftest debug command",
+    "start": 484,
+    "end": 522,
+    "children": []
+   },
+   {
+    "title": "Unknown subcommand fallback",
+    "start": 524,
+    "end": 526,
+    "children": []
+   }
+  ]
+ }
+]
+```

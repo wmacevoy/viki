@@ -1,0 +1,181 @@
+```json
+[
+ {
+  "title": "File header and includes",
+  "start": 1,
+  "end": 27,
+  "children": [
+   {"title": "Header comment", "start": 1, "end": 10, "children": []},
+   {"title": "Includes", "start": 11, "end": 25, "children": []},
+   {"title": "Version macro", "start": 27, "end": 27, "children": []}
+  ]
+ },
+ {
+  "title": "usage()",
+  "start": 29,
+  "end": 120,
+  "children": [
+   {"title": "Usage header", "start": 30, "end": 31, "children": []},
+   {"title": "index and ask docs", "start": 32, "end": 44, "children": []},
+   {"title": "cache push/pull docs", "start": 45, "end": 54, "children": []},
+   {"title": "muse docs", "start": 55, "end": 67, "children": []},
+   {"title": "grep docs", "start": 68, "end": 77, "children": []},
+   {"title": "capture docs", "start": 78, "end": 83, "children": []},
+   {"title": "structure docs", "start": 84, "end": 94, "children": []},
+   {"title": "notes docs", "start": 95, "end": 104, "children": []},
+   {"title": "serve, version, help docs", "start": 105, "end": 111, "children": []},
+   {"title": "Cache db and model directory notes", "start": 112, "end": 119, "children": []}
+  ]
+ },
+ {
+  "title": "Helpers",
+  "start": 122,
+  "end": 154,
+  "children": [
+   {"title": "open_embedder_if_available()", "start": 122, "end": 137, "children": []},
+   {"title": "ensure_viki_dir()", "start": 139, "end": 154, "children": []}
+  ]
+ },
+ {
+  "title": "main()",
+  "start": 156,
+  "end": 527,
+  "children": [
+   {
+    "title": "Setup and early exits",
+    "start": 157,
+    "end": 180,
+    "children": [
+     {"title": "Shutdown hook registration", "start": 160, "end": 166, "children": []},
+     {"title": "Argument check", "start": 168, "end": 169, "children": []},
+     {"title": "version and help", "start": 171, "end": 178, "children": []},
+     {"title": "ndvss registration", "start": 180, "end": 180, "children": []}
+    ]
+   },
+   {
+    "title": "index subcommand",
+    "start": 182,
+    "end": 202,
+    "children": [
+     {"title": "Parse --since", "start": 185, "end": 193, "children": []},
+     {"title": "Open cache and embedder", "start": 194, "end": 197, "children": []},
+     {"title": "Run index and clean up", "start": 198, "end": 201, "children": []}
+    ]
+   },
+   {
+    "title": "ask subcommand",
+    "start": 204,
+    "end": 223,
+    "children": [
+     {"title": "Option parsing", "start": 207, "end": 215, "children": []},
+     {"title": "Open and run", "start": 216, "end": 222, "children": []}
+    ]
+   },
+   {
+    "title": "capture subcommand",
+    "start": 225,
+    "end": 240,
+    "children": [
+     {"title": "Option parsing", "start": 226, "end": 236, "children": []},
+     {"title": "Offline capture call", "start": 237, "end": 239, "children": []}
+    ]
+   },
+   {
+    "title": "structure subcommand",
+    "start": 242,
+    "end": 280,
+    "children": [
+     {"title": "Option parsing", "start": 244, "end": 265, "children": []},
+     {"title": "Usage validation", "start": 266, "end": 271, "children": []},
+     {"title": "Open db and dispatch", "start": 272, "end": 279, "children": []}
+    ]
+   },
+   {
+    "title": "notes subcommand",
+    "start": 282,
+    "end": 322,
+    "children": [
+     {"title": "Option parsing", "start": 284, "end": 305, "children": []},
+     {"title": "Open db", "start": 306, "end": 307, "children": []},
+     {"title": "Filter struct and query", "start": 308, "end": 319, "children": []},
+     {"title": "Close", "start": 320, "end": 321, "children": []}
+    ]
+   },
+   {
+    "title": "grep subcommand",
+    "start": 324,
+    "end": 353,
+    "children": [
+     {"title": "Option parsing", "start": 328, "end": 342, "children": []},
+     {"title": "Open db and register regexp", "start": 343, "end": 349, "children": []},
+     {"title": "Run grep", "start": 350, "end": 352, "children": []}
+    ]
+   },
+   {
+    "title": "muse subcommand",
+    "start": 355,
+    "end": 409,
+    "children": [
+     {
+      "title": "Option parsing",
+      "start": 364,
+      "end": 403,
+      "children": [
+       {"title": "Simple options", "start": 369, "end": 373, "children": []},
+       {"title": "--bias", "start": 374, "end": 381, "children": []},
+       {"title": "--same-source", "start": 382, "end": 382, "children": []},
+       {"title": "--from seed parsing", "start": 383, "end": 398, "children": []},
+       {"title": "Unknown option error", "start": 399, "end": 402, "children": []}
+      ]
+     },
+     {"title": "Open db and run", "start": 404, "end": 408, "children": []}
+    ]
+   },
+   {
+    "title": "serve subcommand",
+    "start": 411,
+    "end": 429,
+    "children": []
+   },
+   {
+    "title": "cache subcommand",
+    "start": 431,
+    "end": 450,
+    "children": [
+     {"title": "Flag vs path parsing", "start": 432, "end": 444, "children": []},
+     {"title": "Dispatch push/pull", "start": 445, "end": 449, "children": []}
+    ]
+   },
+   {
+    "title": "fossilsee-status debug command",
+    "start": 452,
+    "end": 461,
+    "children": []
+   },
+   {
+    "title": "ndvss-selftest debug command",
+    "start": 463,
+    "end": 482,
+    "children": []
+   },
+   {
+    "title": "embed-selftest debug command",
+    "start": 484,
+    "end": 522,
+    "children": [
+     {"title": "Open model", "start": 492, "end": 501, "children": []},
+     {"title": "Embed test sentences", "start": 503, "end": 509, "children": []},
+     {"title": "Compute and report cosines", "start": 511, "end": 514, "children": []},
+     {"title": "Pass/fail verdict", "start": 516, "end": 521, "children": []}
+    ]
+   },
+   {
+    "title": "Unknown subcommand fallback",
+    "start": 524,
+    "end": 526,
+    "children": []
+   }
+  ]
+ }
+]
+```

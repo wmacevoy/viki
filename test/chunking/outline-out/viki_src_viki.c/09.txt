@@ -1,0 +1,188 @@
+```json
+[
+  {
+    "title": "Module overview",
+    "start": 1,
+    "end": 10,
+    "children": []
+  },
+  {
+    "title": "Includes and constants",
+    "start": 11,
+    "end": 28,
+    "children": []
+  },
+  {
+    "title": "Usage text",
+    "start": 30,
+    "end": 141,
+    "children": []
+  },
+  {
+    "title": "Embedder and directory helpers",
+    "start": 143,
+    "end": 175,
+    "children": [
+      {
+        "title": "open_embedder_if_available",
+        "start": 143,
+        "end": 158,
+        "children": []
+      },
+      {
+        "title": "ensure_viki_dir",
+        "start": 160,
+        "end": 175,
+        "children": []
+      }
+    ]
+  },
+  {
+    "title": "main and subcommand dispatch",
+    "start": 177,
+    "end": 674,
+    "children": [
+      {
+        "title": "Argument check, version and help",
+        "start": 181,
+        "end": 200,
+        "children": []
+      },
+      {
+        "title": "index",
+        "start": 204,
+        "end": 224,
+        "children": []
+      },
+      {
+        "title": "ask",
+        "start": 226,
+        "end": 264,
+        "children": [
+          {
+            "title": "ask --verse across registered projects",
+            "start": 239,
+            "end": 256,
+            "children": []
+          },
+          {
+            "title": "ask over the local cache",
+            "start": 257,
+            "end": 263,
+            "children": []
+          }
+        ]
+      },
+      {
+        "title": "capture",
+        "start": 266,
+        "end": 281,
+        "children": []
+      },
+      {
+        "title": "structure",
+        "start": 283,
+        "end": 321,
+        "children": []
+      },
+      {
+        "title": "promises",
+        "start": 323,
+        "end": 339,
+        "children": []
+      },
+      {
+        "title": "sql",
+        "start": 341,
+        "end": 352,
+        "children": []
+      },
+      {
+        "title": "coverage",
+        "start": 354,
+        "end": 363,
+        "children": []
+      },
+      {
+        "title": "why",
+        "start": 365,
+        "end": 373,
+        "children": []
+      },
+      {
+        "title": "notes",
+        "start": 375,
+        "end": 415,
+        "children": []
+      },
+      {
+        "title": "grep",
+        "start": 417,
+        "end": 446,
+        "children": []
+      },
+      {
+        "title": "muse",
+        "start": 448,
+        "end": 502,
+        "children": [
+          {
+            "title": "muse --from hash parsing",
+            "start": 476,
+            "end": 491,
+            "children": []
+          }
+        ]
+      },
+      {
+        "title": "serve",
+        "start": 504,
+        "end": 522,
+        "children": []
+      },
+      {
+        "title": "cache push and pull",
+        "start": 524,
+        "end": 556,
+        "children": []
+      },
+      {
+        "title": "calendar",
+        "start": 558,
+        "end": 580,
+        "children": []
+      },
+      {
+        "title": "fts-query",
+        "start": 582,
+        "end": 597,
+        "children": []
+      },
+      {
+        "title": "fossilsee-status",
+        "start": 599,
+        "end": 608,
+        "children": []
+      },
+      {
+        "title": "ndvss-selftest",
+        "start": 610,
+        "end": 629,
+        "children": []
+      },
+      {
+        "title": "embed-selftest",
+        "start": 631,
+        "end": 669,
+        "children": []
+      },
+      {
+        "title": "Unknown subcommand fallback",
+        "start": 671,
+        "end": 673,
+        "children": []
+      }
+    ]
+  }
+]
+```

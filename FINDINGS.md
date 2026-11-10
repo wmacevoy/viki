@@ -12,6 +12,107 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## An outline judged by Sonnet, told to keep the previous outline, dedupes code as well as content-defined chunking, and names its concepts
+
+2026-11-10, the same 12 versions of three files as the entry below. Warren: "instead of a size, can
+you ask for an outline? chunks can be every outline level. i'm not sure size is important ---
+concept is." Then: "how about asking sonnet instead." and "give it the previous version and outline
+and ask it to prefer to leave the outline the same, but change it to reflect changes in structure or
+whole cloth edits." `test/chunking/outline.py` regenerates all four arms from the cached answers in
+`test/chunking/outline-out`.
+
+Every outline level is a chunk, so storage is a tree: a leaf stores its bytes, and a parent stores
+its children's hashes and the text between them. An unchanged section is one shared hash. Written
+before the run: the claim fails if stored bytes exceed line-anchored CDC's on two of the three files.
+
+Stored KB, with concepts kept (the fraction of a version's node titles also in the previous one):
+
+| arm | viki/src/viki.c | puck ble.c | puck docs/HANDOFF.md |
+|---|---|---|---|
+| CDC lines ~16 (entry below) | 74 | 92 | 155 |
+| CDC bytes ~1 KB (entry below) | 81 | 102 | 106 |
+| Haiku outline, each version alone | 126, 0.36 | 178, 0.20 | 228, 0.34 |
+| Haiku, the old outline moved through a diff, changed nodes flagged | 110, 0.90 | 107, 0.88 | 106, 0.90 |
+| Haiku, Warren's protocol | 102, 0.97 | 110, 0.98 | 140, 0.96 |
+| **Sonnet, Warren's protocol** | **72, 0.99** | **89, 0.97** | 129, 0.96 |
+
+- An outline judged alone is worse than any size-cut. Re-judged, Haiku rewords titles ("Includes"
+  becomes "Includes and version"), regroups ("Embedder and cache directory helpers" appears), and
+  changes depth. Each of those changes a hash.
+- Warren's protocol: the judge sees the previous version, its outline and the new version, and is
+  asked to prefer the same outline. That keeps concepts with either model. Only Sonnet also
+  dedupes: it beats CDC-lines on all three files, and byte-CDC on the two code files.
+- Sonnet's outlines are about twice as deep (128 nodes per version against Haiku's 49) and
+  accurate: of 77 nodes in viki.c's last outline, none starts on a blank line or a closing brace.
+  The concepts are the ones a reader would name: each subcommand, and within it option parsing,
+  opening the cache, running the command.
+- 1 unparseable answer in 33 (Sonnet), 0 (Haiku). An unparseable answer kept the previous outline.
+
+**Limits:** three files and 12 versions each. Each update call carries two whole versions of the
+file, so a file the size of FINDINGS.md (237 KB) would need its own protocol. Storage costs are
+assumed, as below. Haiku started both of its arms from one first outline, and Sonnet from its own.
+
+**What it changed:** nothing yet. It is the evidence for a judged outline: one assertion per
+version, which both names concepts and sets storage.
+
+---
+## Structure does not dedupe code much better than content-defined chunking, and a judge that re-cuts every version dedupes worse
+
+2026-11-10. Warren: "dedup from these are likely structural --- much more efficient for code. can
+you test this?" Tested on every text file version in viki (31fcae5) and the puck (34b4cf3), and
+then with claude-haiku-5-5 on the last 12 versions of three files. Stored = distinct chunk bytes +
+32 bytes per chunk reference per version + 48 bytes per distinct chunk. `test/chunking/dedupe.py`
+and `test/chunking/haiku.py` regenerate both tables. The Haiku answers are cached there, so the
+second table needs no calls.
+
+Written before the runs: the claim fails if structural stores no less than line-anchored
+content-defined chunking (CDC) on code.
+
+**Rule-based structure, whole sprawl, stored MB (fraction of whole bodies):**
+
+| cut | code (1,202 versions) | markdown (793) |
+|---|---|---|
+| whole body | 14.71 (1.00) | 25.09 (1.00) |
+| 40-line windows | 11.39 (0.77) | 13.57 (0.54) |
+| CDC bytes ~1 KB | 6.29 (0.43) | 4.70 (0.19) |
+| CDC lines ~16 | 6.16 (0.42) | 5.19 (0.21) |
+| structural (top-level blocks) | 7.44 (0.51) | 6.49 (0.26) |
+| structural, blocks over 40 lines cut by CDC | **5.88 (0.40)** | 6.03 (0.24) |
+| markdown by headings, capped 40 | (same as above) | 4.73 (0.19) |
+| per line | 17.81 (1.21) | 17.57 (0.70) |
+
+Uncapped, structure loses: one edit in a long function stores the whole function again. Capped, it
+wins on code by 5% and ties on markdown. Per-line dedupe has the fewest distinct bytes and the most
+stored, because its references cost more than it saves.
+
+**A judge (Haiku) on 12 versions each, stored KB:**
+
+| file | CDC lines | structural capped | Haiku, each version judged alone | Haiku, carried forward |
+|---|---|---|---|---|
+| viki/src/viki.c | 74 | 72 | 151 | 74 |
+| puck ble.c | 92 | 95 | 154 | 107 |
+| puck docs/HANDOFF.md | 155 (bytes CDC: 106) | 138 | 143 | 102 |
+
+Judged alone, Haiku kept only 83 to 88% of its code boundaries on lines whose text had not changed,
+and every boundary that moves stores chunks again. "Carried forward" is simulated from the same
+answers: the previous version's boundaries are mapped through a line diff, and the judge's
+boundaries are used only inside changed regions. That matches CDC on viki.c, beats it on the
+markdown file, and loses on ble.c. Its chunk count also grows from version to version (HANDOFF.md:
+18 judged, 64 carried), because every changed region adds boundaries and none are removed.
+
+**What it means.** Storage dedupe is set by how small chunks are near an edit, and by whether
+boundaries stay put. CDC gets both for nothing. Structure is not much more efficient for code: it is
+about as efficient once long units are cut. A judge is as efficient only if it never re-cuts
+unchanged text. So judged ranges and storage chunks are different jobs: what a judge adds is meaning
+(units a reader would name), not bytes saved.
+
+**Limits:** three files, 12 versions each, one prompt with a "5 to 60 lines" hint that shaped the
+answers; the reference and row costs are assumed, not measured in SQLite; compression and git-style
+delta encoding were not compared.
+
+**What it changed:** nothing in viki yet. It is the evidence for the next design decision.
+
+---
 ## An FTS5 `contentless_delete` table keeps an erased row's words, even with secure-delete
 
 2026-11-10, SQLite 3.53.1 (SQLCipher-LibreSSL v2.2.0). The plan for viki's bm25

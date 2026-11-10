@@ -52,6 +52,11 @@ class Scratch:
         r = subprocess.run(VK + ["--store", self.store, "--plaintext", *args], capture_output=True, text=True)
         return r.returncode, r.stdout + r.stderr
 
+    def vk_bare(self, *args):
+        """vk.py with exactly these arguments: no --store or --plaintext added."""
+        r = subprocess.run(VK + list(args), capture_output=True, text=True)
+        return r.returncode, r.stdout + r.stderr
+
     def close(self):
         shutil.rmtree(self.root)
 
@@ -229,6 +234,50 @@ def t_q6(s):
     check(len([ln for ln in out.splitlines() if ln.startswith("file  ")]) == 1 and "shown 1 of" in out, "--k truncates and says so", out)
 
 
+def t_n7(s):
+    a = s.repo("alpha")
+    s.write(a, "x.txt", "keyed-marker text\n")
+    s.commit(a, "one")
+    key, other, loose = (os.path.join(s.root, n) for n in ("diary.key", "other.key", "loose.key"))
+    rc, out = s.vk_bare("keygen", key)
+    check(rc == 0 and (os.stat(key).st_mode & 0o777) == 0o600, "keygen writes a mode-600 key", out)
+    rc, out = s.vk_bare("keygen", key)
+    check(rc == 2 and "refusing to overwrite" in out, "keygen never overwrites a key", out)
+    s.vk_bare("keygen", other)
+    diary = os.path.join(s.root, "keyed.db")
+    rc, out = s.vk_bare("--store", diary, "--keyfile", key, "ingest-git", a)
+    check(rc == 0 and "1 commits read" in out, "a keyed diary is written", out)
+    with open(diary, "rb") as f:
+        head = f.read(4096)
+    check(not head.startswith(b"SQLite format 3") and b"keyed-marker" not in head, "its file is not plaintext")
+    with open(s.store, "wb"):
+        pass
+    s.vk("ingest-git", a)                         # the control: the same repository, --plaintext
+    with open(s.store, "rb") as f:
+        check(f.read(16) == b"SQLite format 3\x00", "the control diary is plaintext")
+    rc, out = s.vk_bare("--store", diary, "--keyfile", key, "grep", "keyed-marker")
+    check(rc == 0 and ":x.txt" in out, "the same key reads it back", out)
+    rc, out = s.vk_bare("--store", diary, "--keyfile", other, "grep", "keyed-marker")
+    check(rc == 2 and "wrong key, or not a diary" in out and "Traceback" not in out, "a wrong key is refused plainly", out)
+    rc, out = s.vk_bare("--store", diary, "--plaintext", "grep", "keyed-marker")
+    check(rc == 2 and "wrong key, or not a diary" in out, "--plaintext cannot read a keyed diary", out)
+    rc, out = s.vk_bare("--store", diary, "grep", "keyed-marker")
+    check(rc == 2 and "without a key" in out, "no key and no --plaintext is refused", out)
+    with open(loose, "w") as f:
+        f.write("ab" * 32 + "\n")
+    os.chmod(loose, 0o644)
+    fresh = os.path.join(s.root, "fresh.db")
+    rc, out = s.vk_bare("--store", fresh, "--keyfile", loose, "coverage")
+    check(rc == 2 and "group/world accessible" in out and not os.path.exists(fresh),
+          "a key others can read is refused before any diary is made", out)
+    os.chmod(loose, 0o600)
+    with open(loose, "w") as f:
+        f.write("correct horse battery staple\n")
+    rc, out = s.vk_bare("--store", fresh, "--keyfile", loose, "coverage")
+    check(rc == 2 and "does not hold a raw key" in out and "correct horse" not in out,
+          "a passphrase is refused, and not echoed", out)
+
+
 def main():
     sys.path.insert(0, HERE)
     run("SCM-1", "a repository's history goes in once, every branch and tag", t_scm1)
@@ -238,7 +287,8 @@ def main():
     run("SCM-5", "holdout paths are refused whatever the rules; ignored paths stay out", t_scm5)
     run("Q-4", "each hit says current, superseded, or one head of a fork", t_q4)
     run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
-    print(f"{failed} of 7 failed")
+    run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
+    print(f"{failed} of 8 failed")
     return failed != 0
 
 

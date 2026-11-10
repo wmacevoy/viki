@@ -1,0 +1,159 @@
+```json
+[
+  {"title": "If you are an agent: read this first", "start": 5, "end": 17, "children": [
+    {"title": "Read the docs in order", "start": 7, "end": 13, "children": []},
+    {"title": "Check the latest commit trailers", "start": 14, "end": 16, "children": []},
+    {"title": "Say you are a successor in commits", "start": 17, "end": 17, "children": []}
+  ]},
+  {"title": "Rules", "start": 19, "end": 35, "children": [
+    {"title": "master is always green", "start": 21, "end": 24, "children": []},
+    {"title": "Commit trailers", "start": 25, "end": 33, "children": []},
+    {"title": "Update the work queue", "start": 34, "end": 34, "children": []},
+    {"title": "No GPL code, no changes to SQLCipher src", "start": 35, "end": 35, "children": []}
+  ]},
+  {"title": "Work queue", "start": 37, "end": 80, "children": [
+    {"title": "R1 envelope update can destroy the key", "start": 44, "end": 44, "children": []},
+    {"title": "R1b recovery wrap", "start": 45, "end": 45, "children": []},
+    {"title": "R6 host fault-injection block device", "start": 46, "end": 46, "children": []},
+    {"title": "R4 durability", "start": 47, "end": 47, "children": []},
+    {"title": "R5 preallocation and zero fill", "start": 48, "end": 48, "children": []},
+    {"title": "R2 and R3 isolation of Python and the query path", "start": 49, "end": 49, "children": []},
+    {"title": "R9 integrity model", "start": 50, "end": 50, "children": []},
+    {"title": "R11 narrow claims and compatibility tests", "start": 51, "end": 51, "children": []},
+    {"title": "R7 and R8 sync cursor and time trust", "start": 52, "end": 52, "children": []},
+    {"title": "Platform work", "start": 53, "end": 53, "children": []},
+    {"title": "R10 and R12-R16", "start": 54, "end": 54, "children": []},
+    {"title": "Door sensor demo", "start": 55, "end": 55, "children": []},
+    {"title": "Zephyr refactor design note", "start": 56, "end": 56, "children": []},
+    {"title": "Zephyr port step 2", "start": 57, "end": 57, "children": []},
+    {"title": "Zephyr refactor step 4: lwext4-bsd as a filesystem", "start": 58, "end": 58, "children": []},
+    {"title": "Refactor step 1: power sweep", "start": 59, "end": 59, "children": []},
+    {"title": "Door sensor and HAT on the LP core", "start": 60, "end": 60, "children": []},
+    {"title": "FTS now and UDP binding", "start": 61, "end": 61, "children": []},
+    {"title": "Power save on battery by default", "start": 62, "end": 62, "children": []},
+    {"title": "R1 as done, and what is left of it", "start": 64, "end": 80, "children": [
+      {"title": "puck_fs_write_file keeps a complete copy", "start": 66, "end": 68, "children": []},
+      {"title": "puck_envelope.c", "start": 69, "end": 72, "children": []},
+      {"title": "crash.sh power-cut tests", "start": 73, "end": 75, "children": []},
+      {"title": "Recovery wrap", "start": 76, "end": 80, "children": []}
+    ]}
+  ]},
+  {"title": "Environment (pinned)", "start": 82, "end": 92, "children": [
+    {"title": "SQLCipher and SQLite", "start": 86, "end": 86, "children": []},
+    {"title": "lwext4-bsd", "start": 87, "end": 87, "children": []},
+    {"title": "ESP-IDF", "start": 88, "end": 88, "children": []},
+    {"title": "Zephyr", "start": 89, "end": 89, "children": []},
+    {"title": "Host crypto", "start": 90, "end": 90, "children": []},
+    {"title": "Emulator", "start": 91, "end": 91, "children": []},
+    {"title": "Docker test image for ext4 checks", "start": 92, "end": 92, "children": []}
+  ]},
+  {"title": "Tests", "start": 94, "end": 112, "children": [
+    {"title": "Host compat, LibreSSL", "start": 98, "end": 98, "children": []},
+    {"title": "Host compat, PSA", "start": 99, "end": 99, "children": []},
+    {"title": "Host crash, recovery and fault tests", "start": 100, "end": 100, "children": []},
+    {"title": "Roughtime client", "start": 101, "end": 101, "children": []},
+    {"title": "Door sensor detection tests", "start": 102, "end": 102, "children": []},
+    {"title": "Power sweep schedule", "start": 103, "end": 103, "children": []},
+    {"title": "FTS client", "start": 104, "end": 104, "children": []},
+    {"title": "lwext4-bsd", "start": 105, "end": 105, "children": []},
+    {"title": "C6 emulator", "start": 106, "end": 106, "children": []},
+    {"title": "P4 emulator", "start": 107, "end": 107, "children": []},
+    {"title": "P4 board build", "start": 108, "end": 108, "children": []},
+    {"title": "Zephyr spike, native", "start": 109, "end": 109, "children": []},
+    {"title": "Zephyr spike, rev-1.3 board", "start": 110, "end": 110, "children": []},
+    {"title": "Zephyr spike, P4 emulator", "start": 111, "end": 111, "children": []},
+    {"title": "ext4 as a Zephyr filesystem", "start": 112, "end": 112, "children": []}
+  ]},
+  {"title": "Hardware", "start": 114, "end": 142, "children": [
+    {"title": "Board and USB port", "start": 116, "end": 117, "children": []},
+    {"title": "Installing esptool", "start": 118, "end": 120, "children": []},
+    {"title": "Self-test timing after boot", "start": 121, "end": 122, "children": []},
+    {"title": "Quiet console during verify", "start": 123, "end": 123, "children": []},
+    {"title": "Always use --no-stub", "start": 124, "end": 126, "children": []},
+    {"title": "Never burn eFuses", "start": 127, "end": 129, "children": []},
+    {"title": "C6 firmware", "start": 130, "end": 132, "children": []},
+    {"title": "Throughput breakdown", "start": 133, "end": 134, "children": []},
+    {"title": "Journal batching is off", "start": 135, "end": 136, "children": []},
+    {"title": "Zephyr on the board", "start": 137, "end": 138, "children": []},
+    {"title": "Board state now", "start": 139, "end": 140, "children": []},
+    {"title": "Next on hardware", "start": 141, "end": 142, "children": []}
+  ]},
+  {"title": "Wi-Fi and the power HAT", "start": 144, "end": 156, "children": [
+    {"title": "Wi-Fi credentials", "start": 146, "end": 146, "children": []},
+    {"title": "Wi-Fi build", "start": 147, "end": 149, "children": []},
+    {"title": "LiFePO4wered HAT", "start": 150, "end": 153, "children": [
+      {"title": "HAT power", "start": 151, "end": 151, "children": []},
+      {"title": "HAT registers", "start": 152, "end": 152, "children": []},
+      {"title": "Never write CFG_WRITE", "start": 153, "end": 153, "children": []}
+    ]},
+    {"title": "Running from the HAT", "start": 154, "end": 155, "children": []},
+    {"title": "Next HAT steps", "start": 156, "end": 156, "children": []}
+  ]},
+  {"title": "Power", "start": 158, "end": 186, "children": [
+    {"title": "Measured states", "start": 163, "end": 167, "children": []},
+    {"title": "Power save", "start": 169, "end": 175, "children": []},
+    {"title": "Sleep-safe pads", "start": 177, "end": 178, "children": []},
+    {"title": "The ~80 mA floor", "start": 179, "end": 181, "children": []},
+    {"title": "Measuring again", "start": 182, "end": 186, "children": []}
+  ]},
+  {"title": "Door sensor (Grid-EYE)", "start": 188, "end": 205, "children": [
+    {"title": "Hardware", "start": 190, "end": 192, "children": []},
+    {"title": "Build", "start": 193, "end": 194, "children": []},
+    {"title": "Mounting and orientation", "start": 195, "end": 201, "children": []},
+    {"title": "Seeing detections", "start": 202, "end": 204, "children": []},
+    {"title": "One person at a time", "start": 205, "end": 205, "children": []}
+  ]},
+  {"title": "Door sensor and HAT on the LP core", "start": 207, "end": 251, "children": [
+    {"title": "Design", "start": 209, "end": 216, "children": []},
+    {"title": "Build", "start": 218, "end": 220, "children": []},
+    {"title": "Expected console output", "start": 221, "end": 227, "children": []},
+    {"title": "Direct boot fallback", "start": 228, "end": 230, "children": []},
+    {"title": "Failure fallback", "start": 231, "end": 232, "children": []},
+    {"title": "Morning steps", "start": 234, "end": 251, "children": [
+      {"title": "Hand swipes", "start": 236, "end": 239, "children": []},
+      {"title": "Check the door rows", "start": 240, "end": 241, "children": []},
+      {"title": "Button shutdown through the LP core", "start": 242, "end": 245, "children": []},
+      {"title": "Running from the HAT alone", "start": 246, "end": 250, "children": []},
+      {"title": "Record the results", "start": 251, "end": 251, "children": []}
+    ]}
+  ]},
+  {"title": "Reset torture", "start": 253, "end": 258, "children": [
+    {"title": "Torture configuration", "start": 255, "end": 256, "children": []},
+    {"title": "Results", "start": 257, "end": 258, "children": []}
+  ]},
+  {"title": "BLE demo", "start": 260, "end": 271, "children": [
+    {"title": "Build", "start": 262, "end": 264, "children": []},
+    {"title": "Laptop tools", "start": 265, "end": 266, "children": []},
+    {"title": "Demo grade limits", "start": 267, "end": 267, "children": []},
+    {"title": "Setting the time", "start": 268, "end": 269, "children": []},
+    {"title": "Serial port name", "start": 270, "end": 270, "children": []},
+    {"title": "Time servers pointer", "start": 271, "end": 271, "children": []}
+  ]},
+  {"title": "Our time server (fts.vikiverse.net)", "start": 273, "end": 294, "children": [
+    {"title": "Server identity table", "start": 278, "end": 284, "children": [
+      {"title": "Host", "start": 280, "end": 280, "children": []},
+      {"title": "Ports", "start": 281, "end": 281, "children": []},
+      {"title": "Key", "start": 282, "end": 282, "children": []},
+      {"title": "Clock", "start": 283, "end": 283, "children": []},
+      {"title": "Access", "start": 284, "end": 284, "children": []}
+    ]},
+    {"title": "Logs", "start": 286, "end": 286, "children": []},
+    {"title": "Updating the code", "start": 287, "end": 288, "children": []},
+    {"title": "The key file", "start": 289, "end": 290, "children": []},
+    {"title": "Checks from a laptop", "start": 291, "end": 292, "children": []},
+    {"title": "Local test server", "start": 293, "end": 294, "children": []}
+  ]},
+  {"title": "Gotchas", "start": 296, "end": 307, "children": [
+    {"title": "Zephyr HAL defines ESP_PLATFORM", "start": 298, "end": 298, "children": []},
+    {"title": "Zephyr user mode does not build for rev 1.3", "start": 299, "end": 299, "children": []},
+    {"title": "Zephyr rev-1.3 images do not run in esp-emu", "start": 300, "end": 300, "children": []},
+    {"title": "Zephyr image at 0x2000 overwrites partition table and NVS", "start": 301, "end": 301, "children": []},
+    {"title": "eFuse KEK test burns a key", "start": 302, "end": 302, "children": []},
+    {"title": "esp-emu limits", "start": 303, "end": 303, "children": []},
+    {"title": "Short Unix socket paths", "start": 304, "end": 304, "children": []},
+    {"title": "Disk space for builds and Docker caches", "start": 305, "end": 305, "children": []},
+    {"title": "Agent worktrees", "start": 306, "end": 306, "children": []},
+    {"title": "puck_ble.py needs bleak", "start": 307, "end": 307, "children": []}
+  ]}
+]
+```

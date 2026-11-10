@@ -1,0 +1,59 @@
+[
+ {"title": "Module header comment", "start": 1, "end": 10, "children": []},
+ {"title": "Includes and version constant", "start": 11, "end": 27, "children": []},
+ {"title": "Blank line", "start": 28, "end": 28, "children": []},
+ {"title": "usage() help text", "start": 29, "end": 136, "children": []},
+ {"title": "Blank line", "start": 137, "end": 137, "children": []},
+ {"title": "Model directory and embedder opening", "start": 138, "end": 153, "children": []},
+ {"title": "Blank line", "start": 154, "end": 154, "children": []},
+ {"title": "Cache directory creation", "start": 155, "end": 170, "children": [
+  {"title": "Existing .viki check", "start": 155, "end": 157, "children": []},
+  {"title": "0700 permission rationale", "start": 158, "end": 164, "children": []},
+  {"title": "Create .viki directory", "start": 165, "end": 169, "children": []}
+ ]},
+ {"title": "Blank line", "start": 171, "end": 171, "children": []},
+ {"title": "main() subcommand dispatch", "start": 172, "end": 614, "children": [
+  {"title": "Function header and declarations", "start": 172, "end": 175, "children": []},
+  {"title": "Exit hook, version and help", "start": 176, "end": 194, "children": []},
+  {"title": "Register sqlite-ndvss", "start": 196, "end": 196, "children": []},
+  {"title": "index subcommand", "start": 198, "end": 218, "children": []},
+  {"title": "ask subcommand", "start": 220, "end": 258, "children": [
+    {"title": "Declarations and usage check", "start": 221, "end": 227, "children": []},
+    {"title": "Option parsing (--verse, --k, --min-cos)", "start": 228, "end": 232, "children": []},
+    {"title": "Verse ask across all registered projects", "start": 233, "end": 250, "children": [
+      {"title": "Registry path from VIKI_VERSE or HOME", "start": 238, "end": 245, "children": []},
+      {"title": "Verse embedder open and ask", "start": 246, "end": 249, "children": []}
+    ]},
+    {"title": "Local cache ask", "start": 251, "end": 257, "children": [
+      {"title": "Open cache and embedder", "start": 251, "end": 253, "children": []},
+      {"title": "Local ask and cleanup", "start": 254, "end": 257, "children": []}
+    ]}
+  ]},
+  {"title": "capture subcommand", "start": 260, "end": 275, "children": []},
+  {"title": "structure subcommand", "start": 277, "end": 315, "children": []},
+  {"title": "promises subcommand", "start": 317, "end": 333, "children": [
+    {"title": "Identity and option parsing", "start": 318, "end": 327, "children": []},
+    {"title": "Ledger query and cleanup", "start": 328, "end": 332, "children": []}
+  ]},
+  {"title": "sql subcommand", "start": 335, "end": 346, "children": [
+    {"title": "Declarations and usage check", "start": 336, "end": 342, "children": []},
+    {"title": "Option parsing (--json)", "start": 343, "end": 343, "children": []},
+    {"title": "Run read-only query", "start": 344, "end": 345, "children": []}
+  ]},
+  {"title": "coverage subcommand", "start": 348, "end": 357, "children": [
+    {"title": "Declarations and option parsing (--json)", "start": 349, "end": 351, "children": []},
+    {"title": "Open cache and report", "start": 352, "end": 356, "children": []}
+  ]},
+  {"title": "why subcommand", "start": 359, "end": 367, "children": []},
+  {"title": "notes subcommand", "start": 369, "end": 409, "children": []},
+  {"title": "grep subcommand", "start": 411, "end": 440, "children": []},
+  {"title": "muse subcommand", "start": 442, "end": 496, "children": []},
+  {"title": "serve subcommand", "start": 498, "end": 516, "children": []},
+  {"title": "cache push and pull subcommand", "start": 518, "end": 537, "children": []},
+  {"title": "fossilsee-status debug command", "start": 539, "end": 548, "children": []},
+  {"title": "ndvss-selftest debug command", "start": 550, "end": 569, "children": []},
+  {"title": "embed-selftest debug command", "start": 571, "end": 609, "children": []},
+  {"title": "Unknown subcommand fallback", "start": 611, "end": 613, "children": []},
+  {"title": "Function end", "start": 614, "end": 614, "children": []}
+ ]}
+]

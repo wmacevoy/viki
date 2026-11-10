@@ -1,0 +1,105 @@
+[
+{"title": "Hand-off", "start": 1, "end": 3, "children": []},
+{"title": "If you are an agent: read this first", "start": 5, "end": 17, "children": [
+  {"title": "Reading order", "start": 11, "end": 13, "children": []},
+  {"title": "Checking the commit trailers", "start": 14, "end": 16, "children": []},
+  {"title": "Identifying yourself as a successor", "start": 17, "end": 17, "children": []}
+]},
+{"title": "Rules", "start": 19, "end": 35, "children": [
+  {"title": "Keeping master green", "start": 21, "end": 24, "children": []},
+  {"title": "Commit trailers", "start": 25, "end": 33, "children": []},
+  {"title": "Updating the work queue", "start": 34, "end": 34, "children": []},
+  {"title": "No GPL code and no SQLCipher src changes", "start": 35, "end": 35, "children": []}
+]},
+{"title": "Where things stand", "start": 37, "end": 48, "children": [
+  {"title": "Board state", "start": 39, "end": 41, "children": []},
+  {"title": "Next steps in order of value", "start": 42, "end": 45, "children": []},
+  {"title": "Unmerged branches", "start": 46, "end": 48, "children": []}
+]},
+{"title": "Repository layout", "start": 50, "end": 60, "children": []},
+{"title": "Work queue", "start": 62, "end": 109, "children": [
+  {"title": "Work item table", "start": 64, "end": 91, "children": []},
+  {"title": "R1 as done, and what is left", "start": 93, "end": 109, "children": [
+    {"title": "Atomic file write with fallback", "start": 95, "end": 97, "children": []},
+    {"title": "Portable envelope code", "start": 98, "end": 101, "children": []},
+    {"title": "crash.sh power-cut tests", "start": 102, "end": 104, "children": []},
+    {"title": "Recovery wrap", "start": 105, "end": 109, "children": []}
+  ]}
+]},
+{"title": "Environment (pinned)", "start": 111, "end": 121, "children": []},
+{"title": "Tests", "start": 123, "end": 142, "children": []},
+{"title": "Hardware", "start": 144, "end": 172, "children": [
+  {"title": "Board", "start": 146, "end": 147, "children": []},
+  {"title": "Flashing with esptool", "start": 148, "end": 156, "children": []},
+  {"title": "Safety rules", "start": 157, "end": 159, "children": []},
+  {"title": "C6 firmware", "start": 160, "end": 162, "children": []},
+  {"title": "Diagnostics", "start": 163, "end": 166, "children": []},
+  {"title": "Zephyr on the board", "start": 167, "end": 168, "children": []},
+  {"title": "Current board state and next steps", "start": 169, "end": 172, "children": []}
+]},
+{"title": "Wi-Fi and the power HAT", "start": 174, "end": 186, "children": [
+  {"title": "Credentials and build", "start": 176, "end": 179, "children": []},
+  {"title": "HAT power rules", "start": 180, "end": 183, "children": []},
+  {"title": "Running from the HAT", "start": 184, "end": 185, "children": []},
+  {"title": "Next HAT work", "start": 186, "end": 186, "children": []}
+]},
+{"title": "Power", "start": 188, "end": 216, "children": [
+  {"title": "Measurements", "start": 190, "end": 197, "children": []},
+  {"title": "Power save", "start": 199, "end": 205, "children": []},
+  {"title": "Sleep-safe pads", "start": 206, "end": 208, "children": []},
+  {"title": "The ~80 mA floor", "start": 209, "end": 211, "children": []},
+  {"title": "Measuring again", "start": 212, "end": 216, "children": []}
+]},
+{"title": "GPS (u-blox MAX-M10S)", "start": 218, "end": 255, "children": [
+  {"title": "Hardware and PPS wiring", "start": 220, "end": 225, "children": []},
+  {"title": "Build", "start": 226, "end": 230, "children": []},
+  {"title": "Reading the data", "start": 231, "end": 234, "children": []},
+  {"title": "PPS and light sleep", "start": 235, "end": 236, "children": []},
+  {"title": "Fresh test database", "start": 237, "end": 239, "children": []},
+  {"title": "Parser host tests", "start": 240, "end": 240, "children": []},
+  {"title": "Clock watching", "start": 241, "end": 247, "children": []},
+  {"title": "Clock log and light-sleep lock", "start": 248, "end": 249, "children": []},
+  {"title": "Running on HAT power", "start": 250, "end": 253, "children": []},
+  {"title": "Day run", "start": 254, "end": 255, "children": []}
+]},
+{"title": "Door sensor (Grid-EYE)", "start": 257, "end": 274, "children": [
+  {"title": "Hardware", "start": 259, "end": 261, "children": []},
+  {"title": "Build", "start": 262, "end": 263, "children": []},
+  {"title": "Mounting and direction", "start": 264, "end": 270, "children": []},
+  {"title": "Reading the data", "start": 271, "end": 273, "children": []},
+  {"title": "One person at a time", "start": 274, "end": 274, "children": []}
+]},
+{"title": "Door sensor and HAT on the LP core", "start": 276, "end": 320, "children": [
+  {"title": "Overview", "start": 278, "end": 285, "children": []},
+  {"title": "Build", "start": 287, "end": 289, "children": []},
+  {"title": "Expected console output", "start": 290, "end": 296, "children": []},
+  {"title": "LP ROM boot fallback", "start": 297, "end": 299, "children": []},
+  {"title": "Failure fallback", "start": 300, "end": 301, "children": []},
+  {"title": "Morning steps", "start": 303, "end": 320, "children": [
+    {"title": "Swipe test", "start": 305, "end": 308, "children": []},
+    {"title": "Database rows check", "start": 309, "end": 310, "children": []},
+    {"title": "Button shutdown through the LP core", "start": 311, "end": 314, "children": []},
+    {"title": "Running from the HAT alone", "start": 315, "end": 319, "children": []},
+    {"title": "Recording results", "start": 320, "end": 320, "children": []}
+  ]}
+]},
+{"title": "Reset torture", "start": 322, "end": 327, "children": [
+  {"title": "Running the test", "start": 324, "end": 325, "children": []},
+  {"title": "Results", "start": 326, "end": 327, "children": []}
+]},
+{"title": "BLE demo", "start": 329, "end": 340, "children": [
+  {"title": "Build and flash", "start": 331, "end": 333, "children": []},
+  {"title": "Laptop side", "start": 334, "end": 335, "children": []},
+  {"title": "Limits", "start": 336, "end": 336, "children": []},
+  {"title": "Time over BLE", "start": 337, "end": 338, "children": []},
+  {"title": "Serial port name", "start": 339, "end": 339, "children": []}
+]},
+{"title": "Our time server (fts.vikiverse.net)", "start": 342, "end": 363, "children": [
+  {"title": "Server summary", "start": 346, "end": 353, "children": []},
+  {"title": "Logs and updating", "start": 355, "end": 357, "children": []},
+  {"title": "The key file", "start": 358, "end": 359, "children": []},
+  {"title": "Checks from a laptop", "start": 360, "end": 361, "children": []},
+  {"title": "Local test server", "start": 362, "end": 363, "children": []}
+]},
+{"title": "Gotchas", "start": 365, "end": 376, "children": []}
+]

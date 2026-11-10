@@ -1,0 +1,65 @@
+[
+ {"title": "Header and includes", "start": 1, "end": 50, "children": []},
+ {"title": "Log tag", "start": 51, "end": 52, "children": []},
+ {"title": "UUIDs and shared state", "start": 53, "end": 68, "children": []},
+ {"title": "Blank line", "start": 69, "end": 69, "children": []},
+ {"title": "Result stream", "start": 70, "end": 126, "children": [
+   {"title": "ble_relay_notify", "start": 75, "end": 84, "children": []},
+   {"title": "ble_relay_notify_chunks", "start": 86, "end": 98, "children": []},
+   {"title": "out_flush", "start": 100, "end": 115, "children": []},
+   {"title": "out_str", "start": 117, "end": 126, "children": []}
+ ]},
+ {"title": "Blank line", "start": 127, "end": 127, "children": []},
+ {"title": "Row formatting callback", "start": 128, "end": 153, "children": []},
+ {"title": "Blank line", "start": 154, "end": 154, "children": []},
+ {"title": "Database task: queries and heartbeat", "start": 155, "end": 341, "children": [
+   {"title": "wall_at", "start": 157, "end": 167, "children": []},
+   {"title": "Door logging (CONFIG_PUCK_DOOR)", "start": 169, "end": 214, "children": [
+     {"title": "log_crossings", "start": 174, "end": 204, "children": []}
+   ]},
+   {"title": "Power columns and heartbeat insert statement", "start": 216, "end": 240, "children": [
+     {"title": "hb_power_columns", "start": 222, "end": 231, "children": []},
+     {"title": "bind_int_or_null", "start": 232, "end": 236, "children": []}
+   ]},
+   {"title": "shut_down", "start": 242, "end": 261, "children": []},
+   {"title": "db_task", "start": 263, "end": 341, "children": []}
+ ]},
+ {"title": "Blank line", "start": 342, "end": 342, "children": []},
+ {"title": "GATT service", "start": 343, "end": 400, "children": [
+   {"title": "chr_access", "start": 345, "end": 387, "children": [
+     {"title": "Status read", "start": 349, "end": 369, "children": []},
+     {"title": "Query write", "start": 370, "end": 377, "children": []},
+     {"title": "Relay write", "start": 378, "end": 385, "children": []},
+     {"title": "Result write rejected", "start": 386, "end": 386, "children": []}
+   ]},
+   {"title": "services table", "start": 389, "end": 400, "children": []}
+ ]},
+ {"title": "Blank line", "start": 401, "end": 401, "children": []},
+ {"title": "GAP: advertising and connections", "start": 402, "end": 460, "children": [
+   {"title": "advertise", "start": 406, "end": 435, "children": []},
+   {"title": "gap_event", "start": 437, "end": 460, "children": []}
+ ]},
+ {"title": "Blank line", "start": 461, "end": 461, "children": []},
+ {"title": "on_sync (address and device name)", "start": 462, "end": 476, "children": []},
+ {"title": "Blank line", "start": 477, "end": 477, "children": []},
+ {"title": "Wi-Fi radio check (CONFIG_PUCK_NET)", "start": 478, "end": 505, "children": [
+   {"title": "wifi_scan_report", "start": 484, "end": 504, "children": []}
+ ]},
+ {"title": "Blank line", "start": 506, "end": 506, "children": []},
+ {"title": "host_task", "start": 507, "end": 512, "children": []},
+ {"title": "Blank line", "start": 513, "end": 513, "children": []},
+ {"title": "Database repair and startup", "start": 514, "end": 575, "children": [
+   {"title": "puckapp_ble_prepare", "start": 516, "end": 529, "children": []},
+   {"title": "puckapp_ble", "start": 531, "end": 575, "children": [
+     {"title": "Database open", "start": 533, "end": 536, "children": []},
+     {"title": "Radio check", "start": 537, "end": 539, "children": []},
+     {"title": "Work queue and NVS", "start": 540, "end": 546, "children": []},
+     {"title": "BLE stack and GATT setup", "start": 547, "end": 558, "children": []},
+     {"title": "HAT startup", "start": 559, "end": 565, "children": []},
+     {"title": "Grid-EYE start", "start": 566, "end": 568, "children": []},
+     {"title": "Power sweep and BLE start", "start": 569, "end": 570, "children": []},
+     {"title": "Task launch", "start": 571, "end": 574, "children": []}
+   ]}
+ ]},
+ {"title": "End of CONFIG_PUCK_BLE guard", "start": 576, "end": 577, "children": []}
+]

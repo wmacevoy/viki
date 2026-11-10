@@ -1,0 +1,189 @@
+```json
+[
+  {
+    "title": "File overview comment",
+    "start": 1,
+    "end": 10,
+    "children": []
+  },
+  {
+    "title": "Includes",
+    "start": 11,
+    "end": 25,
+    "children": []
+  },
+  {
+    "title": "Version constant",
+    "start": 27,
+    "end": 27,
+    "children": []
+  },
+  {
+    "title": "usage() help text",
+    "start": 29,
+    "end": 140,
+    "children": []
+  },
+  {
+    "title": "Helpers",
+    "start": 142,
+    "end": 174,
+    "children": [
+      {
+        "title": "open_embedder_if_available",
+        "start": 142,
+        "end": 157,
+        "children": []
+      },
+      {
+        "title": "ensure_viki_dir",
+        "start": 159,
+        "end": 174,
+        "children": []
+      }
+    ]
+  },
+  {
+    "title": "main()",
+    "start": 176,
+    "end": 652,
+    "children": [
+      {
+        "title": "Startup, version and help",
+        "start": 176,
+        "end": 200,
+        "children": []
+      },
+      {
+        "title": "Subcommand dispatch",
+        "start": 202,
+        "end": 651,
+        "children": [
+          {
+            "title": "index",
+            "start": 202,
+            "end": 222,
+            "children": []
+          },
+          {
+            "title": "ask",
+            "start": 224,
+            "end": 262,
+            "children": [
+              {
+                "title": "ask --verse across the registry",
+                "start": 237,
+                "end": 254,
+                "children": []
+              }
+            ]
+          },
+          {
+            "title": "capture",
+            "start": 264,
+            "end": 279,
+            "children": []
+          },
+          {
+            "title": "structure",
+            "start": 281,
+            "end": 319,
+            "children": []
+          },
+          {
+            "title": "promises",
+            "start": 321,
+            "end": 337,
+            "children": []
+          },
+          {
+            "title": "sql",
+            "start": 339,
+            "end": 350,
+            "children": []
+          },
+          {
+            "title": "coverage",
+            "start": 352,
+            "end": 361,
+            "children": []
+          },
+          {
+            "title": "why",
+            "start": 363,
+            "end": 371,
+            "children": []
+          },
+          {
+            "title": "notes",
+            "start": 373,
+            "end": 413,
+            "children": []
+          },
+          {
+            "title": "grep",
+            "start": 415,
+            "end": 444,
+            "children": []
+          },
+          {
+            "title": "muse",
+            "start": 446,
+            "end": 500,
+            "children": [
+              {
+                "title": "muse --from hash parsing",
+                "start": 474,
+                "end": 489,
+                "children": []
+              }
+            ]
+          },
+          {
+            "title": "serve",
+            "start": 502,
+            "end": 520,
+            "children": []
+          },
+          {
+            "title": "cache push and pull",
+            "start": 522,
+            "end": 554,
+            "children": []
+          },
+          {
+            "title": "fts-query (hidden)",
+            "start": 556,
+            "end": 575,
+            "children": []
+          },
+          {
+            "title": "fossilsee-status (debug)",
+            "start": 577,
+            "end": 586,
+            "children": []
+          },
+          {
+            "title": "ndvss-selftest (debug)",
+            "start": 588,
+            "end": 607,
+            "children": []
+          },
+          {
+            "title": "embed-selftest (debug)",
+            "start": 609,
+            "end": 647,
+            "children": []
+          },
+          {
+            "title": "Unknown subcommand",
+            "start": 649,
+            "end": 651,
+            "children": []
+          }
+        ]
+      }
+    ]
+  }
+]
+```

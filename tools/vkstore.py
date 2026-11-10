@@ -74,6 +74,7 @@ for name, args, res in [
     ("sqlite3_open", [C.c_char_p, C.POINTER(P)], C.c_int),
     ("sqlite3_close", [P], C.c_int),
     ("sqlite3_exec", [P, C.c_char_p, P, P, P], C.c_int),
+    ("sqlite3_key", [P, P, C.c_int], C.c_int),
 ]:
     fn = getattr(LIB, name)
     fn.argtypes, fn.restype = args, res
@@ -107,25 +108,49 @@ class Record:
 
 
 class Store:
-    """One diary, opened by the host. Unkeyed: the library links SQLCipher, but no key is set yet."""
+    """One diary, opened by the host.
 
-    def __init__(self, path, principal, rights):
+    key is a bytearray holding SQLCipher's raw-key form, x'<64 hex>' (N-7: the
+    database key is full-entropy and used with no KDF), or None for an unkeyed
+    diary. It is zeroed here once applied, so the caller's copy does not outlive
+    the open."""
+
+    def __init__(self, path, principal, rights, key=None):
         self.db, self.st = P(), P()
         # Kept alive here because the store borrows them for its whole life.
         self._principal = principal
         self._grant = Grant(_b(principal), rights)
         if LIB.sqlite3_open(path.encode(), C.byref(self.db)) != 0:
             raise VkError(f"cannot open {path}")
+        if key is not None:
+            # Before any other statement: SQLCipher reads the header on the first one.
+            buf = (C.c_char * len(key)).from_buffer(key)
+            rc = LIB.sqlite3_key(self.db, C.addressof(buf), len(key))
+            del buf
+            key[:] = bytes(len(key))
+            if rc != 0:
+                self._fail(f"cannot key {path}")
+        # The first real read. A wrong key fails here, not at sqlite3_key, which
+        # only sets the cipher context.
+        if LIB.sqlite3_exec(self.db, b"SELECT count(*) FROM sqlite_schema", None, None, None) != 0:
+            self._fail(f"{path} is not readable: wrong key, or not a diary")
         if LIB.vk_open(self.db, _b(principal), C.byref(self._grant), 1, C.byref(self.st)) != OK:
-            raise VkError(f"vk_open: {self.errmsg()}")
+            self._fail(f"vk_open: {self.errmsg()}")
+
+    def _fail(self, why):
+        LIB.sqlite3_close(self.db)
+        self.db, self.st = P(), P()
+        raise VkError(why)
 
     def errmsg(self):
         m = LIB.vk_errmsg(self.st) if self.st else None
         return m.decode() if m else "?"
 
     def close(self):
-        LIB.vk_close(self.st)
-        LIB.sqlite3_close(self.db)
+        if self.st:
+            LIB.vk_close(self.st)
+        if self.db:
+            LIB.sqlite3_close(self.db)
 
     def exec(self, sql):
         if LIB.sqlite3_exec(self.db, sql.encode(), None, None, None) != 0:

@@ -1,0 +1,54 @@
+[
+ {"title": "Module header comment", "start": 1, "end": 10, "children": []},
+ {"title": "Includes and version constant", "start": 11, "end": 27, "children": []},
+ {"title": "Blank line", "start": 28, "end": 28, "children": []},
+ {"title": "usage() help text", "start": 29, "end": 131, "children": []},
+ {"title": "Blank line", "start": 132, "end": 132, "children": []},
+ {"title": "Model directory and embedder opening", "start": 133, "end": 148, "children": []},
+ {"title": "Blank line", "start": 149, "end": 149, "children": []},
+ {"title": "Cache directory creation", "start": 150, "end": 165, "children": [
+   {"title": "Existing .viki check", "start": 150, "end": 152, "children": []},
+   {"title": "0700 permission rationale", "start": 153, "end": 159, "children": []},
+   {"title": "Create .viki directory", "start": 160, "end": 164, "children": []}
+  ]},
+ {"title": "Blank line", "start": 166, "end": 166, "children": []},
+ {"title": "main() subcommand dispatch", "start": 167, "end": 596, "children": [
+   {"title": "Function header and declarations", "start": 167, "end": 170, "children": []},
+   {"title": "Exit hook, version and help", "start": 171, "end": 189, "children": []},
+   {"title": "Register sqlite-ndvss", "start": 191, "end": 191, "children": []},
+   {"title": "index subcommand", "start": 193, "end": 213, "children": []},
+   {"title": "ask subcommand", "start": 215, "end": 253, "children": [
+     {"title": "Declarations and usage check", "start": 216, "end": 222, "children": []},
+     {"title": "Option parsing (--verse, --k, --min-cos)", "start": 223, "end": 227, "children": []},
+     {"title": "Verse ask across all registered projects", "start": 228, "end": 245, "children": [
+       {"title": "Registry path from VIKI_VERSE or HOME", "start": 233, "end": 240, "children": []},
+       {"title": "Verse embedder open and ask", "start": 241, "end": 244, "children": []}
+      ]},
+     {"title": "Local cache ask", "start": 246, "end": 252, "children": [
+       {"title": "Open cache and embedder", "start": 246, "end": 248, "children": []},
+       {"title": "Local ask and cleanup", "start": 249, "end": 252, "children": []}
+      ]}
+    ]},
+   {"title": "capture subcommand", "start": 255, "end": 270, "children": []},
+   {"title": "structure subcommand", "start": 272, "end": 310, "children": []},
+   {"title": "promises subcommand", "start": 312, "end": 328, "children": [
+     {"title": "Identity and option parsing", "start": 313, "end": 322, "children": []},
+     {"title": "Ledger query and cleanup", "start": 323, "end": 327, "children": []}
+    ]},
+   {"title": "coverage subcommand", "start": 330, "end": 339, "children": [
+     {"title": "Declarations and option parsing (--json)", "start": 331, "end": 333, "children": []},
+     {"title": "Open cache and report", "start": 334, "end": 338, "children": []}
+    ]},
+   {"title": "why subcommand", "start": 341, "end": 349, "children": []},
+   {"title": "notes subcommand", "start": 351, "end": 391, "children": []},
+   {"title": "grep subcommand", "start": 393, "end": 422, "children": []},
+   {"title": "muse subcommand", "start": 424, "end": 478, "children": []},
+   {"title": "serve subcommand", "start": 480, "end": 498, "children": []},
+   {"title": "cache push and pull subcommand", "start": 500, "end": 519, "children": []},
+   {"title": "fossilsee-status debug command", "start": 521, "end": 530, "children": []},
+   {"title": "ndvss-selftest debug command", "start": 532, "end": 551, "children": []},
+   {"title": "embed-selftest debug command", "start": 553, "end": 591, "children": []},
+   {"title": "Unknown subcommand fallback", "start": 593, "end": 595, "children": []},
+   {"title": "Function end", "start": 596, "end": 596, "children": []}
+  ]}
+]

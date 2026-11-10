@@ -1,0 +1,107 @@
+[
+ {"title": "File header and demo-grade warning", "start": 1, "end": 23, "children": []},
+ {"title": "Includes and feature guard", "start": 24, "end": 54, "children": []},
+ {"title": "Constants, UUIDs and shared state", "start": 56, "end": 73, "children": [
+  {"title": "Log tag", "start": 56, "end": 56, "children": []},
+  {"title": "GATT UUID definitions", "start": 58, "end": 66, "children": []},
+  {"title": "Query size limit", "start": 68, "end": 68, "children": []},
+  {"title": "Connection and queue state", "start": 70, "end": 73, "children": []}
+ ]},
+ {"title": "Result stream", "start": 75, "end": 158, "children": [
+  {"title": "Output buffer", "start": 77, "end": 78, "children": []},
+  {"title": "ble_relay_notify", "start": 80, "end": 89, "children": []},
+  {"title": "ble_relay_notify_chunks", "start": 91, "end": 103, "children": []},
+  {"title": "out_flush", "start": 105, "end": 120, "children": []},
+  {"title": "out_str", "start": 122, "end": 131, "children": []},
+  {"title": "row_cb", "start": 133, "end": 158, "children": [
+   {"title": "Per-column cell formatting by type", "start": 137, "end": 152, "children": []},
+   {"title": "Emit separators, newline, stop if client left", "start": 153, "end": 157, "children": []}
+  ]}
+ ]},
+ {"title": "Database task: queries and heartbeat", "start": 160, "end": 654, "children": [
+  {"title": "wall_at", "start": 162, "end": 175, "children": []},
+  {"title": "hat_running flag", "start": 177, "end": 177, "children": []},
+  {"title": "Door logging and poll interval (conditional)", "start": 179, "end": 226, "children": [
+   {"title": "CONFIG_PUCK_DOOR: log_crossings", "start": 179, "end": 213, "children": [
+    {"title": "door_ins statement", "start": 180, "end": 180, "children": []},
+    {"title": "log_crossings", "start": 182, "end": 212, "children": [
+     {"title": "Lazy table and statement creation", "start": 187, "end": 193, "children": []},
+     {"title": "Bind and insert each queued crossing", "start": 194, "end": 211, "children": []}
+    ]},
+    {"title": "POLL_MS for door", "start": 213, "end": 213, "children": []}
+   ]},
+   {"title": "GPS only: stubs and POLL_MS", "start": 214, "end": 217, "children": []},
+   {"title": "No door: stubs and POLL_MS variants", "start": 218, "end": 226, "children": []}
+  ]},
+  {"title": "GPS logging (conditional)", "start": 228, "end": 303, "children": [
+   {"title": "log_gps", "start": 228, "end": 299, "children": [
+    {"title": "Lazy table and statement creation", "start": 236, "end": 255, "children": []},
+    {"title": "Bind and insert each queued snapshot", "start": 256, "end": 298, "children": []}
+   ]},
+   {"title": "No GPS: stubs", "start": 300, "end": 303, "children": []}
+  ]},
+  {"title": "Clock watch logging (conditional)", "start": 305, "end": 510, "children": [
+   {"title": "log_model", "start": 306, "end": 394, "children": [
+    {"title": "Lazy table and statement creation", "start": 325, "end": 344, "children": []},
+    {"title": "Bind and insert each time model event", "start": 345, "end": 374, "children": []},
+    {"title": "Bind and insert each raw FTS sample", "start": 375, "end": 393, "children": []}
+   ]},
+   {"title": "log_clock", "start": 396, "end": 506, "children": [
+    {"title": "Lazy table and statement creation", "start": 416, "end": 437, "children": []},
+    {"title": "Bind and insert each clock record", "start": 438, "end": 484, "children": []},
+    {"title": "Bind and insert each Roughtime sample", "start": 485, "end": 504, "children": []},
+    {"title": "Log time model events", "start": 505, "end": 505, "children": []}
+   ]},
+   {"title": "No clock watch: stubs", "start": 507, "end": 510, "children": []}
+  ]},
+  {"title": "Power sweep heartbeat columns (conditional)", "start": 512, "end": 536, "children": []},
+  {"title": "shut_down", "start": 538, "end": 564, "children": []},
+  {"title": "db_task", "start": 566, "end": 654, "children": [
+   {"title": "Setup: hb table, columns, prepared insert", "start": 573, "end": 587, "children": []},
+   {"title": "Main loop", "start": 588, "end": 653, "children": [
+    {"title": "Handle a queued query", "start": 589, "end": 599, "children": []},
+    {"title": "Log crossings and GPS and wait for heartbeat time", "start": 600, "end": 603, "children": []},
+    {"title": "Build heartbeat note and read HAT", "start": 604, "end": 617, "children": []},
+    {"title": "Bind power sweep columns", "start": 618, "end": 630, "children": []},
+    {"title": "Bind ts, note and wall time", "start": 631, "end": 643, "children": []},
+    {"title": "Insert and refresh row total", "start": 644, "end": 652, "children": []}
+   ]}
+  ]}
+ ]},
+ {"title": "GATT", "start": 656, "end": 718, "children": [
+  {"title": "chr_access", "start": 658, "end": 705, "children": [
+   {"title": "Status read", "start": 662, "end": 687, "children": []},
+   {"title": "Query write", "start": 688, "end": 695, "children": []},
+   {"title": "Relay write", "start": 696, "end": 703, "children": []},
+   {"title": "Default: result is notify only", "start": 704, "end": 704, "children": []}
+  ]},
+  {"title": "services table", "start": 707, "end": 718, "children": []}
+ ]},
+ {"title": "GAP: advertise and connection events", "start": 720, "end": 794, "children": [
+  {"title": "gap_event forward declaration", "start": 722, "end": 722, "children": []},
+  {"title": "advertise", "start": 724, "end": 753, "children": [
+   {"title": "Advertising fields", "start": 726, "end": 735, "children": []},
+   {"title": "Scan response with service UUID", "start": 737, "end": 741, "children": []},
+   {"title": "Parameters and start", "start": 743, "end": 752, "children": []}
+  ]},
+  {"title": "gap_event", "start": 755, "end": 778, "children": []},
+  {"title": "on_sync", "start": 780, "end": 794, "children": []}
+ ]},
+ {"title": "Wi-Fi scan radio check (CONFIG_PUCK_NET)", "start": 796, "end": 823, "children": [
+  {"title": "Wi-Fi includes", "start": 797, "end": 799, "children": []},
+  {"title": "wifi_scan_report", "start": 800, "end": 822, "children": []}
+ ]},
+ {"title": "host_task", "start": 825, "end": 830, "children": []},
+ {"title": "puckapp_ble_prepare", "start": 832, "end": 847, "children": []},
+ {"title": "puckapp_ble", "start": 849, "end": 899, "children": [
+  {"title": "Open database and optional radio check", "start": 851, "end": 858, "children": []},
+  {"title": "NVS initialization", "start": 860, "end": 864, "children": []},
+  {"title": "Host stack and NimBLE init", "start": 865, "end": 870, "children": []},
+  {"title": "GAP/GATT service registration", "start": 871, "end": 876, "children": []},
+  {"title": "HAT initialization", "start": 877, "end": 883, "children": []},
+  {"title": "Door start", "start": 884, "end": 886, "children": []},
+  {"title": "GPS start", "start": 887, "end": 889, "children": []},
+  {"title": "Clock watch start", "start": 890, "end": 892, "children": []},
+  {"title": "Start power sweep, relay, db task and host", "start": 893, "end": 898, "children": []}
+ ]}
+]

@@ -1,0 +1,606 @@
+```json
+[
+ {
+  "title": "Module header comment",
+  "start": 1,
+  "end": 10,
+  "children": []
+ },
+ {
+  "title": "Includes and version constant",
+  "start": 11,
+  "end": 27,
+  "children": []
+ },
+ {
+  "title": "Blank line",
+  "start": 28,
+  "end": 28,
+  "children": []
+ },
+ {
+  "title": "usage() help text",
+  "start": 29,
+  "end": 140,
+  "children": [
+   {
+    "title": "Function header",
+    "start": 29,
+    "end": 31,
+    "children": []
+   },
+   {
+    "title": "index help",
+    "start": 32,
+    "end": 39,
+    "children": []
+   },
+   {
+    "title": "ask help",
+    "start": 40,
+    "end": 40,
+    "children": []
+   },
+   {
+    "title": "sql help",
+    "start": 41,
+    "end": 45,
+    "children": []
+   },
+   {
+    "title": "coverage help",
+    "start": 46,
+    "end": 48,
+    "children": []
+   },
+   {
+    "title": "promises help",
+    "start": 49,
+    "end": 51,
+    "children": []
+   },
+   {
+    "title": "why help",
+    "start": 52,
+    "end": 53,
+    "children": []
+   },
+   {
+    "title": "ask --verse help",
+    "start": 54,
+    "end": 60,
+    "children": [
+     {
+      "title": "Registry location",
+      "start": 54,
+      "end": 56,
+      "children": []
+     },
+     {
+      "title": "Output format",
+      "start": 57,
+      "end": 60,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "cache push help",
+    "start": 61,
+    "end": 66,
+    "children": []
+   },
+   {
+    "title": "cache pull help",
+    "start": 67,
+    "end": 74,
+    "children": [
+     {
+      "title": "--require-signature",
+      "start": 68,
+      "end": 71,
+      "children": []
+     },
+     {
+      "title": "Fetch and model handling",
+      "start": 72,
+      "end": 74,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "muse help",
+    "start": 75,
+    "end": 87,
+    "children": [
+     {
+      "title": "Undirected recall",
+      "start": 75,
+      "end": 82,
+      "children": []
+     },
+     {
+      "title": "Vector requirement",
+      "start": 83,
+      "end": 84,
+      "children": []
+     },
+     {
+      "title": "Replayable output",
+      "start": 85,
+      "end": 87,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "grep help",
+    "start": 88,
+    "end": 97,
+    "children": [
+     {
+      "title": "Scope",
+      "start": 88,
+      "end": 93,
+      "children": []
+     },
+     {
+      "title": "Syntax",
+      "start": 94,
+      "end": 97,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "capture help",
+    "start": 98,
+    "end": 103,
+    "children": []
+   },
+   {
+    "title": "structure help",
+    "start": 104,
+    "end": 114,
+    "children": [
+     {
+      "title": "Usage forms",
+      "start": 104,
+      "end": 108,
+      "children": []
+     },
+     {
+      "title": "Behavior",
+      "start": 109,
+      "end": 114,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "notes help",
+    "start": 115,
+    "end": 124,
+    "children": [
+     {
+      "title": "Usage forms",
+      "start": 115,
+      "end": 117,
+      "children": []
+     },
+     {
+      "title": "Behavior",
+      "start": 118,
+      "end": 124,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "serve help",
+    "start": 125,
+    "end": 129,
+    "children": []
+   },
+   {
+    "title": "version and help",
+    "start": 130,
+    "end": 131,
+    "children": []
+   },
+   {
+    "title": "Cache location note",
+    "start": 133,
+    "end": 135,
+    "children": []
+   },
+   {
+    "title": "Model directory note",
+    "start": 137,
+    "end": 139,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "Blank line",
+  "start": 141,
+  "end": 141,
+  "children": []
+ },
+ {
+  "title": "Model directory and embedder opening",
+  "start": 142,
+  "end": 157,
+  "children": []
+ },
+ {
+  "title": "Blank line",
+  "start": 158,
+  "end": 158,
+  "children": []
+ },
+ {
+  "title": "Cache directory creation",
+  "start": 159,
+  "end": 174,
+  "children": [
+   {
+    "title": "Existing .viki check",
+    "start": 159,
+    "end": 161,
+    "children": []
+   },
+   {
+    "title": "0700 permission rationale",
+    "start": 162,
+    "end": 168,
+    "children": []
+   },
+   {
+    "title": "Create .viki directory",
+    "start": 169,
+    "end": 173,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "Blank line",
+  "start": 175,
+  "end": 175,
+  "children": []
+ },
+ {
+  "title": "main() subcommand dispatch",
+  "start": 176,
+  "end": 653,
+  "children": [
+   {
+    "title": "Function header and declarations",
+    "start": 176,
+    "end": 179,
+    "children": []
+   },
+   {
+    "title": "Exit hook, version and help",
+    "start": 180,
+    "end": 199,
+    "children": [
+     {
+      "title": "Exit hook note",
+      "start": 180,
+      "end": 187,
+      "children": []
+     },
+     {
+      "title": "Argument count check",
+      "start": 189,
+      "end": 190,
+      "children": []
+     },
+     {
+      "title": "version subcommand",
+      "start": 192,
+      "end": 195,
+      "children": []
+     },
+     {
+      "title": "help subcommand",
+      "start": 196,
+      "end": 199,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "Register sqlite-ndvss",
+    "start": 201,
+    "end": 201,
+    "children": []
+   },
+   {
+    "title": "index subcommand",
+    "start": 203,
+    "end": 223,
+    "children": []
+   },
+   {
+    "title": "ask subcommand",
+    "start": 225,
+    "end": 263,
+    "children": [
+     {
+      "title": "Declarations and usage check",
+      "start": 226,
+      "end": 232,
+      "children": []
+     },
+     {
+      "title": "Option parsing (--verse, --k, --min-cos)",
+      "start": 233,
+      "end": 237,
+      "children": []
+     },
+     {
+      "title": "Verse ask across all registered projects",
+      "start": 238,
+      "end": 255,
+      "children": [
+       {
+        "title": "Registry path from VIKI_VERSE or HOME",
+        "start": 243,
+        "end": 250,
+        "children": []
+       },
+       {
+        "title": "Verse embedder open and ask",
+        "start": 251,
+        "end": 254,
+        "children": []
+       }
+      ]
+     },
+     {
+      "title": "Local cache ask",
+      "start": 256,
+      "end": 262,
+      "children": [
+       {
+        "title": "Open cache and embedder",
+        "start": 256,
+        "end": 258,
+        "children": []
+       },
+       {
+        "title": "Local ask and cleanup",
+        "start": 259,
+        "end": 262,
+        "children": []
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "title": "capture subcommand",
+    "start": 265,
+    "end": 280,
+    "children": []
+   },
+   {
+    "title": "structure subcommand",
+    "start": 282,
+    "end": 320,
+    "children": []
+   },
+   {
+    "title": "promises subcommand",
+    "start": 322,
+    "end": 338,
+    "children": [
+     {
+      "title": "Identity and option parsing",
+      "start": 323,
+      "end": 332,
+      "children": []
+     },
+     {
+      "title": "Ledger query and cleanup",
+      "start": 333,
+      "end": 337,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "sql subcommand",
+    "start": 340,
+    "end": 351,
+    "children": [
+     {
+      "title": "Declarations and usage check",
+      "start": 341,
+      "end": 347,
+      "children": []
+     },
+     {
+      "title": "Option parsing (--json)",
+      "start": 348,
+      "end": 348,
+      "children": []
+     },
+     {
+      "title": "Run read-only query",
+      "start": 349,
+      "end": 350,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "coverage subcommand",
+    "start": 353,
+    "end": 362,
+    "children": [
+     {
+      "title": "Declarations and option parsing (--json)",
+      "start": 354,
+      "end": 356,
+      "children": []
+     },
+     {
+      "title": "Open cache and report",
+      "start": 357,
+      "end": 361,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "why subcommand",
+    "start": 364,
+    "end": 372,
+    "children": []
+   },
+   {
+    "title": "notes subcommand",
+    "start": 374,
+    "end": 414,
+    "children": []
+   },
+   {
+    "title": "grep subcommand",
+    "start": 416,
+    "end": 445,
+    "children": []
+   },
+   {
+    "title": "muse subcommand",
+    "start": 447,
+    "end": 501,
+    "children": []
+   },
+   {
+    "title": "serve subcommand",
+    "start": 503,
+    "end": 521,
+    "children": []
+   },
+   {
+    "title": "cache push and pull subcommand",
+    "start": 523,
+    "end": 555,
+    "children": [
+     {
+      "title": "Flag-vs-path decision comment",
+      "start": 524,
+      "end": 528,
+      "children": []
+     },
+     {
+      "title": "Declarations and usage check",
+      "start": 529,
+      "end": 535,
+      "children": []
+     },
+     {
+      "title": "Option parsing",
+      "start": 536,
+      "end": 549,
+      "children": [
+       {
+        "title": "Known flags",
+        "start": 537,
+        "end": 538,
+        "children": []
+       },
+       {
+        "title": "Unknown option refusal",
+        "start": 539,
+        "end": 547,
+        "children": []
+       },
+       {
+        "title": "Positional db path",
+        "start": 548,
+        "end": 548,
+        "children": []
+       }
+      ]
+     },
+     {
+      "title": "Cache directory and action dispatch",
+      "start": 550,
+      "end": 554,
+      "children": [
+       {
+        "title": "Ensure cache directory",
+        "start": 550,
+        "end": 550,
+        "children": []
+       },
+       {
+        "title": "Dispatch push or pull",
+        "start": 551,
+        "end": 554,
+        "children": []
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "title": "fts-query debug command",
+    "start": 557,
+    "end": 576,
+    "children": [
+     {
+      "title": "Declarations and pool report",
+      "start": 562,
+      "end": 569,
+      "children": []
+     },
+     {
+      "title": "Print MATCH expression",
+      "start": 570,
+      "end": 575,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "fossilsee-status debug command",
+    "start": 578,
+    "end": 587,
+    "children": []
+   },
+   {
+    "title": "ndvss-selftest debug command",
+    "start": 589,
+    "end": 608,
+    "children": []
+   },
+   {
+    "title": "embed-selftest debug command",
+    "start": 610,
+    "end": 648,
+    "children": []
+   },
+   {
+    "title": "Unknown subcommand fallback",
+    "start": 650,
+    "end": 652,
+    "children": []
+   },
+   {
+    "title": "Function end",
+    "start": 653,
+    "end": 653,
+    "children": []
+   }
+  ]
+ }
+]
+```

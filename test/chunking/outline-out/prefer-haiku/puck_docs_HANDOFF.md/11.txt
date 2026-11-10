@@ -1,0 +1,48 @@
+```json
+[
+ {"title": "If you are an agent: read this first", "start": 5, "end": 17, "children": []},
+ {"title": "Rules", "start": 19, "end": 35, "children": []},
+ {"title": "Where things stand", "start": 37, "end": 48, "children": []},
+ {"title": "Repository layout", "start": 50, "end": 60, "children": []},
+ {"title": "Work queue", "start": 62, "end": 109, "children": [
+   {"title": "Queue table", "start": 67, "end": 91, "children": []},
+   {"title": "R1 as done, and what is left of it", "start": 93, "end": 109, "children": []}
+ ]},
+ {"title": "Environment (pinned)", "start": 111, "end": 121, "children": []},
+ {"title": "Tests", "start": 123, "end": 143, "children": []},
+ {"title": "Hardware", "start": 145, "end": 173, "children": [
+   {"title": "Flashing and boot", "start": 147, "end": 154, "children": []},
+   {"title": "Safety rules for the board", "start": 155, "end": 160, "children": []},
+   {"title": "Other firmware and build options", "start": 161, "end": 173, "children": []}
+ ]},
+ {"title": "Wi-Fi and the power HAT", "start": 175, "end": 187, "children": [
+   {"title": "Credentials and build", "start": 177, "end": 180, "children": []},
+   {"title": "The power HAT", "start": 181, "end": 184, "children": []},
+   {"title": "Running from the HAT", "start": 185, "end": 187, "children": []}
+ ]},
+ {"title": "Power", "start": 189, "end": 217, "children": [
+   {"title": "Measured states", "start": 191, "end": 198, "children": []},
+   {"title": "Power save", "start": 200, "end": 206, "children": []},
+   {"title": "Sleep-safe pads", "start": 207, "end": 209, "children": []},
+   {"title": "The ~80 mA floor", "start": 210, "end": 212, "children": []},
+   {"title": "Measuring again", "start": 213, "end": 217, "children": []}
+ ]},
+ {"title": "GPS (u-blox MAX-M10S)", "start": 219, "end": 315, "children": [
+   {"title": "Clock watching", "start": 243, "end": 249, "children": []},
+   {"title": "Clock log on HAT power", "start": 250, "end": 255, "children": []},
+   {"title": "Day run on the board", "start": 256, "end": 257, "children": []},
+   {"title": "Day run results", "start": 258, "end": 259, "children": []},
+   {"title": "Time model", "start": 260, "end": 275, "children": []},
+   {"title": "Time model experiments", "start": 277, "end": 315, "children": []}
+ ]},
+ {"title": "Door sensor (Grid-EYE)", "start": 317, "end": 334, "children": []},
+ {"title": "Door sensor and HAT on the LP core", "start": 336, "end": 380, "children": [
+   {"title": "Build and boot console", "start": 347, "end": 361, "children": []},
+   {"title": "Morning steps", "start": 363, "end": 380, "children": []}
+ ]},
+ {"title": "Reset torture", "start": 382, "end": 387, "children": []},
+ {"title": "BLE demo", "start": 389, "end": 400, "children": []},
+ {"title": "Our time server (fts.vikiverse.net)", "start": 402, "end": 423, "children": []},
+ {"title": "Gotchas", "start": 425, "end": 436, "children": []}
+]
+```

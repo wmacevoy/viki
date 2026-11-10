@@ -380,6 +380,9 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   2026-11-09), as SHAPE-1 says. v2 gave it separate framing so that no other signature could
   authorize an erasure (F-2). Here the kind is inside the framed id, so a signature over the id
   already covers it.
+- **N-7, through the first host** (`tools/vk.py`, 2026-11-10): the diary key is 64 hex characters,
+  used raw with no KDF. A passphrase is refused, because N-8 (passwords, slow KDF) is not built and
+  must not share N-7's path.
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep and bm25, not yet for regex; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.

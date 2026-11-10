@@ -1,0 +1,110 @@
+```json
+[
+ {"title":"Intro","start":3,"end":3,"children":[]},
+ {"title":"If you are an agent: read this first","start":5,"end":17,"children":[
+  {"title":"Reading order","start":11,"end":13,"children":[]},
+  {"title":"Check commit trailers","start":14,"end":16,"children":[]},
+  {"title":"Declare successor status","start":17,"end":17,"children":[]}
+ ]},
+ {"title":"Rules","start":19,"end":35,"children":[
+  {"title":"master stays green, branch per item","start":21,"end":24,"children":[]},
+  {"title":"Commit trailers","start":25,"end":33,"children":[]},
+  {"title":"Update work queue","start":34,"end":34,"children":[]},
+  {"title":"Licensing and SQLCipher restrictions","start":35,"end":35,"children":[]}
+ ]},
+ {"title":"Where things stand (2026-10-04, end of session)","start":37,"end":48,"children":[
+  {"title":"Board","start":39,"end":41,"children":[]},
+  {"title":"Next, in order of value","start":42,"end":45,"children":[]},
+  {"title":"Not merged anywhere yet","start":46,"end":48,"children":[]}
+ ]},
+ {"title":"Repository layout (since 2026-10-04)","start":50,"end":60,"children":[]},
+ {"title":"Work queue","start":62,"end":109,"children":[
+  {"title":"Queue table","start":67,"end":91,"children":[
+   {"title":"R1 envelope, recovery wrap, fault injection, durability","start":69,"end":72,"children":[]},
+   {"title":"Preallocation and isolation","start":73,"end":74,"children":[]},
+   {"title":"Integrity, evidence, sync and time trust","start":75,"end":77,"children":[]},
+   {"title":"Platform and misc review items","start":78,"end":79,"children":[]},
+   {"title":"Door sensor demo","start":80,"end":80,"children":[]},
+   {"title":"Zephyr refactor and port items","start":81,"end":83,"children":[]},
+   {"title":"Power sweep and LP-core door items","start":84,"end":85,"children":[]},
+   {"title":"FTS now and UDP server","start":86,"end":86,"children":[]},
+   {"title":"Power save on battery","start":87,"end":87,"children":[]},
+   {"title":"Repository split","start":88,"end":88,"children":[]},
+   {"title":"GPS and sealed multi-site FTS","start":89,"end":90,"children":[]},
+   {"title":"Salt in the key","start":91,"end":91,"children":[]}
+  ]},
+  {"title":"R1 as done, and what is left of it","start":93,"end":109,"children":[
+   {"title":"Safe file write","start":95,"end":97,"children":[]},
+   {"title":"Portable envelope","start":98,"end":101,"children":[]},
+   {"title":"Crash test","start":102,"end":104,"children":[]},
+   {"title":"Recovery wrap","start":105,"end":109,"children":[]}
+  ]}
+ ]},
+ {"title":"Environment (pinned)","start":111,"end":121,"children":[]},
+ {"title":"Tests","start":123,"end":142,"children":[]},
+ {"title":"Hardware (the owner has a board plugged in over USB)","start":144,"end":172,"children":[
+  {"title":"Board and flashing","start":146,"end":150,"children":[]},
+  {"title":"Boot behavior","start":151,"end":153,"children":[]},
+  {"title":"Safety rules","start":154,"end":159,"children":[]},
+  {"title":"C6 firmware and perf","start":160,"end":164,"children":[]},
+  {"title":"Journal batching","start":165,"end":166,"children":[]},
+  {"title":"Zephyr on the board","start":167,"end":168,"children":[]},
+  {"title":"The board now","start":169,"end":170,"children":[]},
+  {"title":"Next on hardware","start":171,"end":172,"children":[]}
+ ]},
+ {"title":"Wi-Fi and the power HAT","start":174,"end":186,"children":[
+  {"title":"Wi-Fi credentials and build","start":176,"end":179,"children":[]},
+  {"title":"LiFePO4wered HAT","start":180,"end":183,"children":[]},
+  {"title":"Running from the HAT","start":184,"end":185,"children":[]},
+  {"title":"Next","start":186,"end":186,"children":[]}
+ ]},
+ {"title":"Power","start":188,"end":216,"children":[
+  {"title":"Measured states table","start":190,"end":197,"children":[]},
+  {"title":"Power save","start":199,"end":205,"children":[]},
+  {"title":"Sleep-safe pads","start":206,"end":208,"children":[]},
+  {"title":"The ~80 mA floor","start":209,"end":211,"children":[]},
+  {"title":"Measuring again","start":212,"end":216,"children":[]}
+ ]},
+ {"title":"GPS (u-blox MAX-M10S)","start":218,"end":249,"children":[
+  {"title":"Hardware","start":220,"end":225,"children":[]},
+  {"title":"Build","start":226,"end":230,"children":[]},
+  {"title":"Viewing results","start":231,"end":234,"children":[]},
+  {"title":"PPS and light sleep","start":235,"end":236,"children":[]},
+  {"title":"Fresh test database","start":237,"end":239,"children":[]},
+  {"title":"Parser host test","start":240,"end":240,"children":[]},
+  {"title":"Clock watching","start":241,"end":247,"children":[]},
+  {"title":"Day run on the board","start":248,"end":249,"children":[]}
+ ]},
+ {"title":"Door sensor (Grid-EYE)","start":251,"end":268,"children":[
+  {"title":"Hardware","start":253,"end":255,"children":[]},
+  {"title":"Build","start":256,"end":257,"children":[]},
+  {"title":"Mounting and orientation","start":258,"end":264,"children":[]},
+  {"title":"Viewing results","start":265,"end":267,"children":[]},
+  {"title":"Limitation","start":268,"end":268,"children":[]}
+ ]},
+ {"title":"Door sensor and HAT on the LP core (CONFIG_PUCK_LP_DOOR)","start":270,"end":314,"children":[
+  {"title":"Overview","start":272,"end":279,"children":[]},
+  {"title":"Build","start":281,"end":283,"children":[]},
+  {"title":"Expected console output","start":284,"end":290,"children":[]},
+  {"title":"LP ROM fallback","start":291,"end":293,"children":[]},
+  {"title":"Failure fallback","start":294,"end":295,"children":[]},
+  {"title":"Morning steps (need a person)","start":297,"end":314,"children":[]}
+ ]},
+ {"title":"Reset torture","start":316,"end":321,"children":[]},
+ {"title":"BLE demo","start":323,"end":334,"children":[
+  {"title":"Build and flash","start":325,"end":327,"children":[]},
+  {"title":"Laptop client","start":328,"end":329,"children":[]},
+  {"title":"Demo limits","start":330,"end":330,"children":[]},
+  {"title":"Time via Roughtime","start":331,"end":332,"children":[]},
+  {"title":"Serial port naming","start":333,"end":333,"children":[]},
+  {"title":"Time servers pointer","start":334,"end":334,"children":[]}
+ ]},
+ {"title":"Our time server (fts.vikiverse.net)","start":336,"end":357,"children":[
+  {"title":"Server facts table","start":338,"end":347,"children":[]},
+  {"title":"Logs and updates","start":349,"end":351,"children":[]},
+  {"title":"Key file","start":352,"end":353,"children":[]},
+  {"title":"Checks and local test server","start":354,"end":357,"children":[]}
+ ]},
+ {"title":"Gotchas","start":359,"end":370,"children":[]}
+]
+```

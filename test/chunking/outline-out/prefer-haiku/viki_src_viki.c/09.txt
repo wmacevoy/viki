@@ -1,0 +1,41 @@
+[
+ {"title": "Module header comment", "start": 1, "end": 10, "children": []},
+ {"title": "Includes and version constant", "start": 11, "end": 28, "children": []},
+ {"title": "usage() help text", "start": 30, "end": 141, "children": []},
+ {"title": "Model directory and embedder opening", "start": 143, "end": 158, "children": []},
+ {"title": "Cache directory creation", "start": 160, "end": 175, "children": []},
+ {
+  "title": "main() subcommand dispatch",
+  "start": 177,
+  "end": 674,
+  "children": [
+   {"title": "Exit hook note, version and help", "start": 181, "end": 200, "children": []},
+   {"title": "index subcommand", "start": 204, "end": 224, "children": []},
+   {
+    "title": "ask subcommand",
+    "start": 226,
+    "end": 264,
+    "children": [
+     {"title": "ask --verse cross-project search", "start": 239, "end": 256, "children": []}
+    ]
+   },
+   {"title": "capture subcommand", "start": 266, "end": 281, "children": []},
+   {"title": "structure subcommand", "start": 283, "end": 321, "children": []},
+   {"title": "promises subcommand", "start": 323, "end": 339, "children": []},
+   {"title": "sql subcommand", "start": 341, "end": 352, "children": []},
+   {"title": "coverage subcommand", "start": 354, "end": 363, "children": []},
+   {"title": "why subcommand", "start": 365, "end": 373, "children": []},
+   {"title": "notes subcommand", "start": 375, "end": 415, "children": []},
+   {"title": "grep subcommand", "start": 417, "end": 446, "children": []},
+   {"title": "muse subcommand", "start": 448, "end": 502, "children": []},
+   {"title": "serve subcommand", "start": 504, "end": 522, "children": []},
+   {"title": "cache push and pull subcommand", "start": 524, "end": 556, "children": []},
+   {"title": "calendar subcommand", "start": 562, "end": 580, "children": []},
+   {"title": "fts-query hidden debug command", "start": 582, "end": 597, "children": []},
+   {"title": "fossilsee-status debug command", "start": 599, "end": 608, "children": []},
+   {"title": "ndvss-selftest debug command", "start": 610, "end": 629, "children": []},
+   {"title": "embed-selftest debug command", "start": 631, "end": 669, "children": []},
+   {"title": "Unknown subcommand fallback", "start": 671, "end": 673, "children": []}
+  ]
+ }
+]

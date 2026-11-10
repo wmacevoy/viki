@@ -112,8 +112,12 @@ runs on vendored SQLCipher-LibreSSL (ENV-4). On the real diary, viki and the puc
 - What bm25 does not do well yet: it ranks whole files, common words match almost everything, and
   the snippet is the first line holding any word, not the best one. Chunking is the obvious next step
   for ranking, and it is a projection choice, not a requirement.
-- Not yet: an encrypted diary. The library links SQLCipher now, but keying the diary touches keys,
-  so it waits for Warren.
+- Committed as `31fcae5`.
+
+**A keyed diary: built on 2026-11-10, uncommitted.** Warren: "key the diary with --keyfile".
+`vk.py keygen PATH`, then `--keyfile PATH` on every command. On the real repositories, keyed against
+unkeyed: ingesting both took 9.2 s against 6.0 s, and the same `find` took 0.32 s against 0.18 s.
+The file begins with ciphertext. Transcripts (SCM-6) can now go into an encrypted diary.
 
 ## Slices, each one vertical
 

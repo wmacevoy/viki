@@ -1,0 +1,125 @@
+[
+ {"title": "Hand-off intro", "start": 1, "end": 4, "children": []},
+ {"title": "If you are an agent: read this first", "start": 5, "end": 17, "children": []},
+ {"title": "Blank line", "start": 18, "end": 18, "children": []},
+ {"title": "Rules", "start": 19, "end": 35, "children": []},
+ {"title": "Blank line", "start": 36, "end": 36, "children": []},
+ {"title": "Repository layout (since 2026-10-04)", "start": 37, "end": 47, "children": [
+   {"title": "Split history", "start": 39, "end": 41, "children": []},
+   {"title": "Old path mapping", "start": 42, "end": 46, "children": []},
+   {"title": "Change libraries first", "start": 47, "end": 47, "children": []}
+ ]},
+ {"title": "Blank line", "start": 48, "end": 48, "children": []},
+ {"title": "Work queue", "start": 49, "end": 93, "children": [
+   {"title": "Queue table", "start": 54, "end": 75, "children": [
+     {"title": "R1 envelope key safety", "start": 56, "end": 56, "children": []},
+     {"title": "R1b recovery wrap", "start": 57, "end": 57, "children": []},
+     {"title": "R6 fault injection", "start": 58, "end": 58, "children": []},
+     {"title": "R4 durability", "start": 59, "end": 59, "children": []},
+     {"title": "R5 preallocation", "start": 60, "end": 60, "children": []},
+     {"title": "R2 and R3 isolation", "start": 61, "end": 61, "children": []},
+     {"title": "R9 integrity model", "start": 62, "end": 62, "children": []},
+     {"title": "R11 evidence", "start": 63, "end": 63, "children": []},
+     {"title": "R7 and R8 sync cursor", "start": 64, "end": 64, "children": []},
+     {"title": "Platform work", "start": 65, "end": 65, "children": []},
+     {"title": "R10 and R12-R16", "start": 66, "end": 66, "children": []},
+     {"title": "Door sensor demo", "start": 67, "end": 67, "children": []},
+     {"title": "Zephyr refactor design note", "start": 68, "end": 68, "children": []},
+     {"title": "Zephyr port step 2", "start": 69, "end": 69, "children": []},
+     {"title": "Zephyr ext4 filesystem", "start": 70, "end": 70, "children": []},
+     {"title": "Power sweep", "start": 71, "end": 71, "children": []},
+     {"title": "Door sensor on LP core", "start": 72, "end": 72, "children": []},
+     {"title": "FTS now and UDP binding", "start": 73, "end": 73, "children": []},
+     {"title": "Power save on battery", "start": 74, "end": 74, "children": []},
+     {"title": "Repository split", "start": 75, "end": 75, "children": []}
+   ]},
+   {"title": "R1 as done, and what is left of it", "start": 77, "end": 93, "children": []}
+ ]},
+ {"title": "Blank line", "start": 94, "end": 94, "children": []},
+ {"title": "Environment (pinned)", "start": 95, "end": 105, "children": [
+   {"title": "SQLCipher and SQLite", "start": 99, "end": 99, "children": []},
+   {"title": "lwext4-bsd", "start": 100, "end": 100, "children": []},
+   {"title": "ESP-IDF", "start": 101, "end": 101, "children": []},
+   {"title": "Zephyr", "start": 102, "end": 102, "children": []},
+   {"title": "Host crypto", "start": 103, "end": 103, "children": []},
+   {"title": "Emulator", "start": 104, "end": 104, "children": []},
+   {"title": "Docker test image for ext4", "start": 105, "end": 105, "children": []}
+ ]},
+ {"title": "Blank line", "start": 106, "end": 106, "children": []},
+ {"title": "Tests", "start": 107, "end": 126, "children": [
+   {"title": "Host compat, LibreSSL", "start": 111, "end": 111, "children": []},
+   {"title": "Host compat, PSA", "start": 112, "end": 112, "children": []},
+   {"title": "Host crash, recovery and fault tests", "start": 113, "end": 113, "children": []},
+   {"title": "Roughtime client", "start": 114, "end": 114, "children": []},
+   {"title": "SQLCipher library alone", "start": 115, "end": 115, "children": []},
+   {"title": "Door sensor detection", "start": 116, "end": 116, "children": []},
+   {"title": "Power sweep schedule", "start": 117, "end": 117, "children": []},
+   {"title": "FTS client", "start": 118, "end": 118, "children": []},
+   {"title": "lwext4-bsd tests", "start": 119, "end": 119, "children": []},
+   {"title": "C6 emulator", "start": 120, "end": 120, "children": []},
+   {"title": "P4 emulator", "start": 121, "end": 121, "children": []},
+   {"title": "P4 board build", "start": 122, "end": 122, "children": []},
+   {"title": "Zephyr spike, native", "start": 123, "end": 123, "children": []},
+   {"title": "Zephyr spike, rev-1.3 board", "start": 124, "end": 124, "children": []},
+   {"title": "Zephyr spike, P4 emulator", "start": 125, "end": 125, "children": []},
+   {"title": "ext4 as a Zephyr filesystem", "start": 126, "end": 126, "children": []}
+ ]},
+ {"title": "Blank line", "start": 127, "end": 127, "children": []},
+ {"title": "Hardware", "start": 128, "end": 156, "children": [
+   {"title": "Flashing and boot", "start": 130, "end": 137, "children": []},
+   {"title": "Safety rules for the board", "start": 138, "end": 143, "children": []},
+   {"title": "Other firmware and build options", "start": 144, "end": 152, "children": []},
+   {"title": "Board state and next steps", "start": 153, "end": 156, "children": []}
+ ]},
+ {"title": "Blank line", "start": 157, "end": 157, "children": []},
+ {"title": "Wi-Fi and the power HAT", "start": 158, "end": 170, "children": [
+   {"title": "Credentials and build", "start": 160, "end": 163, "children": []},
+   {"title": "The power HAT", "start": 164, "end": 167, "children": []},
+   {"title": "Running from the HAT", "start": 168, "end": 170, "children": []}
+ ]},
+ {"title": "Blank line", "start": 171, "end": 171, "children": []},
+ {"title": "Power", "start": 172, "end": 200, "children": [
+   {"title": "Measured states", "start": 177, "end": 181, "children": []},
+   {"title": "Power save on battery", "start": 183, "end": 189, "children": []},
+   {"title": "Sleep-safe pads", "start": 190, "end": 192, "children": []},
+   {"title": "The ~80 mA floor", "start": 193, "end": 195, "children": []},
+   {"title": "Measuring again", "start": 196, "end": 200, "children": []}
+ ]},
+ {"title": "Blank line", "start": 201, "end": 201, "children": []},
+ {"title": "Door sensor (Grid-EYE)", "start": 202, "end": 219, "children": []},
+ {"title": "Blank line", "start": 220, "end": 220, "children": []},
+ {"title": "Door sensor and HAT on the LP core", "start": 221, "end": 265, "children": [
+   {"title": "Build", "start": 232, "end": 234, "children": []},
+   {"title": "Console and fallbacks", "start": 235, "end": 246, "children": []},
+   {"title": "Morning steps", "start": 248, "end": 265, "children": [
+     {"title": "Crossings", "start": 250, "end": 253, "children": []},
+     {"title": "Read back the rows", "start": 254, "end": 256, "children": []},
+     {"title": "Button shutdown", "start": 257, "end": 259, "children": []},
+     {"title": "HAT-only power", "start": 260, "end": 264, "children": []},
+     {"title": "Record results", "start": 265, "end": 265, "children": []}
+   ]}
+ ]},
+ {"title": "Blank line", "start": 266, "end": 266, "children": []},
+ {"title": "Reset torture", "start": 267, "end": 272, "children": []},
+ {"title": "Blank line", "start": 273, "end": 273, "children": []},
+ {"title": "BLE demo", "start": 274, "end": 285, "children": [
+   {"title": "Build", "start": 276, "end": 278, "children": []},
+   {"title": "Laptop", "start": 279, "end": 280, "children": []},
+   {"title": "Demo limits", "start": 281, "end": 281, "children": []},
+   {"title": "Time", "start": 282, "end": 283, "children": []},
+   {"title": "Board port and time servers", "start": 284, "end": 285, "children": []}
+ ]},
+ {"title": "Blank line", "start": 286, "end": 286, "children": []},
+ {"title": "Our time server", "start": 287, "end": 308, "children": [
+   {"title": "Server facts", "start": 292, "end": 298, "children": []},
+   {"title": "Logs", "start": 300, "end": 300, "children": []},
+   {"title": "Update the code", "start": 301, "end": 302, "children": []},
+   {"title": "Key file", "start": 303, "end": 304, "children": []},
+   {"title": "Checks", "start": 305, "end": 306, "children": []},
+   {"title": "Local test server", "start": 307, "end": 308, "children": []}
+ ]},
+ {"title": "Blank line", "start": 309, "end": 309, "children": []},
+ {"title": "Gotchas", "start": 310, "end": 319, "children": []},
+ {"title": "Agent worktrees", "start": 320, "end": 320, "children": []},
+ {"title": "puck_ble.py needs bleak", "start": 321, "end": 321, "children": []}
+]

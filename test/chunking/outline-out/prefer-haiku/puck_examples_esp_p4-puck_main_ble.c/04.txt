@@ -1,0 +1,173 @@
+```json
+[
+ {
+  "title": "Header and includes",
+  "start": 1,
+  "end": 47,
+  "children": []
+ },
+ {
+  "title": "UUIDs and shared state",
+  "start": 50,
+  "end": 65,
+  "children": []
+ },
+ {
+  "title": "Result stream",
+  "start": 67,
+  "end": 123,
+  "children": [
+   {
+    "title": "ble_relay_notify",
+    "start": 72,
+    "end": 81,
+    "children": []
+   },
+   {
+    "title": "ble_relay_notify_chunks",
+    "start": 83,
+    "end": 95,
+    "children": []
+   },
+   {
+    "title": "out_flush",
+    "start": 97,
+    "end": 112,
+    "children": []
+   },
+   {
+    "title": "out_str",
+    "start": 114,
+    "end": 123,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "Row formatting callback",
+  "start": 125,
+  "end": 150,
+  "children": []
+ },
+ {
+  "title": "Database task: queries and heartbeat",
+  "start": 152,
+  "end": 296,
+  "children": [
+   {
+    "title": "wall_at",
+    "start": 154,
+    "end": 164,
+    "children": []
+   },
+   {
+    "title": "Door logging (CONFIG_PUCK_DOOR)",
+    "start": 166,
+    "end": 207,
+    "children": [
+     {
+      "title": "log_crossings",
+      "start": 172,
+      "end": 201,
+      "children": []
+     }
+    ]
+   },
+   {
+    "title": "shut_down",
+    "start": 209,
+    "end": 228,
+    "children": []
+   },
+   {
+    "title": "db_task",
+    "start": 230,
+    "end": 296,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "GATT service",
+  "start": 298,
+  "end": 353,
+  "children": [
+   {
+    "title": "chr_access",
+    "start": 300,
+    "end": 340,
+    "children": []
+   },
+   {
+    "title": "services table",
+    "start": 342,
+    "end": 353,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "GAP: advertising and connections",
+  "start": 355,
+  "end": 412,
+  "children": [
+   {
+    "title": "advertise",
+    "start": 359,
+    "end": 388,
+    "children": []
+   },
+   {
+    "title": "gap_event",
+    "start": 390,
+    "end": 412,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "on_sync (address and device name)",
+  "start": 414,
+  "end": 428,
+  "children": []
+ },
+ {
+  "title": "Wi-Fi radio check (CONFIG_PUCK_NET)",
+  "start": 430,
+  "end": 457,
+  "children": [
+   {
+    "title": "wifi_scan_report",
+    "start": 436,
+    "end": 456,
+    "children": []
+   }
+  ]
+ },
+ {
+  "title": "host_task",
+  "start": 459,
+  "end": 464,
+  "children": []
+ },
+ {
+  "title": "Database repair and startup",
+  "start": 466,
+  "end": 526,
+  "children": [
+   {
+    "title": "puckapp_ble_prepare",
+    "start": 468,
+    "end": 481,
+    "children": []
+   },
+   {
+    "title": "puckapp_ble",
+    "start": 483,
+    "end": 526,
+    "children": []
+   }
+  ]
+ }
+]
+```

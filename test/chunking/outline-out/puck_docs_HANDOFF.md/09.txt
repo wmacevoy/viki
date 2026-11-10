@@ -1,0 +1,139 @@
+```json
+[
+  {
+    "title": "Hand-off",
+    "start": 1,
+    "end": 396,
+    "children": [
+      {
+        "title": "If you are an agent: read this first",
+        "start": 5,
+        "end": 17,
+        "children": [
+          {"title": "Reading order", "start": 11, "end": 13, "children": []},
+          {"title": "Checking the commit trail", "start": 14, "end": 16, "children": []},
+          {"title": "Declaring succession", "start": 17, "end": 17, "children": []}
+        ]
+      },
+      {
+        "title": "Rules",
+        "start": 19,
+        "end": 35,
+        "children": [
+          {"title": "Green master and branches", "start": 21, "end": 24, "children": []},
+          {"title": "Commit trailers", "start": 25, "end": 33, "children": []},
+          {"title": "Work queue upkeep", "start": 34, "end": 34, "children": []},
+          {"title": "Licensing and SQLCipher source", "start": 35, "end": 35, "children": []}
+        ]
+      },
+      {
+        "title": "Where things stand",
+        "start": 37,
+        "end": 48,
+        "children": [
+          {"title": "Board state", "start": 39, "end": 41, "children": []},
+          {"title": "Next steps", "start": 42, "end": 45, "children": []},
+          {"title": "Not merged yet", "start": 46, "end": 48, "children": []}
+        ]
+      },
+      {"title": "Repository layout", "start": 50, "end": 60, "children": []},
+      {
+        "title": "Work queue",
+        "start": 62,
+        "end": 109,
+        "children": [
+          {"title": "Work queue items", "start": 64, "end": 91, "children": []},
+          {"title": "R1 as done, and what is left", "start": 93, "end": 109, "children": []}
+        ]
+      },
+      {"title": "Environment (pinned)", "start": 111, "end": 121, "children": []},
+      {"title": "Tests", "start": 123, "end": 143, "children": []},
+      {
+        "title": "Hardware",
+        "start": 145,
+        "end": 173,
+        "children": [
+          {"title": "Board and flashing", "start": 147, "end": 151, "children": []},
+          {"title": "Boot and self-test", "start": 152, "end": 154, "children": []},
+          {"title": "Flash safety", "start": 155, "end": 160, "children": []},
+          {"title": "C6 firmware", "start": 161, "end": 163, "children": []},
+          {"title": "Performance and journal batching", "start": 164, "end": 167, "children": []},
+          {"title": "Zephyr on the board", "start": 168, "end": 169, "children": []},
+          {"title": "Board state and next steps", "start": 170, "end": 173, "children": []}
+        ]
+      },
+      {
+        "title": "Wi-Fi and the power HAT",
+        "start": 175,
+        "end": 187,
+        "children": [
+          {"title": "Credentials and build", "start": 177, "end": 180, "children": []},
+          {"title": "The power HAT", "start": 181, "end": 187, "children": []}
+        ]
+      },
+      {
+        "title": "Power",
+        "start": 189,
+        "end": 217,
+        "children": [
+          {"title": "Power states", "start": 194, "end": 198, "children": []},
+          {"title": "Power save", "start": 200, "end": 206, "children": []},
+          {"title": "Sleep-safe pads", "start": 207, "end": 209, "children": []},
+          {"title": "The ~80 mA floor", "start": 210, "end": 212, "children": []},
+          {"title": "Measuring again", "start": 213, "end": 217, "children": []}
+        ]
+      },
+      {
+        "title": "GPS (u-blox MAX-M10S)",
+        "start": 219,
+        "end": 275,
+        "children": [
+          {"title": "GPS hardware and wiring", "start": 221, "end": 226, "children": []},
+          {"title": "Build and status", "start": 227, "end": 235, "children": []},
+          {"title": "PPS and light sleep", "start": 236, "end": 237, "children": []},
+          {"title": "Fresh test database", "start": 238, "end": 240, "children": []},
+          {"title": "Parser tests", "start": 241, "end": 242, "children": []},
+          {"title": "Clock watching", "start": 243, "end": 255, "children": []},
+          {"title": "Day run", "start": 256, "end": 259, "children": []},
+          {"title": "Time model", "start": 260, "end": 275, "children": []}
+        ]
+      },
+      {
+        "title": "Door sensor (Grid-EYE)",
+        "start": 277,
+        "end": 294,
+        "children": [
+          {"title": "Hardware and build", "start": 279, "end": 283, "children": []},
+          {"title": "Mounting and orientation", "start": 284, "end": 290, "children": []},
+          {"title": "Checking the sensor", "start": 291, "end": 293, "children": []},
+          {"title": "One person at a time", "start": 294, "end": 294, "children": []}
+        ]
+      },
+      {
+        "title": "Door sensor and HAT on the LP core",
+        "start": 296,
+        "end": 340,
+        "children": [
+          {"title": "LP core design", "start": 298, "end": 305, "children": []},
+          {"title": "Build and expected console output", "start": 307, "end": 321, "children": []},
+          {"title": "Morning steps", "start": 323, "end": 340, "children": []}
+        ]
+      },
+      {"title": "Reset torture", "start": 342, "end": 347, "children": []},
+      {"title": "BLE demo", "start": 349, "end": 360, "children": []},
+      {
+        "title": "Our time server (fts.vikiverse.net)",
+        "start": 362,
+        "end": 383,
+        "children": [
+          {"title": "Server host and access", "start": 364, "end": 373, "children": []},
+          {"title": "Logs and updates", "start": 375, "end": 377, "children": []},
+          {"title": "Key file", "start": 378, "end": 379, "children": []},
+          {"title": "Checks", "start": 380, "end": 383, "children": []}
+        ]
+      },
+      {"title": "Gotchas", "start": 385, "end": 396, "children": []}
+    ]
+  }
+]
+```

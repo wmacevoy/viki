@@ -84,8 +84,16 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   reader who has not granted that principal sees none of its rows (R-4a). The tests ran into this.
 - **Re-ingest reads the whole history each time** and relies on ids to dedupe. viki plus the puck
   (434 commits, 2,800 rows) takes about 2 s. That is fine at this size and not measured larger.
-- **Unkeyed, behind an explicit `--plaintext`.** The library now links SQLCipher, so keying the
-  diary is a host change. It touches keys, so it waits for a decision.
+- **Keyed with `--keyfile`, or unencrypted only behind an explicit `--plaintext`** (Warren,
+  2026-11-10). The key file holds exactly 64 hex characters, a raw key used with no KDF (N-7). A
+  passphrase is refused rather than stretched, because N-8 keeps passwords on a separate path. This
+  is stricter than the old CLI, which took either. A file that group or others can access is refused,
+  as ssh refuses a private key. The key is applied before any other statement, and a real read
+  follows, so a wrong key is reported plainly. The host zeroes its copy once applied; Python strings
+  made along the way are not guaranteed gone. `vk.py keygen` writes a new key to a new file, created
+  mode 600 with `O_EXCL`, so the key is never readable by others and never overwritten. The diary
+  file itself is created with the process umask (0644 here): it is ciphertext, but its size and
+  timing are visible.
 - **Superseded versions are hidden by default, and the number hidden is said.** Without that, a phrase
   that lived through ten commits returned ten rows. `--all` shows them, each marked (Q-4).
 - **`find` ranks whole files.** Nothing is chunked, so a long document that mentions every query word
