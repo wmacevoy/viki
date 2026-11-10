@@ -150,6 +150,23 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   in passing outranks a short one that answers. Common words match nearly everything, and the snippet
   is the first line holding any query word, not the best one.
 
+- **`vk.py outline` asks a judge outside viki** (SHAPE-7) and writes what it answers.
+  - **Who writes:** each model writes under its own principal (`vk.judge.sonnet`, `vk.judge.haiku`),
+    and the host entitles them beside the ingester, so a reader chooses by author (OL-2).
+  - **Which versions:** by default it outlines current file versions with no outline from that judge
+    yet, so a rerun asks nothing new. With `--history`, it does every version in arrival order.
+  - **The protocol** is the one measured in `test/chunking/outline.py`. A version whose predecessor
+    has an outline is sent with that version and its outline, with a preference to keep it, and the
+    new outline names the one it carried (OL-3). Otherwise it gets a fresh outline by concept.
+  - **Conversion:** the judge answers in lines. The host clips the tree to the file and to each
+    parent, drops overlapping siblings, and converts to OL-1's byte ranges.
+  - **Skips:** binary bodies, and anything over 60,000 bytes for the call's versions together
+    (Not yet answered 14).
+  - **Testing:** `--judge-cmd` replaces the `claude` CLI, so the tests run a fake judge that outlines
+    by markdown headings. Calls are sequential.
+  - **Cost on the dogfood diary:** three Sonnet calls on puck files took 17 s. About 550 current text
+    files would take roughly 50 minutes at that rate, and the money is not measured here.
+
 ## Testing
 
 - `test/store_test.c`: one test per claim, naming its requirement.

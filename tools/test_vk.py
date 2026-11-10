@@ -303,6 +303,70 @@ def t_ol4(s):
     check(rc == 0 and "in: Beta" in out and "searched whole" in out, "find too, and coverage counts the whole", out)
 
 
+FAKE_JUDGE = r"""
+import json, os, re, sys
+prompt = sys.stdin.read()
+log = os.environ.get("VK_FAKE_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write("CARRY\n" if "Outline of the previous version" in prompt else "FIRST\n")
+block = prompt.split("New version:\n", 1)[1] if "New version:\n" in prompt else prompt
+lines = [ln for ln in block.splitlines() if re.match(r"^\d+\t", ln)]
+nodes = []
+for ln in lines:
+    n, text = ln.split("\t", 1)
+    if text.startswith("#"):
+        nodes.append({"title": text.lstrip("# ").strip(), "start": int(n), "children": []})
+for i, nd in enumerate(nodes):
+    nd["end"] = nodes[i + 1]["start"] - 1 if i + 1 < len(nodes) else int(lines[-1].split("\t")[0])
+print("Here is the outline:\n" + json.dumps(nodes))
+"""
+
+
+def t_ol_cmd(s):
+    judge = os.path.join(s.root, "judge.py")
+    with open(judge, "w") as f:
+        f.write(FAKE_JUDGE)
+    log = os.path.join(s.root, "judge.log")
+    os.environ["VK_FAKE_LOG"] = log
+    cmd = f"{sys.executable} {judge}"
+    a = s.repo("alpha")
+    s.write(a, "notes.md", "# Alpha\nfirst words\n# Beta\nsecond words\n")
+    with open(os.path.join(a, "blob.bin"), "wb") as f:
+        f.write(b"\x00\x01binary")
+    s.commit(a, "one")
+    s.write(a, "notes.md", "# Alpha\nfirst words\n# Beta\nsecond words\n# Gamma\nthe marker-gamma words\n")
+    s.commit(a, "two")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("outline", "--judge-cmd", cmd)
+    check(rc == 0 and "1 written" in out and "1 not text" in out and "1 judge calls" in out,
+          "the current versions are outlined; a binary one is not", out)
+    rc, out = s.vk("outline", "--judge-cmd", cmd)
+    check(rc == 0 and "1 already outlined" in out and "0 judge calls" in out, "a second run asks nothing", out)
+    rc, out = s.vk("grep", "marker-gamma", "--outlines", "vk.judge.sonnet")
+    check(rc == 0 and "in: Gamma" in out, "the judge's outline is searched", out)
+    # with history, on a fresh diary: the old version first, then the new one carried forward
+    s.store = os.path.join(s.root, "history.db")
+    open(log, "w").close()
+    s.vk("ingest-git", a)
+    rc, out = s.vk("outline", "--history", "--judge-cmd", cmd)
+    check(rc == 0 and "2 written" in out, "both versions are outlined", out)
+    with open(log) as f:
+        check(f.read().split() == ["FIRST", "CARRY"], "the first is outlined fresh, the second carried forward")
+    import vkstore as vk
+    st = vk.Store(s.store, b"vk.ingest.git", vk.READ, others=[(b"vk.judge.sonnet", vk.ORIGINATE | vk.SUPERSEDE | vk.READ)])
+    try:
+        outlines = [r for r in st.walk() if r.kind == b"outline"]
+        check(len(outlines) == 2 and sorted(len(r.derived_from) for r in outlines) == [1, 2],
+              "the carried outline names the one it carried (OL-3)")
+    finally:
+        st.close()
+    s.store = os.path.join(s.root, "limit.db")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("outline", "--history", "--limit", "1", "--judge-cmd", cmd)
+    check(rc == 0 and "1 judge calls" in out and "1 left for a later run" in out, "--limit stops and says so", out)
+
+
 def main():
     sys.path.insert(0, HERE)
     run("SCM-1", "a repository's history goes in once, every branch and tag", t_scm1)
@@ -314,7 +378,8 @@ def main():
     run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
     run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
-    print(f"{failed} of 9 failed")
+    run("OL-3", "vk.py outline asks a judge, carries outlines forward, and writes each once", t_ol_cmd)
+    print(f"{failed} of 10 failed")
     return failed != 0
 
 

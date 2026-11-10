@@ -8,6 +8,7 @@
   vk.py --store DIARY --plaintext ingest-git REPO_DIR [--name NAME]
   vk.py --store DIARY --plaintext grep TEXT [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext find WORDS [--repo NAME] [--all] [--k N]
+  vk.py --store DIARY --plaintext outline [--repo NAME] [--judge sonnet|haiku] [--history] [--limit N]
   vk.py --store DIARY --plaintext coverage
   vk.py --store DIARY --plaintext heads NAME
 
@@ -28,10 +29,12 @@ Every row is authored by the host's principal: git's author is a claim, kept
 in the check-in's body, not in the frame.
 """
 import argparse
+import collections
 import datetime
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -40,6 +43,11 @@ import vkstore as vk  # noqa: E402
 
 PRINCIPAL = b"vk.ingest.git"
 RIGHTS = vk.ORIGINATE | vk.SUPERSEDE | vk.READ
+# The judges whose outlines this host writes and reads (OL-2): one principal per model, so a reader
+# chooses by author and two models' outlines stand side by side.
+JUDGES = {"sonnet": ("claude-sonnet-5-5", b"vk.judge.sonnet"),
+          "haiku": ("claude-haiku-5-5", b"vk.judge.haiku")}
+GRANTS = [(principal, RIGHTS) for _, principal in JUDGES.values()]
 
 
 # ---- the host's clock and the world (SHAPE-6: core reads neither) ----
@@ -285,6 +293,216 @@ def ingest_commit(store, repo, name, c, blobs, rules, maps, checkins, stats):
     checkins[c["sha"]] = cid
 
 
+# ---- outlines (OL), asked of a judge outside viki (SHAPE-7) ----
+
+# The protocol measured in test/chunking/outline.py (FINDINGS 2026-11-10): a first outline by concept,
+# not size; after that, the previous version and its outline, with a preference to keep it.
+FIRST = """Below is one version of the file {path}, with each line numbered.
+
+Outline it the way a reader would understand it: the concepts it contains, nested as deeply as the
+content's own structure goes. For code, that might be groups of related functions or types, then
+each function or type, then its distinct parts if it has any. For prose, sections, then
+sub-sections, then topics. Every node is one concept. Do not split or merge anything because of its
+length.
+
+Answer with only JSON: a list of top-level nodes, each
+{{"title": "<a short name for the concept>", "start": <first line>, "end": <last line>, "children": [<nodes>]}}.
+Children lie inside their parent and do not overlap each other. Lines that belong to no concept, such
+as blank lines between them, may be left out.
+
+{numbered}"""
+
+CARRY = """Below are two versions of the file {path}, each with numbered lines, and the outline of the
+previous version. Write the outline of the new version.
+
+Prefer to leave the outline the same: keep each node's title, its place in the outline and its
+children, and move its line numbers to where that text now is. Change the outline only to reflect a
+change in structure (a concept added, removed, moved, split or merged) or text rewritten whole cloth.
+Do not split or merge anything because of its length.
+
+Answer with only JSON: the whole outline of the new version, a list of top-level nodes, each
+{{"title": "<a short name for the concept>", "start": <first line>, "end": <last line>, "children": [<nodes>]}}.
+Line numbers are the new version's.
+
+Outline of the previous version:
+{outline}
+
+Previous version:
+{prev}
+
+New version:
+{new}"""
+
+MAX_BYTES = 60000   # two versions of this must fit one call (Not yet answered 14)
+
+
+def text_lines(body):
+    """The body's lines with their endings, or None if it is not text."""
+    if b"\0" in body:
+        return None
+    try:
+        body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return body.splitlines(keepends=True)
+
+
+def numbered(lines):
+    return "".join(f"{i+1}\t{ln.decode('utf-8')}" for i, ln in enumerate(lines))
+
+
+def line_tree(answer, n_lines):
+    """The judge's outline as nested (title, start, end, children) in lines, clipped to the file and
+    to each parent, siblings that overlap dropped. None if no JSON list is in the answer."""
+    m = re.search(r"\[.*\]", answer, re.S)
+    if not m:
+        return None
+    try:
+        raw = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+
+    def clean(nodes, lo, hi):
+        out, last = [], lo - 1
+        good = [n for n in nodes if isinstance(n, dict)]
+        def first(n):
+            try:
+                return int(n.get("start", 0))
+            except (TypeError, ValueError):
+                return 0
+        for n in sorted(good, key=first):
+            try:
+                s, e = int(n["start"]), int(n["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            s, e = max(s, lo, last + 1), min(e, hi)
+            if s > e:
+                continue
+            kids = n.get("children") if isinstance(n.get("children"), list) else []
+            out.append((str(n.get("title", "")).strip() or "(untitled)", s, e, clean(kids, s, e)))
+            last = e
+        return out
+    return clean(raw if isinstance(raw, list) else [], 1, n_lines)
+
+
+def to_bytes(tree, lines):
+    """Line ranges (1-based, inclusive) as OL-1 byte ranges (lo, hi exclusive)."""
+    starts = [0]
+    for ln in lines:
+        starts.append(starts[-1] + len(ln))
+    return [{"title": t, "lo": starts[s - 1], "hi": starts[e], "children": to_bytes(k, lines)}
+            for t, s, e, k in tree]
+
+
+def to_lines(nodes, lines):
+    """A stored outline back in lines, for the judge."""
+    starts = [0]
+    for ln in lines:
+        starts.append(starts[-1] + len(ln))
+
+    def line_of(off, end):
+        import bisect
+        i = bisect.bisect_right(starts, off) if not end else bisect.bisect_left(starts, off)
+        return max(1, min(len(lines), i))
+    return [{"title": n["title"], "start": line_of(n["lo"], False), "end": line_of(n["hi"], True),
+             "children": to_lines(n.get("children") or [], lines)} for n in nodes]
+
+
+def ask_judge(cmd, prompt):
+    import shlex
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="vk-judge-") as empty:   # the judge sees only the prompt
+        r = subprocess.run(shlex.split(cmd), input=prompt, capture_output=True, text=True, cwd=empty,
+                           timeout=1200)
+    if r.returncode:
+        raise vk.VkError(f"judge failed ({r.returncode}): {r.stderr.strip()[:200]}")
+    return r.stdout
+
+
+def outline_one(store, judge, cmd, r, prev):
+    """Ask for and write the outline of file version r. prev: (record, its outline nodes) to carry
+    forward, or None. Returns 'written', 'exists', or why it was skipped."""
+    key = vk.outline_key(r.id, judge)
+    lines = text_lines(r.body)
+    if lines is None:
+        return "not text"
+    if not lines:
+        return "empty"
+    path = r.akey.decode("utf-8", "replace")
+    if prev is not None:
+        plines = text_lines(prev[0].body) or []
+        if len(r.body) + len(prev[0].body) > MAX_BYTES:
+            return "too large"
+        prompt = CARRY.format(path=path, outline=json.dumps(to_lines(prev[1], plines), indent=1),
+                              prev=numbered(plines), new=numbered(lines))
+    else:
+        if len(r.body) > MAX_BYTES:
+            return "too large"
+        prompt = FIRST.format(path=path, numbered=numbered(lines))
+    tree = line_tree(ask_judge(cmd, prompt), len(lines))
+    if tree is None:
+        return "unparseable"
+    body = json.dumps(to_bytes(tree, lines), ensure_ascii=False).encode()
+    derived = [r.id] + ([prev[2]] if prev is not None else [])
+    t = now_utc()
+    try:
+        store.put(b"outline", key, body, ts=t.isoformat().encode(), rank=rank_of(t.timestamp()),
+                  reference=r.id, derived_from=derived)
+    except vk.VkError as e:
+        return f"refused: {e}"
+    return "written"
+
+
+def previous_outline(store, judge, r):
+    """The judge's outline of a version r supersedes: (that version, its nodes, the outline's id)."""
+    for pid in r.supersedes:
+        p = store.get(pid)
+        if p is None or p.kind != b"file":
+            continue
+        key = vk.outline_key(pid, judge)
+        st, body = store.current(key)
+        if st == vk.OK and body:
+            return (p, json.loads(body), store.head_id(key))
+    return None
+
+
+def file_versions(store, repo, history):
+    """File versions to outline: the current ones, or with history every version, in arrival order,
+    which puts a version after the one it supersedes, so that one is outlined first."""
+    prefix = repo.encode() + b"/" if repo is not None else b""
+    out = []
+    for r in store.walk():
+        if r.kind != b"file" or r.erased or not r.akey.startswith(prefix):
+            continue
+        if not history and not store.standing(r.akey, r.id)[0]:
+            continue
+        out.append(r)
+    return out
+
+
+def cmd_outline(store, repo, judge_name, history, limit, cmd):
+    model, judge = JUDGES[judge_name]
+    cmd = cmd or f"claude -p --model {model} --tools \"\" --no-session-persistence --output-format text"
+    tally, asked = collections.Counter(), 0
+    for r in file_versions(store, repo, history):
+        st, _ = store.current(vk.outline_key(r.id, judge))
+        if st in (vk.OK, vk.FORKED):
+            tally["already outlined"] += 1
+            continue
+        if limit is not None and asked >= limit:
+            tally["left for a later run"] += 1
+            continue
+        why = outline_one(store, judge, cmd, r, previous_outline(store, judge, r))
+        if why in ("written", "unparseable") or why.startswith("refused"):
+            asked += 1
+        if why != "written" and why not in ("not text", "empty"):
+            print(f"  {r.akey.decode('utf-8', 'replace')}: {why}", file=sys.stderr)
+        tally["refused" if why.startswith("refused") else why] += 1
+    print(f"outlines by {judge.decode()}: " + ", ".join(f"{n} {k}" for k, n in sorted(tally.items())) +
+          f"; {asked} judge calls")
+    return 0
+
+
 # ---- reading ----
 
 INDEX = b"ingest/index"
@@ -415,6 +633,12 @@ def main(argv):
         s.add_argument("--all", action="store_true", help="also show superseded versions")
         s.add_argument("--k", type=int, default=None if name == "grep" else 10)
         s.add_argument("--outlines", metavar="AUTHOR", help="return the nodes of this author's outlines (OL-4)")
+    ol = sub.add_parser("outline", help="ask a judge for outlines of file versions (OL)")
+    ol.add_argument("--repo")
+    ol.add_argument("--judge", choices=sorted(JUDGES), default="sonnet")
+    ol.add_argument("--history", action="store_true", help="every version, oldest first, not only current ones")
+    ol.add_argument("--limit", type=int, help="at most this many judge calls this run")
+    ol.add_argument("--judge-cmd", help="the command that answers a prompt on stdin (default: the claude CLI)")
     sub.add_parser("coverage")
     h = sub.add_parser("heads")
     h.add_argument("name")
@@ -432,7 +656,12 @@ def main(argv):
             raise KeyError_(f"refusing to open {args.store} without a key: --keyfile PATH, "
                             "or --plaintext to say an unencrypted diary was meant")
         key = read_keyfile(args.keyfile) if args.keyfile else None
-        store = vk.Store(args.store, PRINCIPAL, RIGHTS, key=key)
+        if args.cmd == "outline":   # the judge writes as itself; the ingester and the judges are entitled
+            judge = JUDGES[args.judge][1]
+            others = [(PRINCIPAL, RIGHTS)] + [g for g in GRANTS if g[0] != judge]
+            store = vk.Store(args.store, judge, RIGHTS, key=key, others=others)
+        else:
+            store = vk.Store(args.store, PRINCIPAL, RIGHTS, key=key, others=GRANTS)
     except (KeyError_, vk.VkError) as e:
         print(f"vk: {e}", file=sys.stderr)
         return 2
@@ -450,6 +679,8 @@ def main(argv):
             return cmd_search(store, args.text, args.repo, args.cmd, args.all, args.k)
         if args.cmd == "coverage":
             return cmd_coverage(store)
+        if args.cmd == "outline":
+            return cmd_outline(store, args.repo, args.judge, args.history, args.limit, args.judge_cmd)
         return cmd_heads(store, args.name)
     except (vk.VkError, subprocess.CalledProcessError) as e:
         print(f"vk: {e}", file=sys.stderr)

@@ -70,6 +70,8 @@ for name, args, res in [
     ("vk_current", [P, Bytes, C.POINTER(Row)], C.c_int),
     ("vk_row_close", [C.POINTER(Row)], None),
     ("vk_get", [P, C.POINTER(Id), C.POINTER(Cursor)], C.c_int),
+    ("vk_cursor_open", [P, C.c_int64, C.POINTER(Cursor)], C.c_int),
+    ("vk_cursor_next", [C.POINTER(Cursor)], C.c_int),
     ("vk_cursor_close", [C.POINTER(Cursor)], None),
     ("vk_standing", [P, Bytes, C.POINTER(Id), C.POINTER(C.c_int), C.POINTER(C.c_int)], C.c_int),
     ("vk_bm25_enable", [P], C.c_int),
@@ -131,11 +133,14 @@ class Store:
     diary. It is zeroed here once applied, so the caller's copy does not outlive
     the open."""
 
-    def __init__(self, path, principal, rights, key=None):
+    def __init__(self, path, principal, rights, key=None, others=()):
+        """others: further (principal, rights) the host entitles, so their rows count (R-4a)."""
         self.db, self.st = P(), P()
         # Kept alive here because the store borrows them for its whole life.
         self._principal = principal
-        self._grant = Grant(_b(principal), rights)
+        self._names = [principal] + [o for o, _ in others]
+        grants = [(principal, rights)] + list(others)
+        self._grant = (Grant * len(grants))(*[Grant(_b(n), r) for n, r in grants])
         if LIB.sqlite3_open(path.encode(), C.byref(self.db)) != 0:
             raise VkError(f"cannot open {path}")
         if key is not None:
@@ -150,7 +155,7 @@ class Store:
         # only sets the cipher context.
         if LIB.sqlite3_exec(self.db, b"SELECT count(*) FROM sqlite_schema", None, None, None) != 0:
             self._fail(f"{path} is not readable: wrong key, or not a diary")
-        if LIB.vk_open(self.db, _b(principal), C.byref(self._grant), 1, C.byref(self.st)) != OK:
+        if LIB.vk_open(self.db, _b(principal), self._grant, len(grants), C.byref(self.st)) != OK:
             self._fail(f"vk_open: {self.errmsg()}")
 
     def _fail(self, why):
@@ -196,6 +201,28 @@ class Store:
         if rc == OK:
             LIB.vk_row_close(C.byref(r))
         return rc, body
+
+    def walk(self):
+        """Every row in arrival order, as Records."""
+        c = Cursor()
+        if LIB.vk_cursor_open(self.st, 0, C.byref(c)) != OK:
+            raise VkError(f"cursor: {self.errmsg()}")
+        try:
+            while (rc := LIB.vk_cursor_next(C.byref(c))) == OK:
+                yield Record(c)
+            if rc != DONE:
+                raise VkError(f"cursor: {self.errmsg()}")
+        finally:
+            LIB.vk_cursor_close(C.byref(c))
+
+    def head_id(self, akey):
+        """The id of akey's current row, or None."""
+        r = Row()
+        if LIB.vk_current(self.st, _b(akey), C.byref(r)) != OK:
+            return None
+        out = bytes(r.id)
+        LIB.vk_row_close(C.byref(r))
+        return out
 
     def get(self, id_):
         c = Cursor()

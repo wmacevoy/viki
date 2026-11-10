@@ -125,6 +125,11 @@ Drafted as `REQUIREMENTS_v3.md` OL-1 to OL-6, which are not yet confirmed. Stora
 diary, file bodies went from 53 MB to 15.3 MB. The evidence is in
 FINDINGS (2026-11-10) and `test/chunking/`.
 
+**Outlines in the diary: built 2026-11-10, uncommitted.** `vk.py outline` writes Sonnet's outlines of
+file versions, and `vk.py grep/find --outlines vk.judge.sonnet` returns the section a hit is in. Tried
+on three puck files: `bench.c` got 33 nodes, and `find "fsync bench"` returned it as "in: File header
+comment, bytes 0-603". The whole diary has not been outlined.
+
 ## Slices, each one vertical
 
 Each slice runs from the command to the store to the answer, and each ends with a check that can
