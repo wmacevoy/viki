@@ -12,6 +12,34 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## Reverse deltas store about half of what any chunking did, so storage is not the outline's job
+
+2026-11-10. Warren: "the storage should be reverse-diffed, yes? the latest is a plain blob, earlier
+is recovered from that main one." `test/chunking/rdelta.py`, on the same diary as the two entries
+below (every text file version of viki at 31fcae5 and the puck at 34b4cf3). A head, a version
+nothing supersedes, is stored whole. Every other version is stored as a line delta from the version
+that supersedes it: the older version's own lines, plus 8 bytes per op. Written before the run: it
+fails if it stores more than line-anchored CDC on code or markdown.
+
+| group | versions | as written | heads | deltas | stored | against CDC lines | longest chain | zlib |
+|---|---|---|---|---|---|---|---|---|
+| code | 1,202 | 17.08 MB | 3.21 | 0.35 | **3.56** | 0.58 | 30 | 1.08 |
+| markdown | 793 | 28.61 MB | 2.34 | 0.43 | **2.76** | 0.53 | 75 | 1.02 |
+| other text | 296 | 1.39 MB | 0.80 | 0.03 | 0.83 | 0.89 | 16 | 0.16 |
+
+The heads are most of what is stored. Over the whole history, deltas add 11% to code and 18% to
+markdown. Chunks store a whole changed chunk; a delta stores only the changed lines. CDC was about
+what the best judged outline (Sonnet) achieved, so reverse deltas beat outlines for storage too.
+
+**The costs, not measured here:** each new version turns its predecessor into a delta, which is one
+rewrite per write. Reading an old version walks the chain (75 at worst here), so the chain needs a
+bound. Erasing a version in the middle re-encodes its neighbour first. The zlib column compresses
+each group as one stream, so it is an upper bound on what per-row compression would reach.
+
+**What it changed:** the draft requirements. Storage moved from OL to a new series, DS-1 to DS-4
+(heads whole, reverse deltas, bounded chains, erasure re-encodes), and outlines keep meaning only.
+
+---
 ## An outline judged by Sonnet, told to keep the previous outline, dedupes code as well as content-defined chunking, and names its concepts
 
 2026-11-10, the same 12 versions of three files as the entry below. Warren: "instead of a size, can

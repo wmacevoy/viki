@@ -249,6 +249,68 @@ core's interface. They are not in the 1.0 scope, which Warren closes (FIN-4).
 - **SCM-6** *(since v3)* Chat transcripts may be ingested. Forgetting one is a tombstone (W-1,
   W-15): *"chat is fine - that what tombstones are for."*
 
+## OL — Outlines: judged concepts, which search returns (new series, DRAFT)
+
+**Status: draft**, by Claude Opus 5.5 on 2026-11-10, on Warren's instruction: *"commit, then draft
+the outline design into requirements"*. No ID here binds until Warren confirms the series. The
+evidence is two FINDINGS entries of 2026-11-10, from `test/chunking/`. Sizes cut by rule or by
+content-defined chunking store about as well as structure. An outline judged by Sonnet, given the
+previous version and its outline and asked to keep it, stored less than line-anchored
+content-defined chunking on all three files sampled, kept 96 to 99% of its concepts between
+versions, and named them as a reader would. *"instead of a size, can you ask for an outline? chunks
+can be every outline level. i'm not sure size is important --- concept is."* and *"seems judged
+chunking is the only thing to keep --- the projection is likely not as useful."* — Warren,
+2026-11-10. Storage is not an outline's job: reverse deltas store about half of what any chunking
+did (DS).
+
+- **OL-1** *(since v3)* An **outline** is an assertion about one assertion, its **target**: a tree of
+  nodes, each a title and a byte range of the target's body. A child lies inside its parent, and
+  siblings are in order and do not overlap. Bytes no node covers belong to the node around them.
+  The target is named in `derived_from` (V-1). An outline that breaks any of this is refused when
+  written and quarantined on arrival (M-7).
+- **OL-2** *(since v3)* **An outline is a judgment, never a computation** (SHAPE-7). viki stores
+  outlines and computes none. Its author is whoever judged it, a person or a model under its own
+  principal. Several outlines of one target may stand side by side, and none outranks another
+  (L-4). Which one a reader uses is the reader's choice, by author, outside viki.
+- **OL-3** *(since v3)* **An outline may carry another forward.** An outline of a new version may
+  also name, in `derived_from`, the outline of an earlier version it was made from. So whether a
+  concept persisted is a fact a reader can check, not something to infer.
+- **OL-4** *(since v3)* **Search returns outline nodes.** Where a target has an outline the reader
+  uses, a hit is the smallest node that holds the match. It comes with the titles from the root
+  down, its range, and its standing (Q-4). An assertion with no such outline is searched and
+  returned whole, and the coverage says how many were searched whole (Q-2).
+- **OL-5** *(since v3)* **An outline of an erased target is flagged for review** (W-13). Its ranges
+  point at nothing, and its titles still describe what was there (Not yet answered 13).
+- **OL-6** *(since v3)* **No judge is needed to store, sync or search.** Core makes no model call,
+  and nothing is withheld until an outline exists. A peer with no judge, such as the puck (ENV-1),
+  stores, merges and searches every assertion, whole where no outline is held.
+
+## DS — How versions are stored (new series, DRAFT)
+
+**Status: draft**, by Claude Opus 5.5 on 2026-11-10. *"the storage should be reverse-diffed, yes?
+the latest is a plain blob, earlier is recovered from that main one."* — Warren, 2026-11-10.
+Measured on every text file version in viki and the puck (`test/chunking/rdelta.py`, FINDINGS
+2026-11-10): code stored in 3.56 MB against 6.16 for line-anchored content-defined chunking, and
+markdown in 2.76 against 5.19. Content-defined chunking was about what the best judged outline
+achieved, so outlines set meaning (OL), and this series sets storage. Both are local and below the
+frame: ids, frames, signatures and merge do not change (A-2 hashes the body as given).
+
+- **DS-1** *(since v3)* **The latest is whole; an earlier version is recovered from a later one.** A
+  body that no valid assertion supersedes, a head (a fork has several), is stored whole. Reading it
+  rebuilds nothing. A superseded body is stored as a reverse delta from a body that supersedes it.
+  So storing a new version adds about the size of the change, not of the body, and the version it
+  supersedes becomes a delta.
+- **DS-2** *(since v3)* **Recovery is bounded** (ENV-2). Rebuilding a version walks at most a stated
+  number of deltas, after which a version is stored whole again, and it streams rather than loading
+  the chain. *(The bound: invented when measured. The longest chain in the sample was 75 versions.)*
+- **DS-3** *(since v3)* **Arrival order does not matter** (R-3, M-1). A version that arrives after a
+  version superseding it is stored as a delta on arrival. A digest, a verify and a merge read the
+  same bytes whichever way a body is stored.
+- **DS-4** *(since v3)* **Erasure loses only what it was asked to** (W-3). Erasing a version removes
+  its bytes. Any version recovered through it is first re-encoded against the nearest version that
+  survives, and erasing a head leaves the newest survivor whole. A range tombstone (W-15) does the
+  same at the range's edges.
+
 ## W — Forgetting a range (additions)
 
 - **W-15** *(since v3)* A **range tombstone** names a target author, a log and a contiguous range of
@@ -421,3 +483,16 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
     pair of ids, so disagreeing judgments fork (R-5); or the author and the sorted pair, so they
     stand side by side, optionally with only that author allowed to supersede, an exception to
     v2's R-7.
+12. **An outline's akey** (OL-2), the same question as a relation's (11). Drafted: the target's id
+    and the author, so one author's newer outline of a target supersedes that author's older one,
+    and two authors' outlines stand side by side. *(invented)*
+13. **Erasing a target and its outlines' titles** (OL-5). W-13 flags a derivative of an erased
+    source and leaves the decision to a person. An outline's titles are short descriptions of the
+    erased text, so flagging leaves that description readable until someone acts. Proposed: keep
+    W-13 (flag), and have the host erase an outline's body when it erases the outline's target,
+    as a stated policy.
+14. **Which judge, and for which content** (OL-2). Measured on three files: Sonnet under the
+    keep-the-outline protocol passed on code and prose, and Haiku passed on prose only. A file the
+    size of FINDINGS.md (237 KB) does not fit two whole versions in one call, so a large file needs
+    a protocol that sends only the changed regions. Both of these are design, not requirement;
+    recorded here until a design note holds them.

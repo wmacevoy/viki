@@ -119,6 +119,11 @@ runs on vendored SQLCipher-LibreSSL (ENV-4). On the real diary, viki and the puc
 unkeyed: ingesting both took 9.2 s against 6.0 s, and the same `find` took 0.32 s against 0.18 s.
 The file begins with ciphertext. Transcripts (SCM-6) can now go into an encrypted diary.
 
+**Chunking, decided 2026-11-10:** only judged chunks, as outlines, with no rule-based projection.
+Drafted as `REQUIREMENTS_v3.md` OL-1 to OL-6, which are not yet confirmed. Storage is DS-1 to DS-4,
+also a draft: heads are stored whole, and superseded versions as reverse deltas. The evidence is in
+FINDINGS (2026-11-10) and `test/chunking/`.
+
 ## Slices, each one vertical
 
 Each slice runs from the command to the store to the answer, and each ends with a check that can
