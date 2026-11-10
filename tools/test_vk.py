@@ -367,6 +367,90 @@ def t_ol_cmd(s):
     check(rc == 0 and "1 judge calls" in out and "1 left for a later run" in out, "--limit stops and says so", out)
 
 
+def transcript_lines(session, n0, n):
+    """n Claude Code transcript records from number n0: user, assistant (with a thinking block that
+    has only a signature, text and a tool call), and the tool's result. And noise between them."""
+    import json
+    out = []
+    for i in range(n0, n0 + n):
+        kind = i % 3
+        base = {"sessionId": session, "uuid": f"u{i}", "timestamp": f"2026-11-10T10:{i:02d}:00Z", "isSidechain": False}
+        if kind == 0:
+            rec = dict(base, type="user", message={"role": "user", "content": f"please find marker-user-{i}"})
+        elif kind == 1:
+            rec = dict(base, type="assistant", message={"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "", "signature": "c2ln"},
+                {"type": "text", "text": f"looking for marker-assistant-{i}"},
+                {"type": "tool_use", "name": "Bash", "id": f"t{i}", "input": {"command": f"grep marker-tool-{i}"}}]})
+        else:
+            rec = dict(base, type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": f"t{i-1}", "content": f"marker-result-{i} found"}]})
+        out.append(json.dumps(rec))
+        out.append(json.dumps({"type": "attachment", "attachment": {"text": f"marker-noise-{i}"}}))
+    return out
+
+
+def t_scm7(s):
+    import json
+    key = os.path.join(s.root, "chat.key")
+    s.vk_bare("keygen", key)
+    diary = os.path.join(s.root, "chat.db")
+    tr = os.path.join(s.root, "session.jsonl")
+    with open(tr, "w") as f:
+        f.write("\n".join(transcript_lines("sess1", 0, 3)) + "\n")
+    chat = lambda *a: s.vk_bare("--store", diary, "--keyfile", key, *a)
+    rc, out = chat("ingest-transcript", tr)
+    check(rc == 0 and "chat/sess1: 3 messages added, 3 in the transcript, 1 thinking blocks" in out,
+          "each message once, the unreadable thinking counted", out)
+    rc, out = chat("grep", "marker-assistant-1")
+    check(rc == 0 and "claude-code:sess1:u1" in out, "a message is searchable and names its place", out)
+    rc, out = chat("grep", "marker-tool-1")
+    check(rc == 0, "a tool call is in its message", out)
+    rc, out = chat("grep", "marker-noise")
+    check(rc == 1, "what is not a message stays out", out)
+    rc, out = chat("ingest-transcript", tr)
+    check(rc == 0 and "0 messages added" in out, "again: nothing new", out)
+    with open(tr, "a") as f:
+        f.write("\n".join(transcript_lines("sess1", 3, 2)) + "\n")
+    hook = json.dumps({"transcript_path": tr, "session_id": "sess1", "hook_event_name": "Stop"})
+    r = subprocess.run(VK + ["--store", diary, "--keyfile", key, "ingest-transcript", "--hook"],
+                       input=hook, capture_output=True, text=True)
+    check(r.returncode == 0 and "2 messages added, 5 in the transcript" in r.stdout, "the hook adds only what is new",
+          r.stdout + r.stderr)
+    rc, out = chat("find", "marker-result-2")
+    check(rc == 0 and "claude-code:sess1:u2" in out, "and bm25 finds it", out)
+    rc, out = chat("forget-chat", "sess1", "--from", "1", "--to", "3")
+    check(rc == 0 and "messages 1-3 forgotten" in out, "a range of messages goes with one tombstone", out)
+    rc, out = chat("grep", "marker-user-0")
+    check(rc == 1, "a forgotten message is gone", out)
+    rc, out = chat("grep", "marker-user-3")
+    check(rc == 0, "the rest stay", out)
+    rc, out = chat("ingest-transcript", tr)
+    check(rc == 0 and "0 messages added" in out, "a forgotten message is not ingested again", out)
+    rc, out = chat("grep", "marker-user-0")
+    check(rc == 1, "still gone", out)
+    with open(tr, "w") as f:
+        f.write("\n".join(transcript_lines("sess1", 0, 2)) + "\n")
+    rc, out = chat("ingest-transcript", tr)
+    check(rc == 2 and "not append-only" in out, "a transcript that shrank is refused", out)
+    # the hook script: off without its store; never exit 2
+    script = os.path.join(HERE, "vk-chat-hook.sh")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("VIKI_CHAT")}
+    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True, env=env)
+    check(r.returncode == 0 and not r.stdout, "the hook does nothing unless configured", r.stderr)
+    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True,
+                       env=dict(env, VIKI_CHAT_STORE=diary))
+    check(r.returncode == 1 and "VIKI_CHAT_KEYFILE" in r.stderr, "a store without a key is refused, exit 1", r.stderr)
+    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True,
+                       env=dict(env, VIKI_CHAT_STORE=diary, VIKI_CHAT_KEYFILE=os.path.join(s.root, "missing.key")))
+    check(r.returncode == 1, "a failing ingest exits 1, never 2", r.stderr)
+    with open(tr, "a") as f:
+        f.write("\n".join(transcript_lines("sess1", 2, 4)) + "\n")
+    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True,
+                       env=dict(env, VIKI_CHAT_STORE=diary, VIKI_CHAT_KEYFILE=key))
+    check(r.returncode == 0, "configured, the hook ingests", r.stderr)
+
+
 def main():
     sys.path.insert(0, HERE)
     run("SCM-1", "a repository's history goes in once, every branch and tag", t_scm1)
@@ -379,7 +463,8 @@ def main():
     run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
     run("OL-3", "vk.py outline asks a judge, carries outlines forward, and writes each once", t_ol_cmd)
-    print(f"{failed} of 10 failed")
+    run("SCM-7", "a transcript goes in as a log, once, and a range of it can be forgotten", t_scm7)
+    print(f"{failed} of 11 failed")
     return failed != 0
 
 

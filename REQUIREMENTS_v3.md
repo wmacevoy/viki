@@ -248,6 +248,11 @@ core's interface. They are not in the 1.0 scope, which Warren closes (FIN-4).
   by an agent.)*
 - **SCM-6** *(since v3)* Chat transcripts may be ingested. Forgetting one is a tombstone (W-1,
   W-15): *"chat is fine - that what tombstones are for."*
+- **SCM-7** *(since v3, 2026-11-10)* *(drafted with its build: "yes, build step 1")* A conversation's
+  transcript can be ingested as a log: one per session, one position per message in the
+  transcript's order, each message as readable text. Ingesting it again adds only the messages not
+  yet held. Forgetting a range of its messages is one range tombstone (SCM-6, W-15). Reasoning the
+  transcript does not keep readably is counted, not invented.
 
 ## OL — Outlines: judged concepts, which search returns (new series)
 

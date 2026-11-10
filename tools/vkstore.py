@@ -67,6 +67,9 @@ for name, args, res in [
     ("vk_errmsg", [P], C.c_char_p),
     ("vk_put", [P, C.POINTER(Assertion), C.POINTER(Id)], C.c_int),
     ("vk_put_chain", [P, C.POINTER(Assertion), C.POINTER(Id)], C.c_int),
+    ("vk_append", [P, C.POINTER(Assertion), C.POINTER(Id)], C.c_int),
+    ("vk_forget", [P, Bytes, Bytes, C.c_uint64, C.c_uint64, Bytes, C.POINTER(C.c_ubyte * 16), C.POINTER(Id)], C.c_int),
+    ("vk_log_span", [P, Bytes, Bytes, C.POINTER(C.c_uint64), C.POINTER(C.c_uint64)], C.c_int),
     ("vk_current", [P, Bytes, C.POINTER(Row)], C.c_int),
     ("vk_row_close", [C.POINTER(Row)], None),
     ("vk_get", [P, C.POINTER(Id), C.POINTER(Cursor)], C.c_int),
@@ -176,6 +179,35 @@ class Store:
     def exec(self, sql):
         if LIB.sqlite3_exec(self.db, sql.encode(), None, None, None) != 0:
             raise VkError(f"sql failed: {sql}")
+
+    def append(self, log, kind, akey, body, ts=b"", reference=b"", rank=0):
+        """LOG-1: the next position of this principal's log. Returns the id."""
+        a = Assertion()
+        a.author, a.kind, a.akey = _b(self._principal), _b(kind), _b(akey)
+        a.ts, a.reference, a.body, a.log = _b(ts), _b(reference), _b(body), _b(log)
+        a.rank[:] = list(rank.to_bytes(16, "big"))
+        out = Id()
+        if LIB.vk_append(self.st, C.byref(a), C.byref(out)) not in (OK, EXISTS):
+            raise VkError(f"append {akey!r}: {self.errmsg()}")
+        return bytes(out)
+
+    def log_span(self, log, author=None):
+        """(lowest, highest) position held in author's log, or None if it holds none."""
+        lo, hi = C.c_uint64(), C.c_uint64()
+        rc = LIB.vk_log_span(self.st, _b(log), _b(author or self._principal), C.byref(lo), C.byref(hi))
+        if rc == NOTFOUND:
+            return None
+        if rc != OK:
+            raise VkError(f"log span: {self.errmsg()}")
+        return lo.value, hi.value
+
+    def forget(self, log, frm, to, ts=b"", rank=0):
+        """W-15: one range tombstone over positions frm..to of this principal's log."""
+        r = (C.c_ubyte * 16)(*rank.to_bytes(16, "big"))
+        out = Id()
+        if LIB.vk_forget(self.st, _b(log), _b(self._principal), frm, to, _b(ts), C.byref(r), C.byref(out)) != OK:
+            raise VkError(f"forget: {self.errmsg()}")
+        return bytes(out)
 
     def put(self, kind, akey, body, ts=b"", reference=b"", rank=0, supersedes=(), derived_from=(), chain=False):
         """Returns (id, added)."""

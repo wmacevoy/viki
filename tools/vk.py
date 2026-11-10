@@ -9,6 +9,8 @@
   vk.py --store DIARY --plaintext grep TEXT [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext find WORDS [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext outline [--repo NAME] [--judge sonnet|haiku] [--history] [--limit N]
+  vk.py --store DIARY --keyfile KEY ingest-transcript TRANSCRIPT.jsonl [--session ID] [--hook]
+  vk.py --store DIARY --keyfile KEY forget-chat SESSION [--from N] [--to M]
   vk.py --store DIARY --plaintext coverage
   vk.py --store DIARY --plaintext heads NAME
 
@@ -48,6 +50,10 @@ RIGHTS = vk.ORIGINATE | vk.SUPERSEDE | vk.READ
 JUDGES = {"sonnet": ("claude-sonnet-5-5", b"vk.judge.sonnet"),
           "haiku": ("claude-haiku-5-5", b"vk.judge.haiku")}
 GRANTS = [(principal, RIGHTS) for _, principal in JUDGES.values()]
+# Conversations (SCM-6, SCM-7) are written by their own principal, which may also forget them.
+CHAT = b"vk.ingest.chat"
+CHAT_RIGHTS = RIGHTS | vk.ERASE
+GRANTS.append((CHAT, CHAT_RIGHTS))
 
 
 # ---- the host's clock and the world (SHAPE-6: core reads neither) ----
@@ -503,6 +509,106 @@ def cmd_outline(store, repo, judge_name, history, limit, cmd):
     return 0
 
 
+# ---- conversations (SCM-6, SCM-7) ----
+
+def chat_records(path):
+    """The messages of a Claude Code transcript (JSONL), in order: the user and assistant records.
+    Everything else in the file (attachments, modes, request metadata) is not a message."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") in ("user", "assistant") and isinstance(rec.get("message"), dict):
+                yield rec
+
+
+def render(rec):
+    """A message as readable text, and how many thinking blocks it had with no readable text."""
+    role = rec["message"].get("role") or rec["type"]
+    content = rec["message"].get("content")
+    parts, unreadable = [], 0
+    if isinstance(content, str):
+        parts.append(f"[{role}]\n{content}")
+    for b in content if isinstance(content, list) else []:
+        if not isinstance(b, dict):
+            continue
+        kind = b.get("type")
+        if kind == "text":
+            parts.append(f"[{role}]\n{b.get('text', '')}")
+        elif kind == "thinking":
+            if (b.get("thinking") or "").strip():
+                parts.append(f"[thinking]\n{b['thinking']}")
+            else:
+                unreadable += 1       # kept by the transcript only as a signature (SCM-7)
+        elif kind == "tool_use":
+            parts.append(f"[tool_use {b.get('name', '?')}]\n" + json.dumps(b.get("input"), ensure_ascii=False, indent=1))
+        elif kind == "tool_result":
+            c = b.get("content")
+            if isinstance(c, list):
+                c = "\n".join(x.get("text", "[" + str(x.get("type")) + "]") for x in c if isinstance(x, dict))
+            parts.append(f"[tool_result]\n{c if c is not None else ''}")
+        else:
+            parts.append(f"[{kind}]")
+    side = " (sidechain)" if rec.get("isSidechain") else ""
+    head = f"{rec.get('timestamp', '')} {role}{side}\n"
+    return (head + "\n\n".join(parts)).encode("utf-8", "replace"), unreadable
+
+
+def rank_of_iso(ts):
+    try:
+        return rank_of(datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+    except (ValueError, AttributeError):
+        return 0
+
+
+def ingest_transcript(store, path, session=None):
+    """Append the messages not yet ingested to the session's log. How many were consumed is kept in
+    its own chain, so a message that was forgotten is not ingested again."""
+    recs = list(chat_records(path))
+    session = session or next((r.get("sessionId") for r in recs if r.get("sessionId")), None) \
+        or os.path.splitext(os.path.basename(path))[0]
+    log, cursor = f"chat/{session}".encode(), f"chat-ingest/{session}".encode()
+    st, held = store.current(cursor)
+    done = json.loads(held)["records"] if st == vk.OK else 0
+    if done > len(recs):
+        raise vk.VkError(f"{path} has {len(recs)} messages but {done} were ingested: it is not append-only")
+    added = unreadable = 0
+    store.exec("BEGIN")
+    try:
+        for rec in recs[done:]:
+            text, u = render(rec)
+            store.append(log, b"chat", f"chat/{session}/{rec.get('uuid', done + added)}".encode(), text,
+                         ts=str(rec.get("timestamp", "")).encode(), rank=rank_of_iso(rec.get("timestamp")),
+                         reference=f"claude-code:{session}:{rec.get('uuid', '')}".encode())
+            added += 1
+            unreadable += u
+        if added:
+            t = now_utc()
+            body = json.dumps({"session": session, "path": os.path.abspath(path), "records": len(recs)},
+                              sort_keys=True).encode()
+            store.put(b"ingest", cursor, body, ts=t.isoformat().encode(), rank=rank_of(t.timestamp()), chain=True)
+        store.exec("COMMIT")
+    except BaseException:
+        store.exec("ROLLBACK")
+        raise
+    return session, added, len(recs), unreadable
+
+
+def cmd_forget_chat(store, session, frm, to):
+    log = f"chat/{session}".encode()
+    span = store.log_span(log)
+    if span is None:
+        print(f"chat/{session}: nothing held")
+        return 1
+    frm, to = frm or span[0], to or span[1]
+    t = now_utc()
+    store.forget(log, frm, to, ts=t.isoformat().encode(), rank=rank_of(t.timestamp()))
+    print(f"chat/{session}: messages {frm}-{to} forgotten by one range tombstone")
+    return 0
+
+
 # ---- reading ----
 
 INDEX = b"ingest/index"
@@ -639,6 +745,14 @@ def main(argv):
     ol.add_argument("--history", action="store_true", help="every version, oldest first, not only current ones")
     ol.add_argument("--limit", type=int, help="at most this many judge calls this run")
     ol.add_argument("--judge-cmd", help="the command that answers a prompt on stdin (default: the claude CLI)")
+    it = sub.add_parser("ingest-transcript", help="a conversation's messages into its log (SCM-7)")
+    it.add_argument("path", nargs="?")
+    it.add_argument("--session")
+    it.add_argument("--hook", action="store_true", help="read transcript_path and session_id from a hook's JSON on stdin")
+    fc = sub.add_parser("forget-chat", help="forget a session's messages with one range tombstone")
+    fc.add_argument("session")
+    fc.add_argument("--from", dest="frm", type=int)
+    fc.add_argument("--to", type=int)
     sub.add_parser("coverage")
     h = sub.add_parser("heads")
     h.add_argument("name")
@@ -656,7 +770,10 @@ def main(argv):
             raise KeyError_(f"refusing to open {args.store} without a key: --keyfile PATH, "
                             "or --plaintext to say an unencrypted diary was meant")
         key = read_keyfile(args.keyfile) if args.keyfile else None
-        if args.cmd == "outline":   # the judge writes as itself; the ingester and the judges are entitled
+        if args.cmd in ("ingest-transcript", "forget-chat"):
+            store = vk.Store(args.store, CHAT, CHAT_RIGHTS, key=key,
+                             others=[(PRINCIPAL, RIGHTS)] + [g for g in GRANTS if g[0] != CHAT])
+        elif args.cmd == "outline":   # the judge writes as itself; the ingester and the judges are entitled
             judge = JUDGES[args.judge][1]
             others = [(PRINCIPAL, RIGHTS)] + [g for g in GRANTS if g[0] != judge]
             store = vk.Store(args.store, judge, RIGHTS, key=key, others=others)
@@ -681,6 +798,20 @@ def main(argv):
             return cmd_coverage(store)
         if args.cmd == "outline":
             return cmd_outline(store, args.repo, args.judge, args.history, args.limit, args.judge_cmd)
+        if args.cmd == "ingest-transcript":
+            path, session = args.path, args.session
+            if args.hook:
+                hook = json.load(sys.stdin)
+                path, session = hook.get("transcript_path"), session or hook.get("session_id")
+            if not path:
+                raise vk.VkError("no transcript: give a path, or --hook with transcript_path on stdin")
+            store.bm25_enable()
+            session, added, total, unreadable = ingest_transcript(store, path, session)
+            print(f"chat/{session}: {added} messages added, {total} in the transcript, "
+                  f"{unreadable} thinking blocks with no readable text not stored")
+            return 0
+        if args.cmd == "forget-chat":
+            return cmd_forget_chat(store, args.session, args.frm, args.to)
         return cmd_heads(store, args.name)
     except (vk.VkError, subprocess.CalledProcessError) as e:
         print(f"vk: {e}", file=sys.stderr)

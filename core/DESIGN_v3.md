@@ -167,6 +167,22 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   - **Cost on the dogfood diary:** three Sonnet calls on puck files took 17 s. About 550 current text
     files would take roughly 50 minutes at that rate, and the money is not measured here.
 
+- **Conversations go in as logs (SCM-7).** `vk.py ingest-transcript` reads a Claude Code transcript
+  (JSONL) and appends each user and assistant record to `chat/<session>` as readable text: text,
+  tool calls, tool results, and thinking where the transcript kept it readably. A thinking block
+  kept only as a signature is counted, not stored. Records that are not messages are skipped
+  (attachments, modes, request metadata).
+  - **Rows:** written by their own principal, `vk.ingest.chat`, which holds `x` so it can forget them.
+  - **Reruns:** how many messages have been consumed is kept in a `chat-ingest/<session>` chain, so a
+    forgotten message is not ingested again, and a transcript that shrank is refused. This assumes
+    transcripts are append-only.
+  - **Forgetting:** `vk.py forget-chat SESSION [--from N --to M]` is one range tombstone.
+  - **The hook:** `tools/vk-chat-hook.sh` runs on PreCompact and Stop (`.claude/settings.json`). It
+    does nothing unless `VIKI_CHAT_STORE` is set, needs `VIKI_CHAT_KEYFILE` with it, and exits 1,
+    never 2, because a Stop hook that exits 2 keeps Claude from stopping.
+  - **This session's transcript:** 1,245 messages in 0.4 s, a 3.4 MB encrypted diary. 240 thinking
+    blocks had no readable text.
+
 ## Testing
 
 - `test/store_test.c`: one test per claim, naming its requirement.

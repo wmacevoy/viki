@@ -130,6 +130,12 @@ file versions, and `vk.py grep/find --outlines vk.judge.sonnet` returns the sect
 on three puck files: `bench.c` got 33 nodes, and `find "fsync bench"` returned it as "in: File header
 comment, bytes 0-603". The whole diary has not been outlined.
 
+**Conversations in the diary: built 2026-11-10, uncommitted.** `vk.py ingest-transcript` (SCM-7) and
+a PreCompact/Stop hook, off until `VIKI_CHAT_STORE` and `VIKI_CHAT_KEYFILE` are set. This is step 1
+of the concussion path: capture. The judge writing a session's outline and claims (step 2), and
+checking a compaction summary against them (step 3), are not built. They are a trial for
+`../compaction`.
+
 ## Slices, each one vertical
 
 Each slice runs from the command to the store to the answer, and each ends with a check that can
