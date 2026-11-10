@@ -278,6 +278,31 @@ def t_n7(s):
           "a passphrase is refused, and not echoed", out)
 
 
+def t_ol4(s):
+    a = s.repo("alpha")
+    s.write(a, "notes.md", "# Alpha\nintro line\n# Beta\nthe marker-ol4 line\n")
+    s.commit(a, "one")
+    s.vk("ingest-git", a)
+    import json
+    import vkstore as vk
+    st = vk.Store(s.store, b"vk.ingest.git", vk.ORIGINATE | vk.SUPERSEDE | vk.READ)
+    try:
+        (tid, _), = st.grep(b"marker-ol4")[0]
+        body = st.get(tid).body
+        cut = body.index(b"# Beta")
+        outline = json.dumps([{"title": "Alpha", "lo": 0, "hi": cut},
+                              {"title": "Beta", "lo": cut, "hi": len(body)}]).encode()
+        st.put(b"outline", vk.outline_key(tid, b"vk.ingest.git"), outline, reference=tid, derived_from=[tid])
+    finally:
+        st.close()
+    rc, out = s.vk("grep", "marker-ol4", "--outlines", "vk.ingest.git")
+    check(rc == 0 and "in: Beta  bytes" in out and "1 of them searched whole" not in out, "a hit names its section", out)
+    rc, out = s.vk("grep", "marker-ol4")
+    check(rc == 0 and "in: " not in out, "without --outlines, the whole file", out)
+    rc, out = s.vk("find", "marker-ol4", "--outlines", "vk.ingest.git")
+    check(rc == 0 and "in: Beta" in out and "searched whole" in out, "find too, and coverage counts the whole", out)
+
+
 def main():
     sys.path.insert(0, HERE)
     run("SCM-1", "a repository's history goes in once, every branch and tag", t_scm1)
@@ -288,7 +313,8 @@ def main():
     run("Q-4", "each hit says current, superseded, or one head of a fork", t_q4)
     run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
     run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
-    print(f"{failed} of 8 failed")
+    run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
+    print(f"{failed} of 9 failed")
     return failed != 0
 
 

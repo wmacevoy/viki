@@ -17,6 +17,7 @@ struct VkStore {
     ** that may be exactly what ran out. */
     sqlite3_stmt *pBegin, *pCommit, *pUndo, *pEnd;
     sqlite3_stmt *pBody;   /* one stored row's body and delta base, for vk_body */
+    VkBytes outlines;      /* OL-4: whose outlines searches use; empty is none */
 };
 
 /* DS: when a superseded body is stored as a delta. invented, until measured. */
@@ -54,6 +55,8 @@ VkStatus vk_sql_status(VkStore *p, int rc){
 const char *vk_errmsg(const VkStore *p){ return p->zErr ? p->zErr : ""; }
 int vk_sqlite_code(const VkStore *p){ return p->rcSql; }
 sqlite3 *vk_store_db(VkStore *p){ return p->db; }
+VkBytes vk_outline_author(const VkStore *p){ return p->outlines; }
+void vk_use_outlines(VkStore *p, VkBytes author){ p->outlines = author; }
 
 void vk_bind_bytes(sqlite3_stmt *pSt, int i, VkBytes b){
     /* A NULL pointer would bind SQL NULL, not an empty value. */
@@ -312,7 +315,17 @@ static const char zSchema[] =
     " child BLOB NOT NULL, child_seq INTEGER NOT NULL, PRIMARY KEY(parent,rel,child)) WITHOUT ROWID;"
     "CREATE INDEX IF NOT EXISTS edge_child ON edge(child,rel,parent);"
     "CREATE TABLE IF NOT EXISTS quarantine(id BLOB NOT NULL, why TEXT NOT NULL,"
-    " PRIMARY KEY(id,why)) WITHOUT ROWID;";
+    " PRIMARY KEY(id,why)) WITHOUT ROWID;"
+    /* OL-4, a projection: the nodes of every current outline. depth 0 is the text
+    ** outside every top-level node. A node's own text is its range less its
+    ** children's, so each byte of a target is in exactly one node (vk_oseg). */
+    "CREATE TABLE IF NOT EXISTS vk_onode(rowid INTEGER PRIMARY KEY, outline_seq INTEGER NOT NULL,"
+    " akey BLOB NOT NULL, target BLOB NOT NULL, author BLOB NOT NULL, depth INTEGER NOT NULL,"
+    " lo INTEGER NOT NULL, hi INTEGER NOT NULL, path TEXT NOT NULL);"
+    "CREATE INDEX IF NOT EXISTS vk_onode_target ON vk_onode(target, author, depth);"
+    "CREATE INDEX IF NOT EXISTS vk_onode_akey ON vk_onode(akey);"
+    "CREATE TABLE IF NOT EXISTS vk_oseg(node INTEGER NOT NULL, lo INTEGER NOT NULL, hi INTEGER NOT NULL);"
+    "CREATE INDEX IF NOT EXISTS vk_oseg_node ON vk_oseg(node, lo);";
 
 static int exec_schema(VkStore *p){
     const char *zSql = zSchema;
@@ -357,6 +370,167 @@ static void undo(VkStore *p);
 
 /* Which rows are arms depends on who holds which right, so the projection is
 ** rebuilt only when the grants differ from those it was built under. */
+/* ---- OL-4: the node projection ---- */
+
+static int refold_outline(VkStore *p, VkBytes akey);
+
+/* The nodes of one outline: a row per node, and its own-text segments. */
+static int build_nodes(VkStore *p, sqlite3_int64 seq, VkBytes akey, VkBytes target, VkBytes author,
+                       VkBytes body, sqlite3_int64 nTarget){
+    static const char zNodes[] =
+        "WITH RECURSIVE t AS (SELECT id, parent, type, value FROM json_tree(?1)),"
+        " n AS (SELECT o.id, (SELECT a.parent FROM t a WHERE a.id=o.parent) AS up,"
+        "   json_extract(o.value,'$.title') AS title, json_extract(o.value,'$.lo') AS lo,"
+        "   json_extract(o.value,'$.hi') AS hi FROM t o WHERE o.type='object'),"
+        " anc(id, a, d) AS (SELECT id, id, 0 FROM n UNION ALL"
+        "   SELECT anc.id, n.up, anc.d+1 FROM anc JOIN n ON n.id=anc.a WHERE n.up IS NOT NULL)"
+        " SELECT n.id, n.up, n.lo, n.hi, (SELECT count(*) FROM anc WHERE anc.id=n.id),"
+        "  (SELECT json_group_array(title) FROM (SELECT x.title FROM anc JOIN n x ON x.id=anc.a"
+        "   WHERE anc.id=n.id ORDER BY anc.d DESC))"
+        " FROM n ORDER BY n.id";
+    sqlite3_stmt *pSt = 0, *pIns = 0, *pSeg = 0;
+    sqlite3_int64 *aJid = 0, *aRow = 0, *aCur = 0, *aHi = 0;
+    int nNode = 0, nAlloc = 16, rc, i;
+    rc = vk_prepare(p, "INSERT INTO vk_onode(outline_seq,akey,target,author,depth,lo,hi,path)"
+                       " VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", &pIns);
+    if( rc==SQLITE_OK ) rc = vk_prepare(p, "INSERT INTO vk_oseg(node,lo,hi) VALUES(?1,?2,?3)", &pSeg);
+    if( rc==SQLITE_OK ) rc = vk_prepare(p, zNodes, &pSt);
+    if( rc!=SQLITE_OK ) goto done;
+    aJid = sqlite3_malloc64(sizeof(sqlite3_int64)*4*nAlloc);
+    if( !aJid ){ rc = SQLITE_NOMEM; goto done; }
+    aRow = aJid + nAlloc; aCur = aRow + nAlloc; aHi = aCur + nAlloc;
+    /* the root: the text outside every top-level node */
+    sqlite3_bind_int64(pIns, 1, seq); vk_bind_bytes(pIns, 2, akey); vk_bind_bytes(pIns, 3, target);
+    vk_bind_bytes(pIns, 4, author);
+    sqlite3_bind_int(pIns, 5, 0); sqlite3_bind_int64(pIns, 6, 0);
+    sqlite3_bind_int64(pIns, 7, nTarget>=0 ? nTarget : 0x7fffffff);
+    sqlite3_bind_text(pIns, 8, "[]", 2, SQLITE_STATIC);
+    rc = vk_step(pIns);
+    if( rc!=SQLITE_DONE ) goto done;
+    sqlite3_reset(pIns);
+    aJid[0] = -1; aRow[0] = sqlite3_last_insert_rowid(p->db); aCur[0] = 0;
+    aHi[0] = nTarget>=0 ? nTarget : 0x7fffffff;
+    nNode = 1;
+    sqlite3_bind_text(pSt, 1, body.n ? (const char*)body.p : "", (int)body.n, SQLITE_STATIC);
+    while( (rc = vk_step(pSt))==SQLITE_ROW ){
+        sqlite3_int64 up = sqlite3_column_type(pSt, 1)==SQLITE_NULL ? -1 : sqlite3_column_int64(pSt, 1);
+        sqlite3_int64 lo = sqlite3_column_int64(pSt, 2), hi = sqlite3_column_int64(pSt, 3);
+        int par = 0, k;
+        if( nNode==nAlloc ){
+            sqlite3_int64 *aNew = sqlite3_malloc64(sizeof(sqlite3_int64)*8*nAlloc);
+            if( !aNew ){ rc = SQLITE_NOMEM; goto done; }
+            for(k=0; k<4; k++) memcpy(aNew + k*2*nAlloc, aJid + k*nAlloc, sizeof(sqlite3_int64)*nAlloc);
+            sqlite3_free(aJid);
+            aJid = aNew; nAlloc *= 2;
+            aRow = aJid + nAlloc; aCur = aRow + nAlloc; aHi = aCur + nAlloc;
+        }
+        for(k=nNode-1; k>0; k--) if( aJid[k]==up ){ par = k; break; }   /* parents come first */
+        sqlite3_bind_int(pIns, 5, sqlite3_column_int(pSt, 4));
+        sqlite3_bind_int64(pIns, 6, lo);
+        sqlite3_bind_int64(pIns, 7, hi);
+        sqlite3_bind_text(pIns, 8, (const char*)sqlite3_column_text(pSt, 5), -1, SQLITE_TRANSIENT);
+        rc = vk_step(pIns);
+        if( rc!=SQLITE_DONE ) goto done;
+        sqlite3_reset(pIns);
+        aRow[nNode] = sqlite3_last_insert_rowid(p->db);   /* now: a segment insert below moves it */
+        if( lo>aCur[par] ){              /* the parent's own text before this child */
+            sqlite3_bind_int64(pSeg, 1, aRow[par]); sqlite3_bind_int64(pSeg, 2, aCur[par]);
+            sqlite3_bind_int64(pSeg, 3, lo);
+            rc = vk_step(pSeg);
+            if( rc!=SQLITE_DONE ) goto done;
+            sqlite3_reset(pSeg);
+        }
+        if( hi>aCur[par] ) aCur[par] = hi;
+        aJid[nNode] = sqlite3_column_int64(pSt, 0);
+        aCur[nNode] = lo; aHi[nNode] = hi;
+        nNode++;
+    }
+    if( rc!=SQLITE_DONE ) goto done;
+    for(i=0; i<nNode; i++){              /* each node's own text after its last child */
+        if( aHi[i]<=aCur[i] ) continue;
+        sqlite3_bind_int64(pSeg, 1, aRow[i]); sqlite3_bind_int64(pSeg, 2, aCur[i]);
+        sqlite3_bind_int64(pSeg, 3, aHi[i]);
+        rc = vk_step(pSeg);
+        if( rc!=SQLITE_DONE ) goto done;
+        sqlite3_reset(pSeg);
+    }
+    rc = SQLITE_OK;
+done:
+    sqlite3_free(aJid);
+    sqlite3_finalize(pSt);
+    sqlite3_finalize(pIns);
+    sqlite3_finalize(pSeg);
+    return rc;
+}
+
+/* The nodes for one outline akey: those of its current heads, valid and not
+** erased. The bm25 index, when there is one, follows. */
+static int refold_outline(VkStore *p, VkBytes akey){
+    sqlite3_stmt *pSt = 0;
+    int rc, bIndex = 0;
+    rc = vk_bm25_on(p, &bIndex);
+    if( rc==SQLITE_OK && bIndex ){
+        rc = vk_prepare(p, "INSERT INTO vk_bm25(vk_bm25,rowid,body) SELECT 'delete', -n.rowid, "
+                           VK_NODE_TEXT("n.rowid", VK_TARGET_BODY("n.target")) " FROM vk_onode n WHERE n.akey=?1", &pSt);
+        if( rc==SQLITE_OK ){ vk_bind_bytes(pSt, 1, akey); rc = vk_step(pSt); rc = rc==SQLITE_DONE ? SQLITE_OK : rc; }
+        sqlite3_finalize(pSt);
+    }
+    if( rc==SQLITE_OK ){
+        rc = vk_prepare(p, "DELETE FROM vk_oseg WHERE node IN (SELECT rowid FROM vk_onode WHERE akey=?1)", &pSt);
+        if( rc==SQLITE_OK ){ vk_bind_bytes(pSt, 1, akey); rc = vk_step(pSt); rc = rc==SQLITE_DONE ? SQLITE_OK : rc; }
+        sqlite3_finalize(pSt);
+    }
+    if( rc==SQLITE_OK ){
+        rc = vk_prepare(p, "DELETE FROM vk_onode WHERE akey=?1", &pSt);
+        if( rc==SQLITE_OK ){ vk_bind_bytes(pSt, 1, akey); rc = vk_step(pSt); rc = rc==SQLITE_DONE ? SQLITE_OK : rc; }
+        sqlite3_finalize(pSt);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    rc = vk_prepare(p,
+        "SELECT a.seq, a.reference, a.author, a.body,"
+        " (SELECT length(" VK_BODY("t.") ") FROM assertion t WHERE t.id=a.reference AND t.log=x'' AND t.body IS NOT NULL)"
+        " FROM arm x JOIN assertion a ON a.seq=x.seq WHERE x.akey=?1"
+        " AND a.kind=CAST('" VK_OUTLINE "' AS BLOB) AND a.body IS NOT NULL", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    vk_bind_bytes(pSt, 1, akey);
+    while( (rc = vk_step(pSt))==SQLITE_ROW ){
+        VkBytes target = column_bytes(pSt, 1), author = column_bytes(pSt, 2), body = column_bytes(pSt, 3);
+        sqlite3_int64 n = sqlite3_column_type(pSt, 4)==SQLITE_NULL ? -1 : sqlite3_column_int64(pSt, 4);
+        rc = build_nodes(p, sqlite3_column_int64(pSt, 0), akey, target, author, body, n);
+        if( rc!=SQLITE_OK ) break;
+    }
+    sqlite3_finalize(pSt);
+    if( rc!=SQLITE_DONE && rc!=SQLITE_OK ) return rc;
+    rc = SQLITE_OK;
+    if( bIndex ){
+        rc = vk_prepare(p, "INSERT INTO vk_bm25(rowid,body) SELECT -n.rowid, "
+                           VK_NODE_TEXT("n.rowid", VK_TARGET_BODY("n.target")) " FROM vk_onode n WHERE n.akey=?1", &pSt);
+        if( rc==SQLITE_OK ){ vk_bind_bytes(pSt, 1, akey); rc = vk_step(pSt); rc = rc==SQLITE_DONE ? SQLITE_OK : rc; }
+        sqlite3_finalize(pSt);
+    }
+    return rc;
+}
+
+/* Every outline akey, after the grants changed which heads count. */
+static int refold_all(VkStore *p){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, "SELECT akey FROM vk_onode UNION"
+                           " SELECT akey FROM assertion WHERE kind=CAST('" VK_OUTLINE "' AS BLOB)", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    while( (rc = vk_step(pSt))==SQLITE_ROW ){
+        VkBytes k = column_bytes(pSt, 0);
+        uint8_t aKey[VK_MAX_FIELD];
+        VkBytes kc;
+        if( k.n>VK_MAX_FIELD ) continue;
+        memcpy(aKey, k.p, k.n);          /* the cursor moves under it */
+        kc.p = aKey; kc.n = k.n;
+        rc = refold_outline(p, kc);
+        if( rc!=SQLITE_OK ) break;
+    }
+    sqlite3_finalize(pSt);
+    return (rc==SQLITE_DONE || rc==SQLITE_OK) ? SQLITE_OK : rc;
+}
+
 static int sync_arms(VkStore *p){
     sqlite3_stmt *pSt = 0;
     sha256_ctx c;
@@ -396,6 +570,7 @@ static int sync_arms(VkStore *p){
         sqlite3_finalize(pSt);
         rc = rc==SQLITE_DONE ? SQLITE_OK : rc;
     }
+    if( rc==SQLITE_OK ) rc = refold_all(p);
     if( rc==SQLITE_OK ) rc = vk_prepare(p, "INSERT OR REPLACE INTO meta(k,v) VALUES('grants',?1)", &pSt);
     if( rc==SQLITE_OK ){
         sqlite3_bind_blob(pSt, 1, aPrint, VK_ID_BYTES, SQLITE_STATIC);
@@ -680,9 +855,27 @@ static int run_seq(VkStore *p, const char *zSql, sqlite3_int64 seq){
 /* W-3 on one row. DS-4: a body stored as a delta from this one is made whole
 ** first, so erasing loses nothing it was not asked to. */
 static int forget_body(VkStore *p, sqlite3_int64 seq){
+    sqlite3_stmt *pSt = 0;
     int rc = run_seq(p, "UPDATE assertion SET body=" VK_BODY("") ", dbase=NULL WHERE dbase=?1", seq);
     if( rc==SQLITE_OK ) rc = run_seq(p, "UPDATE assertion SET body=NULL, dbase=NULL WHERE seq=?1", seq);
-    return rc;
+    if( rc!=SQLITE_OK ) return rc;
+    /* An erased outline has no nodes (OL-4). */
+    rc = vk_prepare(p, "SELECT akey FROM assertion WHERE seq=?1 AND kind=CAST('" VK_OUTLINE "' AS BLOB)", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_int64(pSt, 1, seq);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ){
+        uint8_t aKey[VK_MAX_FIELD];
+        VkBytes k = column_bytes(pSt, 0), kc;
+        if( k.n<=VK_MAX_FIELD ){
+            memcpy(aKey, k.p, k.n);
+            kc.p = aKey; kc.n = k.n;
+            sqlite3_finalize(pSt);
+            return refold_outline(p, kc);
+        }
+    }
+    sqlite3_finalize(pSt);
+    return (rc==SQLITE_ROW || rc==SQLITE_DONE) ? SQLITE_OK : rc;
 }
 
 /* W-3 for a target known only by id. */
@@ -920,6 +1113,7 @@ static int store_row(VkStore *p, const VkAssertion *a, const VkId id, int *pbAdd
             }
             if( rc==SQLITE_OK && bTombed ) rc = forget_body(p, seq);
             else if( rc==SQLITE_OK ) rc = store_deltas(p, a, id, seq);
+            if( rc==SQLITE_OK && !bTombed && bytes_is(a->kind, VK_OUTLINE) ) rc = refold_outline(p, a->akey);
         }
     }
     if( rc==SQLITE_OK ) rc = commit(p);

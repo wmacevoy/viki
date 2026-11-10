@@ -322,6 +322,10 @@ def standing_of(store, r):
     return "current" if n == 1 else f"head 1 of {n} (forked)"
 
 
+def store_outlines(store):
+    return getattr(store, "_outlines", b"")
+
+
 def cmd_search(store, text, repo, method, show_all, k):
     seen = ingested(store)
     if repo is not None and repo not in seen:
@@ -335,7 +339,7 @@ def cmd_search(store, text, repo, method, show_all, k):
         return 3
     words = [text.encode()] if method == "grep" else [w for w in text.encode().split() if w]
     shown = matched = hidden = 0
-    for i in ids:
+    for i, node in ids:
         r = store.get(i)
         if r is None or r.kind in (b"ingest", b"label"):
             continue
@@ -351,10 +355,16 @@ def cmd_search(store, text, repo, method, show_all, k):
             continue
         shown += 1
         print(f"{r.kind.decode()}  {r.reference.decode('utf-8', 'replace') or akey}  {i.hex()[:12]}  [{where}]")
-        print(f"    {snippet(r.body, words)}")
+        body = r.body
+        if node:   # OL-4: the smallest node of the chosen outline holding the match
+            path, lo, hi, _ = node
+            print(f"    in: {' > '.join(path) or '(outside every section)'}  bytes {lo}-{min(hi, len(body))}")
+            body = body[lo:hi]
+        print(f"    {snippet(body, words)}")
     scope = [repo] if repo is not None else sorted(seen)
     reach = "exhaustive" if cov["exhaustive"] else f"ranked, so not-found covers only these {matched} matches"
-    print(f"coverage: {cov['method']}, {reach}, over {cov['searched']} assertions; repositories: "
+    whole = f", {cov['whole']} of them searched whole" if store_outlines(store) else ""
+    print(f"coverage: {cov['method']}, {reach}, over {cov['searched']} assertions{whole}; repositories: "
           + ", ".join(f"{n} ({len(seen[n]['refs'])} refs)" for n in scope))
     print(f"shown {shown} of {matched} matches; {hidden} superseded versions hidden"
           + ("" if show_all else " (--all shows them)"))
@@ -404,6 +414,7 @@ def main(argv):
         s.add_argument("--repo")
         s.add_argument("--all", action="store_true", help="also show superseded versions")
         s.add_argument("--k", type=int, default=None if name == "grep" else 10)
+        s.add_argument("--outlines", metavar="AUTHOR", help="return the nodes of this author's outlines (OL-4)")
     sub.add_parser("coverage")
     h = sub.add_parser("heads")
     h.add_argument("name")
@@ -434,6 +445,8 @@ def main(argv):
                   f"{rec['refused_holdout']} holdout paths refused, {rec['ignored']} ignored")
             return 0
         if args.cmd in ("grep", "find"):
+            if args.outlines:
+                store.use_outlines(args.outlines.encode())
             return cmd_search(store, args.text, args.repo, args.cmd, args.all, args.k)
         if args.cmd == "coverage":
             return cmd_coverage(store)

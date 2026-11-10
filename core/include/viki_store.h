@@ -180,23 +180,43 @@ extern const VkSearchMethod vkGrep;
 extern const VkSearchMethod vkBm25;
 VkStatus vk_bm25_enable(VkStore *p);
 
+/* OL-4: whose outlines this store's searches use; author is borrowed. Empty,
+** the default: none, and every hit is a whole assertion. A target with no
+** current outline by that author is searched and returned whole. */
+void vk_use_outlines(VkStore *p, VkBytes author);
+
 typedef struct {
     VkStore *p;
     const VkSearchMethod *pMethod;
     sqlite3_stmt *pSt;
+    sqlite3_stmt *pNode;
 } VkSearch;
 
-/* What a search covered (Q-2). */
+/* Where a hit is (OL-4). bNode 0: the whole assertion. Otherwise the smallest
+** node of the reader's outline holding the match: its byte range of the
+** target's body, its depth (0 is the text outside every top-level node), and
+** the titles from the root down as a JSON array, borrowed until the next call. */
+typedef struct {
+    int bNode;
+    int64_t lo, hi;
+    int depth;
+    VkBytes path;
+} VkHit;
+
+/* What a search covered (Q-2). nWhole: how many of those were searched whole,
+** with no outline by the reader's chosen author (OL-4). */
 typedef struct {
     const char *zMethod;
     int bExhaustive;
     int64_t nSearched;
+    int64_t nWhole;
 } VkCoverage;
 
 /* VK_BLIND if the method fails its self-check. */
 VkStatus vk_search_open(VkStore *p, const VkSearchMethod *m, VkBytes query,
                         VkSearch *s);
 VkStatus vk_search_next(VkSearch *s, VkId out);   /* VK_OK or VK_DONE */
+VkStatus vk_search_hit(VkSearch *s, VkHit *out);  /* the current hit's place */
 VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out);
 void vk_search_close(VkSearch *s);
 

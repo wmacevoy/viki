@@ -5,6 +5,7 @@ here. The SQLite calls come from the same library handle, so the host and the
 store always share one SQLite (a SQLCipher build supplies sqlite3_key too).
 """
 import ctypes as C
+import json
 import os
 
 OK, EXISTS, DONE, NOTFOUND, FORKED, BLIND, EINVAL, EDENIED, ENOMEM, ESQL = range(10)
@@ -41,11 +42,16 @@ class Cursor(C.Structure):
 
 
 class Search(C.Structure):
-    _fields_ = [("p", C.c_void_p), ("m", C.c_void_p), ("pSt", C.c_void_p)]
+    _fields_ = [("p", C.c_void_p), ("m", C.c_void_p), ("pSt", C.c_void_p), ("pNode", C.c_void_p)]
 
 
 class Coverage(C.Structure):
-    _fields_ = [("zMethod", C.c_char_p), ("bExhaustive", C.c_int), ("nSearched", C.c_int64)]
+    _fields_ = [("zMethod", C.c_char_p), ("bExhaustive", C.c_int), ("nSearched", C.c_int64),
+                ("nWhole", C.c_int64)]
+
+
+class Hit(C.Structure):
+    _fields_ = [("bNode", C.c_int), ("lo", C.c_int64), ("hi", C.c_int64), ("depth", C.c_int), ("path", Bytes)]
 
 
 def _default_lib():
@@ -69,6 +75,9 @@ for name, args, res in [
     ("vk_bm25_enable", [P], C.c_int),
     ("vk_search_open", [P, P, Bytes, C.POINTER(Search)], C.c_int),
     ("vk_search_next", [C.POINTER(Search), C.POINTER(Id)], C.c_int),
+    ("vk_search_hit", [C.POINTER(Search), C.POINTER(Hit)], C.c_int),
+    ("vk_use_outlines", [P, Bytes], None),
+    ("vk_outline_key", [C.POINTER(Id), Bytes, C.POINTER(Id)], None),
     ("vk_search_coverage", [C.POINTER(Search), C.POINTER(Coverage)], C.c_int),
     ("vk_search_close", [C.POINTER(Search)], None),
     ("sqlite3_open", [C.c_char_p, C.POINTER(P)], C.c_int),
@@ -80,6 +89,13 @@ for name, args, res in [
     fn.argtypes, fn.restype = args, res
 GREP = C.addressof(C.c_void_p.in_dll(LIB, "vkGrep"))
 BM25 = C.addressof(C.c_void_p.in_dll(LIB, "vkBm25"))
+
+
+def outline_key(target, author):
+    """OL-1: the akey of author's outlines of target."""
+    out = Id()
+    LIB.vk_outline_key(C.byref(Id(*target)), _b(author), C.byref(out))
+    return bytes(out)
 
 
 class VkError(Exception):
@@ -207,16 +223,23 @@ class Store:
         if LIB.vk_bm25_enable(self.st) != OK:
             raise VkError(f"bm25: {self.errmsg()}")
 
+    def use_outlines(self, author):
+        """OL-4: whose outlines searches use; b"" for none. Kept alive here: the store borrows it."""
+        self._outlines = author
+        LIB.vk_use_outlines(self.st, _b(author))
+
     def grep(self, text):
-        """(ids, coverage) for an exact substring of any readable body."""
+        """(hits, coverage) for an exact substring of any readable body."""
         return self.search(GREP, text)
 
     def bm25(self, text):
-        """(ids, coverage), best first; (None, None) if blind (not indexed)."""
+        """(hits, coverage), best first; (None, None) if blind (not indexed)."""
         return self.search(BM25, text)
 
     def search(self, method, text):
-        s, cov, out, ids = Search(), Coverage(), Id(), []
+        """(hits, coverage): each hit (id, node), node None for a whole assertion, else
+        (titles from the root down, lo, hi, depth)."""
+        s, cov, out, ids, hit = Search(), Coverage(), Id(), [], Hit()
         rc = LIB.vk_search_open(self.st, method, _b(text), C.byref(s))
         try:
             if rc == BLIND:
@@ -224,11 +247,17 @@ class Store:
             if rc != OK:
                 raise VkError(f"search: {self.errmsg()}")
             while (rc := LIB.vk_search_next(C.byref(s), C.byref(out))) == OK:
-                ids.append(bytes(out))
+                if LIB.vk_search_hit(C.byref(s), C.byref(hit)) != OK:
+                    raise VkError(f"search: {self.errmsg()}")
+                node = None
+                if hit.bNode:
+                    path = json.loads(C.string_at(hit.path.p, hit.path.n).decode("utf-8", "replace"))
+                    node = (path, hit.lo, hit.hi, hit.depth)
+                ids.append((bytes(out), node))
             if rc != DONE:
                 raise VkError(f"search: {self.errmsg()}")   # a cut-short list must not read as complete
             LIB.vk_search_coverage(C.byref(s), C.byref(cov))
             return ids, {"method": cov.zMethod.decode(), "exhaustive": bool(cov.bExhaustive),
-                         "searched": cov.nSearched}
+                         "searched": cov.nSearched, "whole": cov.nWhole}
         finally:
             LIB.vk_search_close(C.byref(s))

@@ -100,6 +100,25 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   the ranges are checked against its length. On merge the target may arrive later, so only a held
   target's length is checked. An outline whose target never arrives is kept, and its ranges are
   checked by whoever reads it.
+- **Search returns outline nodes (OL-4) from a projection, `vk_onode` and `vk_oseg`.** It holds
+  the nodes of every current outline: the heads of each outline akey, valid and not erased. It is
+  re-folded for an akey whenever an outline is stored or erased, and for every akey when the grants
+  change. Each outline adds a root node (depth 0) for the text outside every top-level node. A node's
+  own text is its range less its children's ranges (`vk_oseg`), so every byte of a target is in
+  exactly one node's own text.
+  - **The reader chooses** whose outlines a search uses (`vk_use_outlines`). The default is none,
+    which is the old behaviour.
+  - **Grep** returns the smallest node holding the first match.
+  - **bm25** indexes each node's own text in the same FTS table as whole bodies, under negative
+    rowids. It ranks the reader's author's nodes together with the whole bodies of targets that
+    author has not outlined, so their scores compare. The triggers keep node text right when a
+    target arrives after its outline, or is erased or deleted. `integrity-check` with `rank` 1
+    covers node rows too, through the content view.
+  - **A hit's node** comes from `vk_search_hit`. Coverage counts what was searched whole
+    (`nWhole`).
+  - **Limits:** outlines of logged targets get no searchable node text. A node's text is rebuilt
+    from the target's body once per segment, which is slow for a delta-stored target with many
+    segments.
 - **`vk_standing` answers Q-4 from `arm`**: whether a row is a head, and how many heads its akey has.
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
@@ -146,7 +165,8 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 ## Not done
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
-sync, regex, Q-4's relations (L is not built), OL-4 (search returning outline nodes), OL-5's flag, compressing deltas or whole bodies, measuring the DS
+sync, regex, Q-4's relations (L is not built), OL-5's flag, a host command that asks a judge for
+an outline, compressing deltas or whole bodies, measuring the DS
 thresholds, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
 Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
 row against a range tombstone or walking skip links: nothing reads them yet except the next append.

@@ -9,14 +9,21 @@
 /* instr() compares bytes when both sides are BLOBs (A-4a). */
 #define GREP_MATCH "instr(body,?1)>0"
 
+/* Every method's rows: the hit's id, then the node of the reader's outline it
+** is in, or NULL for the whole assertion (OL-4). */
+
+/* grep's node is the smallest one holding the first match. */
 static VkStatus grep_open(VkStore *p, VkBytes q, sqlite3_stmt **ppOut){
     int rc;
     if( q.n==0 ) return vk_refuse(p, VK_EINVAL, "Q-6: grep needs a non-empty query");
     rc = vk_prepare(p,
-        "SELECT a.id FROM assertion a WHERE a.body IS NOT NULL AND "
-        VK_VALID("a") " AND instr(" VK_BODY("a.") ",?1)>0", ppOut);
+        "SELECT h.id, (SELECT n.rowid FROM vk_onode n WHERE n.target=h.id AND n.author=?2"
+        "  AND n.lo<=h.pos AND n.hi>=h.pos+length(?1) ORDER BY n.depth DESC LIMIT 1)"
+        " FROM (SELECT a.id, instr(" VK_BODY("a.") ",?1)-1 AS pos FROM assertion a"
+        "  WHERE a.body IS NOT NULL AND " VK_VALID("a") ") h WHERE h.pos>=0", ppOut);
     if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
     vk_bind_bytes(*ppOut, 1, q);
+    vk_bind_bytes(*ppOut, 2, vk_outline_author(p));
     return VK_OK;
 }
 
@@ -51,7 +58,7 @@ const VkSearchMethod vkGrep = { "grep", 1, grep_open, grep_selfcheck };
 
 VkStatus vk_search_open(VkStore *p, const VkSearchMethod *m, VkBytes q, VkSearch *s){
     VkStatus st;
-    s->p = p; s->pMethod = m; s->pSt = 0;
+    s->p = p; s->pMethod = m; s->pSt = 0; s->pNode = 0;
     if( !vk_has_right(p, VK_READ) ) return vk_refuse(p, VK_EDENIED, "D-3a0: search requires r");
     st = m->selfcheck(p);
     if( st!=VK_OK ) return st;
@@ -66,17 +73,42 @@ VkStatus vk_search_next(VkSearch *s, VkId out){
     return VK_OK;
 }
 
+VkStatus vk_search_hit(VkSearch *s, VkHit *out){
+    int rc;
+    memset(out, 0, sizeof(*out));
+    if( !s->pSt || sqlite3_column_count(s->pSt)<2 || sqlite3_column_type(s->pSt, 1)==SQLITE_NULL ) return VK_OK;
+    if( !s->pNode ){
+        rc = vk_prepare(s->p, "SELECT lo, hi, depth, path FROM vk_onode WHERE rowid=?1", &s->pNode);
+        if( rc!=SQLITE_OK ) return vk_sql_status(s->p, rc);
+    }
+    sqlite3_reset(s->pNode);
+    sqlite3_bind_int64(s->pNode, 1, sqlite3_column_int64(s->pSt, 1));
+    rc = vk_step(s->pNode);
+    if( rc==SQLITE_DONE ) return VK_OK;      /* the node went with a refold mid-search: whole */
+    if( rc!=SQLITE_ROW ) return vk_sql_status(s->p, rc);
+    out->bNode = 1;
+    out->lo = sqlite3_column_int64(s->pNode, 0);
+    out->hi = sqlite3_column_int64(s->pNode, 1);
+    out->depth = sqlite3_column_int(s->pNode, 2);
+    out->path.p = sqlite3_column_text(s->pNode, 3);
+    out->path.n = (uint32_t)sqlite3_column_bytes(s->pNode, 3);
+    return VK_OK;
+}
+
 VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out){
     sqlite3_stmt *pSt = 0;
     VkStatus st = VK_OK;
     int rc = vk_prepare(s->p,
-        "SELECT count(*) FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a"), &pSt);
+        "SELECT count(*), coalesce(sum(NOT EXISTS(SELECT 1 FROM vk_onode o WHERE o.target=a.id AND o.author=?1)),0)"
+        " FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a"), &pSt);
     if( rc!=SQLITE_OK ) return vk_sql_status(s->p, rc);
+    vk_bind_bytes(pSt, 1, vk_outline_author(s->p));
     rc = vk_step(pSt);
     if( rc==SQLITE_ROW ){
         out->zMethod = s->pMethod->zName;
         out->bExhaustive = s->pMethod->bExhaustive;
         out->nSearched = sqlite3_column_int64(pSt, 0);
+        out->nWhole = sqlite3_column_int64(pSt, 1);
     }else{
         st = vk_sql_status(s->p, rc);
     }
@@ -86,7 +118,9 @@ VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out){
 
 void vk_search_close(VkSearch *s){
     sqlite3_finalize(s->pSt);
+    sqlite3_finalize(s->pNode);
     s->pSt = 0;
+    s->pNode = 0;
 }
 
 
@@ -107,18 +141,31 @@ void vk_search_close(VkSearch *s){
 ** (DS-1) is indexed as its text, and re-encoding one, whole to delta or back,
 ** changes nothing the index sees: only writing, erasing and deleting do. */
 static const char *const azBm25[] = {
-    "CREATE VIEW vk_bm25_src(seq, body) AS SELECT seq, " VK_BODY("") " FROM assertion",
+    "CREATE VIEW vk_bm25_src(seq, body) AS SELECT seq, " VK_BODY("") " FROM assertion"
+    " UNION ALL SELECT -n.rowid, " VK_NODE_TEXT("n.rowid", VK_TARGET_BODY("n.target")) " FROM vk_onode n",
     "CREATE VIRTUAL TABLE vk_bm25 USING fts5(body, content='vk_bm25_src', content_rowid='seq')",
     "INSERT INTO vk_bm25(vk_bm25, rank) VALUES('secure-delete', 1)",
+    /* A target's nodes were indexed empty while it was absent: now its text. */
     "CREATE TRIGGER vk_bm25_ai AFTER INSERT ON assertion"
-    " BEGIN INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, " VK_BODY("new.") "); END",
+    " BEGIN INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, " VK_BODY("new.") ");"
+    " INSERT INTO vk_bm25(vk_bm25, rowid, body) SELECT 'delete', -n.rowid, NULL FROM vk_onode n"
+    "  WHERE n.target=new.id AND new.log=x'';"
+    " INSERT INTO vk_bm25(rowid, body) SELECT -n.rowid, " VK_NODE_TEXT("n.rowid", VK_BODY("new.")) " FROM vk_onode n"
+    "  WHERE n.target=new.id AND new.log=x''; END",
     "CREATE TRIGGER vk_bm25_au AFTER UPDATE OF body ON assertion"
     " WHEN old.body IS NOT NULL AND new.body IS NULL"
     " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, " VK_BODY("old.") ");"
-    " INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, NULL); END",
+    " INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, NULL);"
+    " INSERT INTO vk_bm25(vk_bm25, rowid, body) SELECT 'delete', -n.rowid, " VK_NODE_TEXT("n.rowid", VK_BODY("old.")) ""
+    "  FROM vk_onode n WHERE n.target=old.id AND old.log=x'';"
+    " INSERT INTO vk_bm25(rowid, body) SELECT -n.rowid, NULL FROM vk_onode n WHERE n.target=old.id AND old.log=x''; END",
     "CREATE TRIGGER vk_bm25_ad AFTER DELETE ON assertion"
-    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, " VK_BODY("old.") "); END",
+    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, " VK_BODY("old.") ");"
+    " INSERT INTO vk_bm25(vk_bm25, rowid, body) SELECT 'delete', -n.rowid, " VK_NODE_TEXT("n.rowid", VK_BODY("old.")) ""
+    "  FROM vk_onode n WHERE n.target=old.id AND old.log=x'';"
+    " INSERT INTO vk_bm25(rowid, body) SELECT -n.rowid, NULL FROM vk_onode n WHERE n.target=old.id AND old.log=x''; END",
     "INSERT INTO vk_bm25(rowid, body) SELECT seq, " VK_BODY("") " FROM assertion",
+    "INSERT INTO vk_bm25(rowid, body) SELECT -n.rowid, " VK_NODE_TEXT("n.rowid", VK_TARGET_BODY("n.target")) " FROM vk_onode n",
 };
 
 static int run(VkStore *p, const char *zSql){
@@ -142,6 +189,8 @@ static int bm25_exists(VkStore *p, int *pb){
     sqlite3_finalize(pSt);
     return (rc==SQLITE_ROW || rc==SQLITE_DONE) ? SQLITE_OK : rc;
 }
+
+int vk_bm25_on(VkStore *p, int *pb){ return bm25_exists(p, pb); }
 
 VkStatus vk_bm25_enable(VkStore *p){
     int b = 0, rc;
@@ -191,12 +240,21 @@ static VkStatus bm25_open(VkStore *p, VkBytes q, sqlite3_stmt **ppOut){
     int rc = bm25_query(q, &z);
     if( rc==SQLITE_EMPTY ) return vk_refuse(p, VK_EINVAL, "Q-6: bm25 needs at least one word");
     if( rc!=SQLITE_OK ) return VK_ENOMEM;
+    /* Whole bodies with no outline by the reader's author, and that author's
+    ** nodes, ranked together: one index, so their scores compare (OL-4). */
     rc = vk_prepare(p,
-        "SELECT a.id FROM vk_bm25 JOIN assertion a ON a.seq=vk_bm25.rowid"
-        " WHERE vk_bm25 MATCH ?1 AND a.body IS NOT NULL AND " VK_VALID("a")
-        " ORDER BY bm25(vk_bm25), a.id", ppOut);
+        "SELECT id, node FROM ("
+        " SELECT a.id AS id, NULL AS node, bm25(vk_bm25) AS score FROM vk_bm25 JOIN assertion a ON a.seq=vk_bm25.rowid"
+        "  WHERE vk_bm25 MATCH ?1 AND vk_bm25.rowid>0 AND a.body IS NOT NULL AND " VK_VALID("a")
+        "  AND NOT EXISTS(SELECT 1 FROM vk_onode o WHERE o.target=a.id AND o.author=?2)"
+        " UNION ALL"
+        " SELECT n.target, n.rowid, bm25(vk_bm25) FROM vk_bm25 JOIN vk_onode n ON n.rowid=-vk_bm25.rowid"
+        "  JOIN assertion a ON a.id=n.target AND a.log=x''"
+        "  WHERE vk_bm25 MATCH ?1 AND vk_bm25.rowid<0 AND n.author=?2 AND a.body IS NOT NULL AND " VK_VALID("a")
+        ") ORDER BY score, id, node", ppOut);
     if( rc!=SQLITE_OK ){ sqlite3_free(z); return vk_sql_status(p, rc); }
     sqlite3_bind_text(*ppOut, 1, z, -1, sqlite3_free);
+    vk_bind_bytes(*ppOut, 2, vk_outline_author(p));
     return VK_OK;
 }
 
@@ -238,3 +296,4 @@ static VkStatus bm25_selfcheck(VkStore *p){
 }
 
 const VkSearchMethod vkBm25 = { "bm25", 0, bm25_open, bm25_selfcheck };
+

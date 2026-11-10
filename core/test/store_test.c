@@ -1221,6 +1221,128 @@ static void t_ol2(void){
     CHECK( vk_current(p.st,(VkBytes){kb,VK_ID_BYTES},&r)==VK_OK && id_eq(r.id,ob) ); vk_row_close(&r);
     drop(p); drop(b);
 }
+typedef struct { VkId id; int bNode, depth; int64_t lo, hi; char path[128]; } Hit;
+static int hits_of(Peer p, const VkSearchMethod *m, const char *zQ, Hit *a, int nMax, VkCoverage *cov){
+    VkSearch s; VkId id; VkHit h; int n = 0;
+    if( vk_search_open(p.st,m,B(zQ),&s)!=VK_OK ){ vk_search_close(&s); return -1; }
+    while( vk_search_next(&s,id)==VK_OK ){
+        if( n<nMax ){
+            memset(&a[n],0,sizeof a[n]);
+            memcpy(a[n].id,id,32);
+            if( vk_search_hit(&s,&h)!=VK_OK ){ vk_search_close(&s); return -2; }
+            a[n].bNode = h.bNode; a[n].depth = h.depth; a[n].lo = h.lo; a[n].hi = h.hi;
+            snprintf(a[n].path,sizeof a[n].path,"%.*s",(int)h.path.n,(const char*)h.path.p);
+        }
+        n++;
+    }
+    if( cov ) vk_search_coverage(&s,cov);
+    vk_search_close(&s);
+    return n;
+}
+static int64_t line_at(const char *zDoc, int line){
+    const char *z = zDoc; int i;
+    for(i=0;i<line && z;i++){ z = strchr(z,'\n'); if( z ) z++; }
+    return z ? (int64_t)(z - zDoc) : -1;
+}
+static int find_hit(Hit *a, int n, const VkId id){ int i; for(i=0;i<n;i++) if( id_eq(a[i].id,id) ) return i; return -1; }
+static void t_ol4(void){
+    Peer p = peer("alice"), q = peer("alice");
+    char buf[4000], json[600], other[200];
+    VkId tid, oid, key, out1, out2, out3, kb, ob, t2; VkAssertion a, o; Hit h[16]; VkCoverage cov; int n, i;
+    int64_t l10, l30, l40, l50, len;
+    VkMergeReport rep;
+    doc(0,buf,sizeof buf); len = (int64_t)strlen(buf);
+    l10 = line_at(buf,10); l30 = line_at(buf,30); l40 = line_at(buf,40); l50 = line_at(buf,50);
+    /* "second half" has text of its own (lines 30-39) before its child */
+    snprintf(json,sizeof json,
+        "[{\"title\":\"first half\",\"lo\":0,\"hi\":%lld,\"children\":["
+        "{\"title\":\"opening\",\"lo\":0,\"hi\":%lld},{\"title\":\"middle\",\"lo\":%lld,\"hi\":%lld}]},"
+        "{\"title\":\"second half\",\"lo\":%lld,\"hi\":%lld,\"children\":["
+        "{\"title\":\"late part\",\"lo\":%lld,\"hi\":%lld}]}]",
+        (long long)l30,(long long)l10,(long long)l10,(long long)l30,(long long)l30,(long long)l50,
+        (long long)l40,(long long)l50);
+    a = mk("alice","big",1,buf); CHECK( vk_put(p.st,&a,tid)==VK_OK );
+    snprintf(other,sizeof other,"an orphanword, and some steady text with no outline");
+    a = mk("alice","other",1,other); CHECK( vk_put(p.st,&a,oid)==VK_OK );
+    o = outline_of("alice",tid,json,key,(const VkId*)&tid,1); CHECK( vk_put(p.st,&o,out1)==VK_OK );
+
+    CHECK( hits_of(p,&vkGrep,"uniq0z",h,16,0)==1 && h[0].bNode==0 );        /* no reader outline: whole */
+    vk_use_outlines(p.st,B("alice"));
+    CHECK( hits_of(p,&vkGrep,"uniq0z",h,16,0)==1 && h[0].bNode==1 && h[0].depth==2
+           && h[0].lo==0 && h[0].hi==l10 && strcmp(h[0].path,"[\"first half\",\"opening\"]")==0 );
+    CHECK( hits_of(p,&vkGrep,"line 35:",h,16,0)==1 && h[0].depth==1 && strcmp(h[0].path,"[\"second half\"]")==0 );
+    CHECK( hits_of(p,&vkGrep,"line 55:",h,16,0)==1 && h[0].bNode==1 && h[0].depth==0
+           && strcmp(h[0].path,"[]")==0 && h[0].lo==0 && h[0].hi==len );     /* outside every node: the root */
+    n = hits_of(p,&vkGrep,"steady",h,16,&cov);
+    CHECK( n==2 && (i = find_hit(h,n,oid))>=0 && h[i].bNode==0 );          /* no outline: returned whole */
+    CHECK( cov.nWhole==cov.nSearched-1 );                                   /* only the target had one */
+
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && h[0].bNode==1 && strcmp(h[0].path,"[\"first half\",\"opening\"]")==0 );
+    CHECK( hits_of(p,&vkBm25,"orphanword",h,16,0)==1 && h[0].bNode==0 && id_eq(h[0].id,oid) );
+    n = hits_of(p,&vkBm25,"steady",h,16,0);
+    CHECK( n==6 );        /* opening, middle, second half's own text, late part, the root's text, the other whole */
+    CHECK( hits_of(p,&vkBm25,"35",h,16,0)==1 && strcmp(h[0].path,"[\"second half\"]")==0 );  /* a parent's own text */
+    vk_use_outlines(p.st,B(""));
+    CHECK( hits_of(p,&vkBm25,"steady",h,16,0)==2 );                        /* without: two whole bodies */
+    vk_use_outlines(p.st,B("alice"));
+    CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+
+    /* a newer outline replaces the nodes; erasing it returns the target whole */
+    snprintf(json,sizeof json,"[{\"title\":\"the document\",\"lo\":0,\"hi\":%lld}]",(long long)len);
+    o = outline_of("alice",tid,json,key,(const VkId*)&tid,1);
+    o.supersedes = (const VkId*)&out1; o.nSupersedes = 1; o.rank[15] = 2;
+    CHECK( vk_put(p.st,&o,out2)==VK_OK );
+    CHECK( hits_of(p,&vkGrep,"uniq0z",h,16,0)==1 && strcmp(h[0].path,"[\"the document\"]")==0 );
+    CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && strcmp(h[0].path,"[\"the document\"]")==0 );
+    CHECK( vk_erase(p.st,out2,B("t"),gRank0,out3)==VK_OK );
+    CHECK( hits_of(p,&vkGrep,"uniq0z",h,16,0)==1 && h[0].bNode==0 );
+    CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && h[0].bNode==0 );
+    CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+
+    /* another author's outline, read only when that author is chosen */
+    snprintf(json,sizeof json,"[{\"title\":\"bob's view\",\"lo\":0,\"hi\":%lld}]",(long long)l10);
+    o = outline_of("bob",tid,json,kb,(const VkId*)&tid,1);
+    vk_assertion_id(&o,ob);
+    memset(&rep,0,sizeof rep);
+    CHECK( vk_ingest(p.st,&o,ob,&rep)==VK_OK && rep.added==1 );
+    CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && h[0].bNode==0 );        /* alice has none now */
+    vk_use_outlines(p.st,B("bob"));
+    CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && strcmp(h[0].path,"[\"bob's view\"]")==0 );
+
+    /* grants that no longer entitle bob: his outline stops counting, so its nodes go (R-4a) */
+    {
+        static VkGrant gAlice[1];
+        gAlice[0].principal = B("alice"); gAlice[0].rights = ALL;
+        vk_close(p.st);
+        CHECK( vk_open(p.db,B("alice"),gAlice,1,&p.st)==VK_OK );
+        vk_use_outlines(p.st,B("bob"));
+        CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && h[0].bNode==0 );
+        CHECK( hits_of(p,&vkGrep,"uniq0z",h,16,0)==1 && h[0].bNode==0 );
+        CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+    }
+
+    /* erasing the target leaves no hit, and the index still checks */
+    CHECK( vk_erase(p.st,tid,B("t"),gRank0,t2)==VK_OK );
+    CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==0 && hits_of(p,&vkGrep,"uniq0z",h,16,0)==0 );
+    CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+
+    /* the outline arrives before its target */
+    CHECK( vk_bm25_enable(q.st)==VK_OK );
+    vk_use_outlines(q.st,B("bob"));
+    memset(&rep,0,sizeof rep);
+    CHECK( vk_ingest(q.st,&o,ob,&rep)==VK_OK && rep.added==1 );
+    CHECK( hits_of(q,&vkBm25,"uniq0z",h,16,0)==0 );
+    a = mk("alice","big",1,buf); CHECK( vk_put(q.st,&a,tid)==VK_OK );
+    CHECK( hits_of(q,&vkBm25,"uniq0z",h,16,0)==1 && strcmp(h[0].path,"[\"bob's view\"]")==0 );
+    CHECK( hits_of(q,&vkGrep,"uniq0z",h,16,0)==1 && strcmp(h[0].path,"[\"bob's view\"]")==0 );
+    CHECK( sqlite3_exec(q.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+    /* erasing a target whose nodes stand: they leave the index with it */
+    CHECK( vk_erase(q.st,tid,B("t"),gRank0,t2)==VK_OK );
+    CHECK( hits_of(q,&vkBm25,"uniq0z",h,16,0)==0 );
+    CHECK( sqlite3_exec(q.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+    drop(p); drop(q);
+}
 static void t_q2(void){
     Peer p = peer("alice");
     VkSearch s; VkCoverage c; VkId id;
@@ -1414,6 +1536,7 @@ static const Test aTest[] = {
     {"Q-4","a hit says whether it is current, superseded, or one head of a fork",t_q4},
     {"OL-1","an outline's shape and frame are checked on write and on merge",t_ol1},
     {"OL-2","outlines by two authors stand side by side; an author's newer one supersedes",t_ol2},
+    {"OL-4","a hit is the smallest node of the reader's outline, or the whole assertion",t_ol4},
     {"DS-1","a delta rebuilds its version exactly, and a malformed one is refused",t_ds_codec},
     {"DS-1","the latest is whole, the superseded a delta, and both read and search as written",t_ds1},
     {"DS-2","a long chain stays within the bound and every version reads back",t_ds2},

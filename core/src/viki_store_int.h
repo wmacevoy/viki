@@ -36,6 +36,16 @@ int vk_delta_apply(const uint8_t *src, uint32_t nSrc, const uint8_t *d, uint32_t
 /* A body as stored: whole when dbase is NULL, else a delta from row dbase. */
 #define VK_BODY(t) "vk_body(" t "body," t "dbase)"
 
+/* OL-4. The target's body, by id (outlines name unlogged targets). */
+#define VK_TARGET_BODY(idExpr) \
+    "(SELECT " VK_BODY("tb.") " FROM assertion tb WHERE tb.id=" idExpr " AND tb.log=x'')"
+/* A node's own text: its segments of the given body, in order. */
+#define VK_NODE_TEXT(nodeExpr, bodyExpr) \
+    "(SELECT group_concat(substr(" bodyExpr ", s.lo+1, s.hi-s.lo), '' ORDER BY s.lo)" \
+    " FROM vk_oseg s WHERE s.node=" nodeExpr ")"
+VkBytes vk_outline_author(const VkStore *p);
+int vk_bm25_on(VkStore *p, int *pb);   /* *pb is 1 if the bm25 index exists */
+
 #ifdef VK_TEST_FAULTS
 int vk_test_fault(void);
 #endif

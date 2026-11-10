@@ -450,10 +450,12 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 - **N-7, through the first host** (`tools/vk.py`, 2026-11-10): the diary key is 64 hex characters,
   used raw with no KDF. A passphrase is refused, because N-8 (passwords, slow KDF) is not built and
   must not share N-7's path.
-- **OL-1 and OL-2** (new in v3, built 2026-11-10): an outline's frame and JSON body are checked on
-  write and on merge, and its akey keeps one author's outlines on one chain. OL-3's link to a
-  carried-forward outline is accepted, and nothing reads it yet. OL-4 (search returns nodes) and OL-5
-  (the flag) are not built. OL-6 holds by construction: core makes no model call.
+- **OL-1, OL-2 and OL-4** (new in v3, built 2026-11-10): an outline's frame and JSON body are checked
+  on write and on merge, and its akey keeps one author's outlines on one chain. Grep and bm25 return
+  the smallest node of the reader's chosen outline (`vk_use_outlines`), with its titles and range,
+  and count what was searched whole. OL-3's link to a carried-forward outline is accepted, and
+  nothing reads it yet. OL-5 (the flag) is not built. OL-6 holds by construction: core makes no
+  model call.
 - **DS-1 to DS-4** (new in v3, built 2026-11-10): `core/src/viki_delta.c` and `vk_body`, tested in
   `store_test.c` and in the fault script.
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep and bm25, not yet for regex; ENV-2 is measured for
