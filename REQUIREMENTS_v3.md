@@ -291,22 +291,12 @@ did (DS).
   and nothing is withheld until an outline exists. A peer with no judge, such as the puck (ENV-1),
   stores, merges and searches every assertion, whole where no outline is held.
 
-## LIB — The librarian (new series, drafted 2026-11-10, not yet read back)
+## LIB — The librarian: moved to `../viki-agent`
 
-Warren, 2026-11-10: "sonnet as librarian. access to a viki database, a goal of concept mapping and outlining with
-summaries, and a preference to leave old maps around with changes so they can be tracked. open to use of
-sub-models"; then "add a vector embedding first ... have the librarian write in question/answer styles: function
-defining embedding ... and where is embedding defined? to improve query retrieval."
-
-- **LIB-1** *(drafted 2026-11-10)* **A librarian writes, for each current text file, entries a reader would
-  look for:** each has questions in two styles, a question and a search phrase, the lines it rests on, and a
-  one-sentence answer. They are ordinary assertions by the librarian's own principal, derived from the version
-  they describe. A newer set supersedes the older, which stays readable, so changes can be tracked (SHAPE-2). A
-  version already described is not asked about again. A file it is told to skip is never sent to the model.
-  Search finds an entry and returns the file and lines it names.
-- **LIB-2** *(drafted 2026-11-10, not built)* **Concept maps:** concepts with summaries, where each is mentioned,
-  and how they relate, kept by supersession, the old maps readable. The word "concept" and "map" enter the
-  vocabulary with this requirement.
+Drafted here 2026-11-10 as LIB-1 (entries per outline node) and LIB-2 (concept maps). Moved with the librarian's
+code to `../viki-agent` the same day, where they are LA-1 to LA-7 (Warren: "move the librarian code to
+viki-agent"). viki keeps what the librarian needs of it: outlines as assertions (OL-1, OL-2, OL-4), vectors
+(Q-6), and the principals' grants in `tools/vk.py`. OL-3's carrying forward is done by viki-agent's `la.py`.
 
 ## DS — How versions are stored (new series)
 
@@ -485,9 +475,7 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   reports blind with no model chosen or no vectors under it, deletes a body's vectors when it is erased or
   forgotten, and merges none. The host's embedder is `src/`'s, built by `tools/build-embed.sh` against the pinned
   ONNX Runtime and MiniLM, which run on x86 too (the selftest's cosines reproduce exactly).
-- **LIB-1** (drafted and built 2026-11-10): `vk.py librarian`, one entry per outline node, tested with a fake
-  model. An update asks only about nodes whose own text changed and carries the rest (FINDINGS 2026-11-10: the
-  same retrieval at about a quarter of the cost).
+- **LIB-1** moved, with the librarian, to `../viki-agent` (2026-11-10).
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, bm25 and vector, not yet for regex; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.

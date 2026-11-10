@@ -11,6 +11,21 @@ expectation -- re-run the command before quoting the number. Where a later
 measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
+## The librarian moves to ../viki-agent; viki keeps the store and the host (2026-11-10)
+
+Warren: "i think we found viki -> the librarian armed with viki the tool"; "move the librarian code to viki-agent".
+`tools/vk.py`'s outline, librarian, embed and ask, with their prompts, update logic and tests, are now
+`../viki-agent/librarian/la.py` and `test_la.py`; `test/librarian/` is its trial `2026-11-10-librarian`, now in the
+private `../viki-agent-self-improvement`, and removed from viki's history on 2026-11-11 because its questions came
+from private sessions (Warren: "rewrite the dogfood commits too"). The last viki commit that has the code here is
+`1215fe2`. viki keeps the core (outlines as assertions, vectors), the host
+(ingest, grep, find, transcripts, the embedder binding), and the grants of the judges' and librarians' principals,
+so its own searches honour what they write. `ask_judge`, the one place the host called a model, went with them:
+the host now calls none.
+
+**What it changed:** the entries below that say `vk.py outline` or `vk.py librarian` describe the code as it was
+then. `test_vk.py` has 10 tests now; viki-agent's `test_la.py` has the 4 that moved.
+
 ## The diff update, built into vk.py, retrieves as well as a whole-file update at about a quarter of the cost (2026-11-10)
 
 `vk.py outline` now updates an outline from the previous outline and the diff. `vk.py librarian` re-asks only the

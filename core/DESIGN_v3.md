@@ -150,7 +150,8 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   in passing outranks a short one that answers. Common words match nearly everything, and the snippet
   is the first line holding any query word, not the best one.
 
-- **`vk.py outline` asks a judge outside viki** (SHAPE-7) and writes what it answers.
+- **Outlines are asked of a judge outside viki** (SHAPE-7). The command, `vk.py outline` when this was written,
+  is now `la.py outline` in `../viki-agent`, moved 2026-11-10 with the librarian; the notes below describe it.
   - **Who writes:** each model writes under its own principal (`vk.judge.sonnet`, `vk.judge.haiku`),
     and the host entitles them beside the ingester, so a reader chooses by author (OL-2).
   - **Which versions:** by default it outlines current file versions with no outline from that judge
