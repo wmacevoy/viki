@@ -7,6 +7,7 @@
 */
 #include "viki_store.h"
 #include "sha256.h"
+#include "viki_store_int.h"   /* the delta codec, tested directly */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -953,6 +954,160 @@ static void t_env4(void){
     }
     drop(p);
 }
+/* ---- DS: reverse deltas ---- */
+/* Version v of a 60-line document: line (v*7)%60 says "uniqVz", a word in v alone. */
+static void doc(int v, char *buf, size_t n){
+    size_t at = 0; int i;
+    for(i=0;i<60 && at<n;i++){
+        if( v>=0 && i==(v*7)%60 ) at += (size_t)snprintf(buf+at, n-at, "line %02d: this version says uniq%dz here\n", i, v);
+        else at += (size_t)snprintf(buf+at, n-at, "line %02d: the steady text of section %d, unchanged\n", i, i/10);
+    }
+}
+static uint32_t gLcg = 1;
+static uint32_t lcg(void){ gLcg = gLcg*1103515245u + 12345u; return gLcg >> 8; }
+static void t_ds_codec(void){
+    static uint8_t src[6000], tgt[7000];
+    int k, bad = 0;
+    gLcg = 7;
+    for(k=0;k<400;k++){
+        uint32_t nS = lcg()%5000, nT, i, e;
+        uint8_t *d = 0, *back = 0; uint32_t nD = 0, nBack = 0;
+        for(i=0;i<nS;i++) src[i] = k%3 ? (uint8_t)"abcde \n"[lcg()%7] : (uint8_t)lcg();
+        memcpy(tgt, src, nS); nT = nS;
+        for(e=lcg()%5; e>0; e--){               /* insert, delete or replace a run */
+            uint32_t at = nT ? lcg()%nT : 0, len = lcg()%60;
+            switch( lcg()%3 ){
+            case 0: if( nT+len < sizeof tgt ){ memmove(tgt+at+len, tgt+at, nT-at); for(i=0;i<len;i++) tgt[at+i]=(uint8_t)lcg(); nT += len; } break;
+            case 1: if( at+len > nT ) len = nT-at; memmove(tgt+at, tgt+at+len, nT-at-len); nT -= len; break;
+            default: for(i=0;i<len && at+i<nT;i++) tgt[at+i]=(uint8_t)lcg(); break;
+            }
+        }
+        if( k%10==9 ){ nT = lcg()%3000; for(i=0;i<nT;i++) tgt[i]=(uint8_t)lcg(); }   /* unrelated */
+        CHECK( vk_delta_make(src,nS,tgt,nT,&d,&nD)==SQLITE_OK );
+        if( vk_delta_apply(src,nS,d,nD,&back,&nBack)!=SQLITE_OK || nBack!=nT || memcmp(back,tgt,nT)!=0 ) bad++;
+        sqlite3_free(back);
+        for(i=0;i<nD;i++){                       /* every cut-short delta is refused or exact */
+            int rc = vk_delta_apply(src,nS,d,i,&back,&nBack);
+            if( rc==SQLITE_OK ){ if( nBack!=nT || memcmp(back,tgt,nT)!=0 ) bad++; sqlite3_free(back); }
+            else if( rc!=SQLITE_CORRUPT ) bad++;
+            if( i>64 ) i += i/8;                 /* sample long deltas */
+        }
+        sqlite3_free(d);
+    }
+    CHECK( bad==0 );
+    {   /* a copy past the source's end, and a length that does not add up */
+        static const uint8_t past[] = { 8, (8<<1)|1, 0 }, shortlen[] = { 9, (2<<1), 'a', 'b' };
+        uint8_t *back = 0; uint32_t nBack = 0;
+        CHECK( vk_delta_apply((const uint8_t*)"abc",3,past,sizeof past,&back,&nBack)==SQLITE_CORRUPT );
+        CHECK( vk_delta_apply((const uint8_t*)"abc",3,shortlen,sizeof shortlen,&back,&nBack)==SQLITE_CORRUPT );
+    }
+    {   /* a near-copy is small */
+        char a[4000], b[4000]; uint8_t *d = 0; uint32_t nD = 0;
+        doc(1,a,sizeof a); doc(2,b,sizeof b);
+        CHECK( vk_delta_make((const uint8_t*)b,(uint32_t)strlen(b),(const uint8_t*)a,(uint32_t)strlen(a),&d,&nD)==SQLITE_OK );
+        CHECK( nD < strlen(a)/10 );
+        sqlite3_free(d);
+    }
+}
+static int body_is(Peer p, const VkId id, const char *zWant){
+    VkCursor c; int ok;
+    ok = vk_get(p.st,id,&c)==VK_OK && c.a.body.n==strlen(zWant) && memcmp(c.a.body.p,zWant,c.a.body.n)==0;
+    vk_cursor_close(&c);
+    return ok;
+}
+static VkAssertion version(char *buf, size_t n, int v, const VkId *prev){
+    VkAssertion a;
+    doc(v,buf,n);
+    a = mk("alice","big",v,buf);
+    if( prev ){ a.supersedes = prev; a.nSupersedes = 1; }
+    return a;
+}
+static void t_ds1(void){
+    Peer p = peer("alice");
+    char b0[4000], b1[4000], small[200], other[4000];
+    VkId i0, i1, s0, s1, o0, o1, hit[4]; VkRow r; VkAssertion a;
+    a = version(b0,sizeof b0,0,0);  CHECK( vk_put(p.st,&a,i0)==VK_OK );
+    a = version(b1,sizeof b1,1,(const VkId*)&i0); CHECK( vk_put(p.st,&a,i1)==VK_OK );
+    CHECK( rows(p,"SELECT dbase FROM assertion WHERE seq=1")==2 );          /* the older is a delta ... */
+    CHECK( rows(p,"SELECT length(body) FROM assertion WHERE seq=1") < 300 );   /* ... and small */
+    CHECK( rows(p,"SELECT dbase IS NULL FROM assertion WHERE seq=2")==1 );  /* the latest is whole */
+    CHECK( body_is(p,i0,b0) && body_is(p,i1,b1) );
+    CHECK( vk_current(p.st,B("big"),&r)==VK_OK && r.body.n==strlen(b1) && memcmp(r.body.p,b1,r.body.n)==0 );
+    vk_row_close(&r);
+    CHECK( count_hits(p,"uniq0z")==1 && count_hits(p,"uniq1z")==1 );
+    CHECK( count_hits(p,"line 30: the steady")==2 );    /* shared text: in the delta only as a copy */
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    CHECK( ranked(p,"uniq0z",hit,4)==1 && id_eq(hit[0],i0) );
+    CHECK( ranked(p,"steady",hit,4)==2 );                 /* the index holds the text, not the delta */
+    CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+    /* not worth it: a small body, and a body unlike the one superseding it */
+    memset(small,'s',150); small[150] = 0;
+    a = mk("alice","small",1,small); CHECK( vk_put(p.st,&a,s0)==VK_OK );
+    small[3] = 't'; a = mk("alice","small",2,small); a.supersedes = (const VkId*)&s0; a.nSupersedes = 1;
+    CHECK( vk_put(p.st,&a,s1)==VK_OK );
+    doc(5,other,sizeof other); a = mk("alice","other",1,other); CHECK( vk_put(p.st,&a,o0)==VK_OK );
+    { int i; for(i=0;other[i];i++) other[i] = (char)('A' + (i*7)%26); }
+    a = mk("alice","other",2,other); a.supersedes = (const VkId*)&o0; a.nSupersedes = 1;
+    CHECK( vk_put(p.st,&a,o1)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE akey IN (CAST('small' AS BLOB),CAST('other' AS BLOB)) AND dbase IS NOT NULL")==0 );
+    drop(p);
+}
+static void t_ds2(void){
+    Peer p = peer("alice");
+    static VkId ids[40]; char buf[4000]; int v; int64_t bad = -1; VkAssertion a;
+    for(v=0;v<40;v++){
+        a = version(buf,sizeof buf,v,v ? (const VkId*)&ids[v-1] : 0);
+        CHECK( vk_put(p.st,&a,ids[v])==VK_OK );
+    }
+    CHECK( rows(p,"WITH RECURSIVE c(seq,d) AS (SELECT seq,0 FROM assertion WHERE dbase IS NULL"
+                  " UNION ALL SELECT a.seq,c.d+1 FROM assertion a JOIN c ON a.dbase=c.seq)"
+                  " SELECT max(d) FROM c") <= 16 );                           /* the bound holds */
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE dbase IS NOT NULL") >= 35 );   /* and most are deltas */
+    for(v=0;v<40;v++){ doc(v,buf,sizeof buf); CHECK( body_is(p,ids[v],buf) ); }
+    CHECK( vk_verify(p.st,&bad)==VK_OK && bad==0 );
+    drop(p);
+}
+static void t_ds3(void){
+    Peer a = peer("alice"), b = peer("alice");
+    static VkId ids[10]; char buf[4000]; int v; VkId da, db; VkAssertion x;
+    for(v=0;v<10;v++){ x = version(buf,sizeof buf,v,v ? (const VkId*)&ids[v-1] : 0); CHECK( vk_put(a.st,&x,ids[v])==VK_OK ); }
+    for(v=9;v>=0;v--){ VkId id; x = version(buf,sizeof buf,v,v ? (const VkId*)&ids[v-1] : 0); CHECK( vk_put(b.st,&x,id)==VK_OK ); }
+    CHECK( rows(b,"SELECT count(*) FROM assertion WHERE dbase IS NOT NULL") >= 8 );   /* deltas on arrival */
+    for(v=0;v<10;v++){ doc(v,buf,sizeof buf); CHECK( body_is(b,ids[v],buf) ); }
+    digest(a,da); digest(b,db);
+    CHECK( id_eq(da,db) );
+    drop(a); drop(b);
+    {   /* a logged row is never a base, so a range tombstone deletes no body another rests on */
+        Peer p = peer("alice");
+        char key[40], b0[4000]; VkId lid, xid; VkAssertion l = reading("alice","door",1,key,sizeof key);
+        doc(0,b0,sizeof b0); x = mk("alice","big",0,b0);
+        vk_assertion_id(&x,xid);
+        doc(1,buf,sizeof buf); l.akey = B("big"); l.body = B(buf);
+        l.supersedes = (const VkId*)&xid; l.nSupersedes = 1;  /* the logged row supersedes x, which arrives after */
+        CHECK( vk_append(p.st,&l,lid)==VK_OK );
+        CHECK( vk_put(p.st,&x,xid)==VK_OK );
+        CHECK( rows(p,"SELECT count(*) FROM assertion WHERE dbase IS NOT NULL")==0 );
+        drop(p);
+    }
+}
+static void t_ds4(void){
+    Peer p = peer("alice");
+    static VkId ids[6]; char buf[4000]; int v; VkId t, hit[4]; VkAssertion a; VkCursor c;
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    for(v=0;v<6;v++){ a = version(buf,sizeof buf,v,v ? (const VkId*)&ids[v-1] : 0); CHECK( vk_put(p.st,&a,ids[v])==VK_OK ); }
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE dbase IS NOT NULL")==5 );
+    CHECK( vk_erase(p.st,ids[3],B("t"),gRank0,t)==VK_OK );                  /* the middle */
+    for(v=0;v<6;v++){ if( v==3 ) continue; doc(v,buf,sizeof buf); CHECK( body_is(p,ids[v],buf) ); }
+    CHECK( vk_get(p.st,ids[3],&c)==VK_OK && c.a.erased && c.a.body.n==0 );
+    vk_cursor_close(&c);
+    CHECK( count_hits(p,"uniq3z")==0 && ranked(p,"uniq3z",hit,4)==0 );
+    CHECK( rows(p,"SELECT count(*) FROM assertion WHERE instr(body,'uniq3z')>0")==0 );   /* not left in a delta */
+    CHECK( vk_erase(p.st,ids[5],B("t"),gRank0,t)==VK_OK );                  /* the head */
+    for(v=0;v<5;v++){ if( v==3 ) continue; doc(v,buf,sizeof buf); CHECK( body_is(p,ids[v],buf) ); }
+    CHECK( count_hits(p,"uniq5z")==0 );
+    CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+    drop(p);
+}
 static void t_q2(void){
     Peer p = peer("alice");
     VkSearch s; VkCoverage c; VkId id;
@@ -1020,7 +1175,7 @@ static void t_env2(void){
 }
 
 /* ---- every failure, in turn ---- */
-typedef struct { int nStep; Peer p; Peer src; VkId i, j; int nDone; } Script;
+typedef struct { int nStep; Peer p; Peer src; VkId i, j, b0, b1; int nDone; } Script;
 
 static VkStatus script_step(Script *s, int k){
     VkId id, par[1]; VkRow r; VkMergeReport rep; VkSearch q; VkStatus st; int64_t bad;
@@ -1043,10 +1198,14 @@ static VkStatus script_step(Script *s, int k){
     case 10: { char key[40]; VkAssertion l = reading("alice","door",2,key,sizeof key); return vk_append(s->p.st,&l,id); }
     case 11: return vk_forget(s->p.st,B("door"),B("alice"),1,2,B("t"),gRank0,id);
     case 12: { char key[40]; VkAssertion l = reading("alice","door",3,key,sizeof key); return vk_append(s->p.st,&l,id); }
+    /* DS: a body big enough to become a delta, superseded, then its head erased */
+    case 13: { char buf[4000]; VkAssertion x = version(buf,sizeof buf,0,0); return vk_put(s->p.st,&x,s->b0); }
+    case 14: { char buf[4000]; VkAssertion x = version(buf,sizeof buf,1,(const VkId*)&s->b0); return vk_put(s->p.st,&x,s->b1); }
+    case 15: return vk_erase(s->p.st,s->b1,B("t"),gRank0,id);
     }
     return VK_OK;
 }
-#define NSCRIPT 13
+#define NSCRIPT 16
 
 /* Runs the script once, failing the k-th tick; 0 means no fault. A step that
 ** fails must succeed when retried, and the store must end up the same. */
@@ -1136,6 +1295,11 @@ static const Test aTest[] = {
     {"Q-6","grep is exact and exhaustive",t_q6_grep},
     {"Q-8","a hit's id reads back as its whole assertion",t_q8},
     {"Q-4","a hit says whether it is current, superseded, or one head of a fork",t_q4},
+    {"DS-1","a delta rebuilds its version exactly, and a malformed one is refused",t_ds_codec},
+    {"DS-1","the latest is whole, the superseded a delta, and both read and search as written",t_ds1},
+    {"DS-2","a long chain stays within the bound and every version reads back",t_ds2},
+    {"DS-3","arrival order does not change what is read or the digest",t_ds3},
+    {"DS-4","erasing a middle version or a head loses only that version",t_ds4},
     {"ENV-4","the SQLite underneath is SQLCipher, 3.44 or later, with FTS5",t_env4},
     {"Q-6","bm25 is ranked, OR'd, quoted, and blind until indexed",t_q6_bm25},
     {"Q-5","erased and forgotten content leaves the bm25 index",t_q5_bm25},

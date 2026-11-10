@@ -14,7 +14,7 @@ static VkStatus grep_open(VkStore *p, VkBytes q, sqlite3_stmt **ppOut){
     if( q.n==0 ) return vk_refuse(p, VK_EINVAL, "Q-6: grep needs a non-empty query");
     rc = vk_prepare(p,
         "SELECT a.id FROM assertion a WHERE a.body IS NOT NULL AND "
-        VK_VALID("a") " AND instr(a.body,?1)>0", ppOut);
+        VK_VALID("a") " AND instr(" VK_BODY("a.") ",?1)>0", ppOut);
     if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
     vk_bind_bytes(*ppOut, 1, q);
     return VK_OK;
@@ -102,18 +102,23 @@ void vk_search_close(VkSearch *s){
 ** chunk_fts) cannot happen here. */
 
 /* Every row is in the index, an erased one as an empty document: FTS5 checks an
-** external-content index row for row against its table (integrity-check). */
+** external-content index row for row against its content (integrity-check).
+** The content is a view of each body as written, so a body stored as a delta
+** (DS-1) is indexed as its text, and re-encoding one, whole to delta or back,
+** changes nothing the index sees: only writing, erasing and deleting do. */
 static const char *const azBm25[] = {
-    "CREATE VIRTUAL TABLE vk_bm25 USING fts5(body, content='assertion', content_rowid='seq')",
+    "CREATE VIEW vk_bm25_src(seq, body) AS SELECT seq, " VK_BODY("") " FROM assertion",
+    "CREATE VIRTUAL TABLE vk_bm25 USING fts5(body, content='vk_bm25_src', content_rowid='seq')",
     "INSERT INTO vk_bm25(vk_bm25, rank) VALUES('secure-delete', 1)",
     "CREATE TRIGGER vk_bm25_ai AFTER INSERT ON assertion"
-    " BEGIN INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, new.body); END",
+    " BEGIN INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, " VK_BODY("new.") "); END",
     "CREATE TRIGGER vk_bm25_au AFTER UPDATE OF body ON assertion"
-    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, old.body);"
-    " INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, new.body); END",
+    " WHEN old.body IS NOT NULL AND new.body IS NULL"
+    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, " VK_BODY("old.") ");"
+    " INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, NULL); END",
     "CREATE TRIGGER vk_bm25_ad AFTER DELETE ON assertion"
-    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, old.body); END",
-    "INSERT INTO vk_bm25(rowid, body) SELECT seq, body FROM assertion",
+    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, " VK_BODY("old.") "); END",
+    "INSERT INTO vk_bm25(rowid, body) SELECT seq, " VK_BODY("") " FROM assertion",
 };
 
 static int run(VkStore *p, const char *zSql){

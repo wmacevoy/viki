@@ -26,6 +26,15 @@ void vk_bind_bytes(sqlite3_stmt *pSt, int i, VkBytes b);
 int  vk_has_right(const VkStore *p, int right);
 sqlite3 *vk_store_db(VkStore *p);
 
+/* DS-1: the older body tgt as a delta from the newer src, and back. Outputs
+** are sqlite3_malloc'd. apply returns SQLITE_CORRUPT for a malformed delta. */
+int vk_delta_make(const uint8_t *src, uint32_t nSrc, const uint8_t *tgt, uint32_t nTgt,
+                  uint8_t **pOut, uint32_t *pnOut);
+int vk_delta_apply(const uint8_t *src, uint32_t nSrc, const uint8_t *d, uint32_t nD,
+                   uint8_t **pOut, uint32_t *pnOut);
+/* A body as stored: whole when dbase is NULL, else a delta from row dbase. */
+#define VK_BODY(t) "vk_body(" t "body," t "dbase)"
+
 #ifdef VK_TEST_FAULTS
 int vk_test_fault(void);
 #endif

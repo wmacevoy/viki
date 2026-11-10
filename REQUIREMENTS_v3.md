@@ -285,9 +285,10 @@ did (DS).
   and nothing is withheld until an outline exists. A peer with no judge, such as the puck (ENV-1),
   stores, merges and searches every assertion, whole where no outline is held.
 
-## DS — How versions are stored (new series, DRAFT)
+## DS — How versions are stored (new series)
 
-**Status: draft**, by Claude Opus 5.5 on 2026-11-10. *"the storage should be reverse-diffed, yes?
+**Status: confirmed and built**, 2026-11-10: *"commit, then build the DS storage, you might cap when
+a delta is worth doing."* Drafted by Claude Opus 5.5 the same day. *"the storage should be reverse-diffed, yes?
 the latest is a plain blob, earlier is recovered from that main one."* — Warren, 2026-11-10.
 Measured on every text file version in viki and the puck (`test/chunking/rdelta.py`, FINDINGS
 2026-11-10): code stored in 3.56 MB against 6.16 for line-anchored content-defined chunking, and
@@ -297,12 +298,14 @@ frame: ids, frames, signatures and merge do not change (A-2 hashes the body as g
 
 - **DS-1** *(since v3)* **The latest is whole; an earlier version is recovered from a later one.** A
   body that no valid assertion supersedes, a head (a fork has several), is stored whole. Reading it
-  rebuilds nothing. A superseded body is stored as a reverse delta from a body that supersedes it.
-  So storing a new version adds about the size of the change, not of the body, and the version it
-  supersedes becomes a delta.
+  rebuilds nothing. A superseded body is stored as a reverse delta from a body that supersedes it,
+  when that is worth doing, and whole otherwise. So storing a new version adds about the size of the
+  change, not of the body, and the version it supersedes becomes a delta. *(Worth doing, invented: a
+  body of at least 256 bytes, and a delta of at most 3/4 of it. Logged rows are left whole.)*
 - **DS-2** *(since v3)* **Recovery is bounded** (ENV-2). Rebuilding a version walks at most a stated
-  number of deltas, after which a version is stored whole again, and it streams rather than loading
-  the chain. *(The bound: invented when measured. The longest chain in the sample was 75 versions.)*
+  number of deltas, after which a version is stored whole again. *(The bound, invented: 16. The
+  longest chain in the sample, uncapped, was 75. The deltas of a chain are held in memory while it
+  is rebuilt; they are not streamed.)*
 - **DS-3** *(since v3)* **Arrival order does not matter** (R-3, M-1). A version that arrives after a
   version superseding it is stored as a delta on arrival. A digest, a verify and a merge read the
   same bytes whichever way a body is stored.
@@ -375,6 +378,7 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | password-wrapped keys | N-8 to N-17, with their lettered parts | a person on a phone or a chip needs a way in. The largest single part of v2 |
 | one engine: SQLite | G-1a, G-1b (in the merge row) | Warren: SQLite only for 1.0. Other engines are viki 2 |
 | logs and range tombstones | LOG-1 to LOG-4; R-1a; W-15 to W-17 | Warren, 2026-11-09 |
+| reverse-delta storage | DS-1 to DS-4 | Warren, 2026-11-10: "build the DS storage" |
 
 **In, because the mission or the shape cites them.** FIN-5a says 1.0 may cite no unmoved v2 ID, so
 anything the shape cites has to be in: V-1 and V-1a (SHAPE-4), V-4a (SHAPE-7), M-5, W-6, A-4a, C-1,
@@ -445,6 +449,8 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 - **N-7, through the first host** (`tools/vk.py`, 2026-11-10): the diary key is 64 hex characters,
   used raw with no KDF. A passphrase is refused, because N-8 (passwords, slow KDF) is not built and
   must not share N-7's path.
+- **DS-1 to DS-4** (new in v3, built 2026-11-10): `core/src/viki_delta.c` and `vk_body`, tested in
+  `store_test.c` and in the fault script.
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep and bm25, not yet for regex; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.

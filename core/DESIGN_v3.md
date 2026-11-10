@@ -1,7 +1,7 @@
 # core design for REQUIREMENTS_v3
 
 Drafted by Claude Opus 5.5, 2026-11-09. Covers the first slice only: `include/viki_store.h`,
-`src/viki_store.c`, `src/viki_search.c`. The older files in `core/` are still there, because
+`src/viki_store.c`, `src/viki_search.c`, `src/viki_delta.c`. The older files in `core/` are still there, because
 `cli/` builds on them; they go when the CLI moves to this interface.
 
 ## Run it
@@ -69,6 +69,27 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   external-content index row for row. The query's words are each quoted and OR'd: FTS5's MATCH is an
   AND, and its syntax is not the caller's to run. The self-check queries a planted row in a temporary
   index through the same query builder.
+- **Reverse-delta storage (DS) is one column and one function.** `assertion.dbase` is NULL when
+  `body` is whole. Otherwise `body` holds a delta and `dbase` is the row it rests on. So "erased"
+  is still `body IS NULL` everywhere, and only readers of content changed. They read
+  `vk_body(body, dbase)`: the cursor, `vk_get`, heads, grep, and the bm25 index (whose content is
+  now a view of rebuilt bodies). The codec is `src/viki_delta.c`, pure code: the textbook
+  rolling-hash match, 16-byte blocks, on any bytes, and every offset is checked on apply.
+  - **When:** a write that supersedes an unlogged row tries to turn that row into a delta from
+    itself. A row that arrives after a held row superseding it tries the same on arrival (DS-3). It
+    is kept only when the body is at least 256 bytes, the delta is at most 3/4 of it, and no chain
+    through it would pass 16 deltas (DS-2). Otherwise the row stays whole, which is always correct.
+    All three numbers are invented.
+  - **Unlogged only.** A logged row is never a delta and never a base. So a range tombstone
+    (W-15) deletes no row another body rests on, and needs no DS code.
+  - **Erasure** makes every body resting on the erased row whole first, then erases it (DS-4).
+  - **The bm25 triggers** act only when a body is written, erased or deleted. Re-encoding a body,
+    whole to delta or back, changes nothing the index sees.
+  - **A store made before DS** gets the column on open (`ensure_dbase`). An existing bm25 index
+    built over `assertion` directly is not migrated: rebuild that diary.
+  - **Measured** on the viki and puck diary: file bodies went from 53 MB to 15.3 MB, and the file
+    from 77 MB to 43 MB (the bm25 index is about 19 MB of that). 1,738 of 3,018 rows are deltas.
+    Ingest time and search time did not visibly change.
 - **`vk_standing` answers Q-4 from `arm`**: whether a row is a head, and how many heads its akey has.
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
@@ -115,6 +136,7 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 ## Not done
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
-sync, regex, Q-4's relations (L is not built), the withdraw and seal tiers, keys, references, relations, an ESP32 build.
+sync, regex, Q-4's relations (L is not built), compressing deltas or whole bodies, measuring the DS
+thresholds, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
 Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
 row against a range tombstone or walking skip links: nothing reads them yet except the next append.

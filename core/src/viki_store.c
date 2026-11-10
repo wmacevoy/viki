@@ -16,7 +16,12 @@ struct VkStore {
     /* Prepared once, because undoing a failed write must not need memory
     ** that may be exactly what ran out. */
     sqlite3_stmt *pBegin, *pCommit, *pUndo, *pEnd;
+    sqlite3_stmt *pBody;   /* one stored row's body and delta base, for vk_body */
 };
+
+/* DS: when a superseded body is stored as a delta. invented, until measured. */
+#define VK_DELTA_MIN   256   /* smaller bodies stay whole: a delta would not pay for itself */
+#define VK_DELTA_CHAIN 16    /* DS-2: the most deltas walked to rebuild a version */
 
 /* ---- failure plumbing ---- */
 
@@ -255,7 +260,9 @@ static const char zSchema[] =
     " ts BLOB NOT NULL, rank BLOB NOT NULL, reference BLOB NOT NULL,"
     " body_hash BLOB NOT NULL,"
     " body BLOB,"                     /* NULL once erased */
-    " log BLOB NOT NULL, pos INTEGER NOT NULL, skip BLOB NOT NULL);"
+    " log BLOB NOT NULL, pos INTEGER NOT NULL, skip BLOB NOT NULL,"
+    /* DS-1: NULL, the body is whole; else body is a reverse delta from row dbase. */
+    " dbase INTEGER);"
     /* LOG-4: a logged row is found by position. An id is random, so an index on
     ** it would dirty a scattered page for every row written. */
     "CREATE UNIQUE INDEX IF NOT EXISTS assertion_id ON assertion(id) WHERE log=x'';"
@@ -296,6 +303,8 @@ static int exec_schema(VkStore *p){
 
 int vk_close(VkStore *p){
     if( !p ) return SQLITE_OK;
+    sqlite3_finalize(p->pBody);
+    sqlite3_create_function(p->db, "vk_body", 2, SQLITE_UTF8, 0, 0, 0, 0);
     sqlite3_finalize(p->pBegin);
     sqlite3_finalize(p->pCommit);
     sqlite3_finalize(p->pUndo);
@@ -367,6 +376,93 @@ static int sync_arms(VkStore *p){
     return rc;
 }
 
+/* ---- DS: bodies stored as reverse deltas ---- */
+
+/* vk_body(body, dbase): the body as written. A delta is rebuilt from the chain
+** of rows it rests on, at most VK_DELTA_CHAIN long (DS-2). */
+static void body_func(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+    VkStore *p = (VkStore*)sqlite3_user_data(ctx);
+    uint8_t *aD[VK_DELTA_CHAIN+1];
+    uint32_t anD[VK_DELTA_CHAIN+1];
+    int n = 0, rc = SQLITE_OK, i;
+    uint8_t *cur = 0;
+    uint32_t nCur = 0;
+    sqlite3_int64 seq;
+    (void)argc;
+    if( sqlite3_value_type(argv[0])==SQLITE_NULL ){ sqlite3_result_null(ctx); return; }
+    if( sqlite3_value_type(argv[1])==SQLITE_NULL ){ sqlite3_result_value(ctx, argv[0]); return; }
+    seq = sqlite3_value_int64(argv[1]);
+    anD[0] = (uint32_t)sqlite3_value_bytes(argv[0]);
+    aD[0] = (uint8_t*)sqlite3_malloc64(anD[0] ? anD[0] : 1);
+    if( !aD[0] ){ sqlite3_result_error_nomem(ctx); return; }
+    memcpy(aD[0], sqlite3_value_blob(argv[0]), anD[0]);
+    n = 1;
+    /* Walk to the whole body the chain rests on, keeping each delta on the way. */
+    for(;;){
+        const uint8_t *z;
+        uint32_t nz;
+        int step;
+        sqlite3_bind_int64(p->pBody, 1, seq);
+        step = vk_step(p->pBody);
+        if( step!=SQLITE_ROW ){ rc = step==SQLITE_DONE ? SQLITE_CORRUPT : step; break; }
+        if( sqlite3_column_type(p->pBody, 0)==SQLITE_NULL ){ rc = SQLITE_CORRUPT; break; }
+        z = (const uint8_t*)sqlite3_column_blob(p->pBody, 0);
+        nz = (uint32_t)sqlite3_column_bytes(p->pBody, 0);
+        if( sqlite3_column_type(p->pBody, 1)==SQLITE_NULL ){
+            cur = (uint8_t*)sqlite3_malloc64(nz ? nz : 1);
+            if( !cur ) rc = SQLITE_NOMEM;
+            else{ memcpy(cur, z, nz); nCur = nz; }
+            break;
+        }
+        if( n==VK_DELTA_CHAIN+1 ){ rc = SQLITE_CORRUPT; break; }   /* DS-2 broken: refuse */
+        aD[n] = (uint8_t*)sqlite3_malloc64(nz ? nz : 1);
+        if( !aD[n] ){ rc = SQLITE_NOMEM; break; }
+        memcpy(aD[n], z, nz);
+        anD[n++] = nz;
+        seq = sqlite3_column_int64(p->pBody, 1);
+        sqlite3_reset(p->pBody);
+    }
+    sqlite3_reset(p->pBody);
+    for(i=n-1; rc==SQLITE_OK && i>=0; i--){
+        uint8_t *next = 0;
+        uint32_t nNext = 0;
+        rc = vk_delta_apply(cur, nCur, aD[i], anD[i], &next, &nNext);
+        sqlite3_free(cur);
+        cur = next; nCur = nNext;
+    }
+    for(i=0; i<n; i++) sqlite3_free(aD[i]);
+    if( rc!=SQLITE_OK ){
+        sqlite3_free(cur);
+        sqlite3_result_error_code(ctx, rc);
+        return;
+    }
+    sqlite3_result_blob(ctx, cur, (int)nCur, sqlite3_free);
+}
+
+/* A store made before DS has no dbase column. */
+static int ensure_dbase(VkStore *p){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, "SELECT count(*) FROM pragma_table_info('assertion') WHERE name='dbase'", &pSt);
+    int bHas = 0;
+    if( rc!=SQLITE_OK ) return rc;
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ) bHas = sqlite3_column_int(pSt, 0)>0;
+    sqlite3_finalize(pSt);
+    if( rc!=SQLITE_ROW ) return rc;
+    if( !bHas ){
+        rc = vk_prepare(p, "ALTER TABLE assertion ADD COLUMN dbase INTEGER", &pSt);
+        if( rc!=SQLITE_OK ) return rc;
+        rc = vk_step(pSt);
+        sqlite3_finalize(pSt);
+        if( rc!=SQLITE_DONE ) return rc;
+    }
+    rc = vk_prepare(p, "CREATE INDEX IF NOT EXISTS assertion_dbase ON assertion(dbase) WHERE dbase IS NOT NULL", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = vk_step(pSt);
+    sqlite3_finalize(pSt);
+    return rc==SQLITE_DONE ? SQLITE_OK : rc;
+}
+
 VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
                  uint32_t nGrants, VkStore **ppOut){
     VkStore *p;
@@ -379,7 +475,10 @@ VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
     p->db = db; p->principal = principal;
     p->grants = grants; p->nGrants = nGrants;
     rc = sqlite3_create_function(db, "vk_rights", 1, SQLITE_UTF8, p, rights_func, 0, 0);
+    if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_body", 2, SQLITE_UTF8, p, body_func, 0, 0);
     if( rc==SQLITE_OK ) rc = exec_schema(p);
+    if( rc==SQLITE_OK ) rc = ensure_dbase(p);
+    if( rc==SQLITE_OK ) rc = vk_prepare(p, "SELECT body, dbase FROM assertion WHERE seq=?1", &p->pBody);
     if( rc==SQLITE_OK ) rc = vk_prepare(p, "SAVEPOINT vk", &p->pBegin);
     if( rc==SQLITE_OK ) rc = vk_prepare(p, "RELEASE vk", &p->pCommit);
     if( rc==SQLITE_OK ) rc = vk_prepare(p, "ROLLBACK TO vk", &p->pUndo);
@@ -414,18 +513,6 @@ static void undo(VkStore *p){
     sqlite3_reset(p->pUndo);
     sqlite3_step(p->pEnd);
     sqlite3_reset(p->pEnd);
-}
-
-static int run_id(VkStore *p, const char *zSql, const uint8_t *id, int *pnChanged){
-    sqlite3_stmt *pSt = 0;
-    int rc = vk_prepare(p, zSql, &pSt);
-    if( rc!=SQLITE_OK ) return rc;
-    sqlite3_bind_blob(pSt, 1, id, VK_ID_BYTES, SQLITE_STATIC);
-    rc = vk_step(pSt);
-    sqlite3_finalize(pSt);
-    if( rc!=SQLITE_DONE ) return rc;
-    if( pnChanged ) *pnChanged = sqlite3_changes(p->db);
-    return SQLITE_OK;
 }
 
 static int insert_links(VkStore *p, const uint8_t *id, sqlite3_int64 seq, int rel, const VkId *a, uint32_t n){
@@ -476,6 +563,8 @@ static int run_range(VkStore *p, const char *zSql, VkBytes log, VkBytes target, 
 ** that child's frame names them and its id must still recompute. */
 static int delete_range(VkStore *p, const VkAssertion *a){
     uint64_t from = get_be64(a->body.p);
+    /* DS-4 needs nothing here: deltas pair unlogged rows only (store_deltas), so
+    ** no stored body rests on a logged row, and no logged row is a delta. */
     int rc = run_range(p, "DELETE FROM arm WHERE (akey,id) IN (SELECT akey,id FROM assertion WHERE " VK_IN_RANGE("") ")",
                    a->log, a->reference, from, a->pos);
     if( rc==SQLITE_OK ) rc = run_range(p, "DELETE FROM edge WHERE child IN (SELECT id FROM assertion WHERE " VK_IN_RANGE("") ")",
@@ -546,15 +635,174 @@ static int update_arms(VkStore *p, const VkAssertion *a, const VkId id, sqlite3_
     return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
+static int run_seq(VkStore *p, const char *zSql, sqlite3_int64 seq){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, zSql, &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_int64(pSt, 1, seq);
+    rc = vk_step(pSt);
+    sqlite3_finalize(pSt);
+    return rc==SQLITE_DONE ? SQLITE_OK : rc;
+}
+
+/* W-3 on one row. DS-4: a body stored as a delta from this one is made whole
+** first, so erasing loses nothing it was not asked to. */
+static int forget_body(VkStore *p, sqlite3_int64 seq){
+    int rc = run_seq(p, "UPDATE assertion SET body=" VK_BODY("") ", dbase=NULL WHERE dbase=?1", seq);
+    if( rc==SQLITE_OK ) rc = run_seq(p, "UPDATE assertion SET body=NULL, dbase=NULL WHERE seq=?1", seq);
+    return rc;
+}
+
 /* W-3 for a target known only by id. */
 static int erase_by_id(VkStore *p, const uint8_t *target){
-    int n = 0;
-    int rc = run_id(p, "UPDATE assertion SET body=NULL WHERE id=?1 AND log=x''"
-                       " AND kind NOT IN " VK_TOMB_KINDS, target, &n);
-    if( rc!=SQLITE_OK || n>0 ) return rc;
-    /* LOG-4's price: a logged row by id is a scan of the position index. */
-    return run_id(p, "UPDATE assertion SET body=NULL WHERE kind NOT IN " VK_TOMB_KINDS
-                     " AND seq=(SELECT seq FROM assertion INDEXED BY assertion_log WHERE log<>x'' AND id=?1)", target, 0);
+    static const char *azFind[2] = {
+        "SELECT seq FROM assertion WHERE id=?1 AND log=x'' AND kind NOT IN " VK_TOMB_KINDS,
+        /* LOG-4's price: a logged row by id is a scan of the position index. */
+        "SELECT seq FROM assertion INDEXED BY assertion_log WHERE log<>x'' AND id=?1"
+        " AND kind NOT IN " VK_TOMB_KINDS
+    };
+    int i, rc = SQLITE_OK;
+    for(i=0; i<2; i++){
+        sqlite3_stmt *pSt = 0;
+        sqlite3_int64 seq = 0;
+        rc = vk_prepare(p, azFind[i], &pSt);
+        if( rc!=SQLITE_OK ) return rc;
+        sqlite3_bind_blob(pSt, 1, target, VK_ID_BYTES, SQLITE_STATIC);
+        rc = vk_step(pSt);
+        if( rc==SQLITE_ROW ) seq = sqlite3_column_int64(pSt, 0);
+        sqlite3_finalize(pSt);
+        if( rc==SQLITE_ROW ) return forget_body(p, seq);
+        if( rc!=SQLITE_DONE ) return rc;
+    }
+    return SQLITE_OK;
+}
+
+/* The chain of deltas under row seq, walked up to the bound: how many rows
+** must be rebuilt to read it. 0 when it is whole. */
+static int chain_depth(VkStore *p, sqlite3_int64 seq, int *pn){
+    int rc = SQLITE_OK;
+    *pn = 0;
+    while( *pn<=VK_DELTA_CHAIN ){
+        sqlite3_int64 next;
+        sqlite3_bind_int64(p->pBody, 1, seq);
+        rc = vk_step(p->pBody);
+        if( rc!=SQLITE_ROW ){ sqlite3_reset(p->pBody); return rc==SQLITE_DONE ? SQLITE_CORRUPT : rc; }
+        if( sqlite3_column_type(p->pBody, 1)==SQLITE_NULL ){ sqlite3_reset(p->pBody); return SQLITE_OK; }
+        next = sqlite3_column_int64(p->pBody, 1);
+        sqlite3_reset(p->pBody);
+        seq = next;
+        (*pn)++;
+    }
+    return SQLITE_OK;
+}
+
+/* DS-1: store row x as a reverse delta from row b, which supersedes it, when
+** that is worth doing: x is whole, not small, the delta is at most 3/4 of it,
+** and no chain through x grows past VK_DELTA_CHAIN (DS-2). Otherwise x stays
+** whole, and that is a correct store too. */
+static int try_delta(VkStore *p, sqlite3_int64 x, sqlite3_int64 b){
+    sqlite3_stmt *pSt = 0;
+    uint8_t *aX = 0, *aB = 0, *aD = 0;
+    uint32_t nX = 0, nB = 0, nD = 0;
+    int rc, depthB = 0, height = 0;
+
+    rc = vk_prepare(p, "SELECT body FROM assertion WHERE seq=?1 AND dbase IS NULL AND body IS NOT NULL"
+                       " AND length(body)>=?2 AND kind NOT IN " VK_TOMB_KINDS, &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_int64(pSt, 1, x);
+    sqlite3_bind_int(pSt, 2, VK_DELTA_MIN);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ){
+        nX = (uint32_t)sqlite3_column_bytes(pSt, 0);
+        aX = (uint8_t*)sqlite3_malloc64(nX);
+        if( aX ) memcpy(aX, sqlite3_column_blob(pSt, 0), nX);
+        else rc = SQLITE_NOMEM;
+    }
+    sqlite3_finalize(pSt);
+    if( rc==SQLITE_DONE ) return SQLITE_OK;          /* nothing worth a delta */
+    if( rc!=SQLITE_ROW ) goto done;
+
+    rc = chain_depth(p, b, &depthB);
+    if( rc!=SQLITE_OK ) goto done;
+    rc = vk_prepare(p,
+        "WITH RECURSIVE d(seq, n) AS (SELECT seq, 1 FROM assertion WHERE dbase=?1"
+        " UNION ALL SELECT a.seq, d.n+1 FROM assertion a JOIN d ON a.dbase=d.seq WHERE d.n<?2)"
+        " SELECT coalesce(max(n),0) FROM d", &pSt);
+    if( rc!=SQLITE_OK ) goto done;
+    sqlite3_bind_int64(pSt, 1, x);
+    sqlite3_bind_int(pSt, 2, VK_DELTA_CHAIN+1);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ) height = sqlite3_column_int(pSt, 0);
+    sqlite3_finalize(pSt);
+    if( rc!=SQLITE_ROW ) goto done;
+    rc = SQLITE_OK;
+    if( height + 1 + depthB > VK_DELTA_CHAIN ) goto done;   /* x stays whole: a keyframe */
+
+    rc = vk_prepare(p, "SELECT " VK_BODY("") " FROM assertion WHERE seq=?1 AND body IS NOT NULL AND log=x''", &pSt);
+    if( rc!=SQLITE_OK ) goto done;
+    sqlite3_bind_int64(pSt, 1, b);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ){
+        nB = (uint32_t)sqlite3_column_bytes(pSt, 0);
+        aB = (uint8_t*)sqlite3_malloc64(nB ? nB : 1);
+        if( aB ) memcpy(aB, sqlite3_column_blob(pSt, 0), nB);
+        else rc = SQLITE_NOMEM;
+    }
+    sqlite3_finalize(pSt);
+    if( rc==SQLITE_DONE ){ rc = SQLITE_OK; goto done; }    /* b is erased or logged: x stays whole */
+    if( rc!=SQLITE_ROW ) goto done;
+
+    rc = vk_delta_make(aB, nB, aX, nX, &aD, &nD);
+    if( rc!=SQLITE_OK ) goto done;
+    if( (uint64_t)nD*4 > (uint64_t)nX*3 ) goto done;       /* not worth it */
+    rc = vk_prepare(p, "UPDATE assertion SET body=?1, dbase=?2 WHERE seq=?3", &pSt);
+    if( rc!=SQLITE_OK ) goto done;
+    sqlite3_bind_blob(pSt, 1, aD, (int)nD, SQLITE_STATIC);
+    sqlite3_bind_int64(pSt, 2, b);
+    sqlite3_bind_int64(pSt, 3, x);
+    rc = vk_step(pSt);
+    sqlite3_finalize(pSt);
+    rc = rc==SQLITE_DONE ? SQLITE_OK : rc;
+done:
+    sqlite3_free(aX);
+    sqlite3_free(aB);
+    sqlite3_free(aD);
+    return rc;
+}
+
+/* DS-1 and DS-3 for a row just stored at seq: each row it supersedes may become
+** a delta from it, and it may become a delta from a held row that supersedes it
+** (one that arrived first). Deltas pair unlogged rows only: a logged row is
+** found by position, a record is rarely superseded, and a range tombstone can
+** then delete logged rows with no body resting on them. */
+static int store_deltas(VkStore *p, const VkAssertion *a, const VkId id, sqlite3_int64 seq){
+    sqlite3_stmt *pSt = 0;
+    uint32_t i;
+    int rc = SQLITE_OK;
+    if( a->log.n || a->erased ) return SQLITE_OK;
+    for(i=0; rc==SQLITE_OK && i<a->nSupersedes; i++){
+        sqlite3_int64 x = 0;
+        rc = vk_prepare(p, "SELECT seq FROM assertion WHERE id=?1 AND log=x''", &pSt);
+        if( rc!=SQLITE_OK ) return rc;
+        sqlite3_bind_blob(pSt, 1, a->supersedes[i], VK_ID_BYTES, SQLITE_STATIC);
+        rc = vk_step(pSt);
+        if( rc==SQLITE_ROW ) x = sqlite3_column_int64(pSt, 0);
+        sqlite3_finalize(pSt);
+        if( rc==SQLITE_ROW ) rc = try_delta(p, x, seq);
+        else if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    rc = vk_prepare(p, "SELECT child_seq FROM edge WHERE parent=?1 AND rel=0 ORDER BY child_seq LIMIT 1", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_blob(pSt, 1, id, VK_ID_BYTES, SQLITE_STATIC);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ){
+        sqlite3_int64 b = sqlite3_column_int64(pSt, 0);
+        sqlite3_finalize(pSt);
+        return b==seq ? SQLITE_OK : try_delta(p, seq, b);
+    }
+    sqlite3_finalize(pSt);
+    return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 /* Stores the row and applies whatever erasure it triggers, in one savepoint.
@@ -628,16 +876,18 @@ static int store_row(VkStore *p, const VkAssertion *a, const VkId id, int *pbAdd
         }else if( !bTomb ){
             /* W-6: the tombstone may have arrived first. */
             sqlite3_stmt *pUp = 0;
-            rc = vk_prepare(p, "UPDATE assertion SET body=NULL WHERE seq=?1 AND EXISTS("
-                               "SELECT 1 FROM arm x JOIN assertion t ON t.seq=x.seq WHERE x.akey=?2"
-                               " AND t.kind=CAST('" VK_TOMBSTONE "' AS BLOB))", &pUp);
+            int bTombed = 0;
+            rc = vk_prepare(p, "SELECT 1 FROM arm x JOIN assertion t ON t.seq=x.seq WHERE x.akey=?1"
+                               " AND t.kind=CAST('" VK_TOMBSTONE "' AS BLOB)", &pUp);
             if( rc==SQLITE_OK ){
-                sqlite3_bind_int64(pUp, 1, seq);
-                sqlite3_bind_blob(pUp, 2, id, VK_ID_BYTES, SQLITE_STATIC);
+                sqlite3_bind_blob(pUp, 1, id, VK_ID_BYTES, SQLITE_STATIC);
                 rc = vk_step(pUp);
+                bTombed = rc==SQLITE_ROW;
                 sqlite3_finalize(pUp);
-                rc = rc==SQLITE_DONE ? SQLITE_OK : rc;
+                rc = (rc==SQLITE_ROW || rc==SQLITE_DONE) ? SQLITE_OK : rc;
             }
+            if( rc==SQLITE_OK && bTombed ) rc = forget_body(p, seq);
+            else if( rc==SQLITE_OK ) rc = store_deltas(p, a, id, seq);
         }
     }
     if( rc==SQLITE_OK ) rc = commit(p);
@@ -670,7 +920,7 @@ VkStatus vk_put(VkStore *p, const VkAssertion *a, VkId idOut){
 }
 
 #define VK_HEADS(k) \
-    "SELECT a.id, a.rank, a.body FROM arm x JOIN assertion a ON a.seq=x.seq WHERE x.akey=" k
+    "SELECT a.id, a.rank, " VK_BODY("a.") " AS body FROM arm x JOIN assertion a ON a.seq=x.seq WHERE x.akey=" k
 
 VkStatus vk_put_chain(VkStore *p, const VkAssertion *a, VkId idOut){
     VkId aHead[VK_MAX_LINKS];
@@ -911,7 +1161,7 @@ void vk_row_close(VkRow *r){
 
 /* ---- cursor ---- */
 
-#define VK_ROW_COLUMNS "seq,id,author,kind,akey,ts,rank,reference,body_hash,body,log,pos,skip"
+#define VK_ROW_COLUMNS "seq,id,author,kind,akey,ts,rank,reference,body_hash," VK_BODY("") ",log,pos,skip"
 
 /* Prepares c over zRowSql, whose one parameter the caller binds. */
 static VkStatus cursor_prepare(VkStore *p, const char *zRowSql, VkCursor *c){

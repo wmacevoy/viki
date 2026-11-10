@@ -120,8 +120,9 @@ unkeyed: ingesting both took 9.2 s against 6.0 s, and the same `find` took 0.32 
 The file begins with ciphertext. Transcripts (SCM-6) can now go into an encrypted diary.
 
 **Chunking, decided 2026-11-10:** only judged chunks, as outlines, with no rule-based projection.
-Drafted as `REQUIREMENTS_v3.md` OL-1 to OL-6, which are not yet confirmed. Storage is DS-1 to DS-4,
-also a draft: heads are stored whole, and superseded versions as reverse deltas. The evidence is in
+Drafted as `REQUIREMENTS_v3.md` OL-1 to OL-6, which are not yet confirmed. Storage is DS-1 to DS-4, built
+2026-11-10: heads are stored whole, superseded versions as reverse deltas. On the viki and puck
+diary, file bodies went from 53 MB to 15.3 MB. The evidence is in
 FINDINGS (2026-11-10) and `test/chunking/`.
 
 ## Slices, each one vertical
