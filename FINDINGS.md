@@ -12,6 +12,53 @@ measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
 ---
+## An FTS5 `contentless_delete` table keeps an erased row's words, even with secure-delete
+
+2026-11-10, SQLite 3.53.1 (SQLCipher-LibreSSL v2.2.0). The plan for viki's bm25
+index (REQ3/Q-6) was an FTS5 table that stores no copy of the text and deletes
+by rowid: `content='', contentless_delete=1`. That way erasing a body would need
+neither the old text nor any particular order of deletes, which is the trap
+`src/` fell into with `chunk_fts`. A test that greps the index's own pages
+(`vk_bm25_data`) for an erased word found the word still there. FTS5 marks a
+contentless-delete row as deleted and leaves its terms in the leaf page, and
+`secure-delete` does not change that. Run in one process, with rows 'secret word'
+and 'other text' and row 1 deleted, the counts of data blocks still holding
+"secret" were:
+
+| table | secure-delete | blocks with "secret" |
+|---|---|---|
+| contentless_delete | 1 | 1 |
+| contentless_delete | 0 | 1 |
+| regular (own copy) | 1 | 0 |
+| external content, 'delete' given the old body | 1 | 0 |
+
+So erasure (W-3, Q-5) needs a table that secure-delete can scrub. viki uses
+external content over `assertion`, and its triggers pass the old body, so
+nothing re-reads `assertion` after the row has changed.
+
+A second surprise on the way: an external-content index has to hold **every**
+row of its table, an erased one as an empty document. Leave the NULL-body rows
+out, and `INSERT INTO f(f, rank) VALUES('integrity-check', 1)` reports the
+database as malformed. Without `rank` 1, integrity-check does not compare
+against the content table at all. It then passed a build whose delete trigger
+had been removed.
+
+**What it changed:** `core/src/viki_search.c`'s schema, and two checks in
+`t_q5_bm25`: one greps the pages, one runs integrity-check with `rank` 1. Each
+is seen red when secure-delete is off or when a trigger is removed.
+
+## ctypes `c_char_p` cuts a body at its first NUL, and `string_at` then reads past it
+
+2026-11-10. `tools/vkstore.py` declared `VkBytes.p` as `c_char_p`. Reading the
+field gives a Python `bytes` that stops at the first NUL, and
+`string_at(that, n)` then reads `n` bytes from a buffer shorter than `n`. On the
+real viki and puck diary, `vk find "range tombstone"` segfaulted on a binary
+file. A test with a NUL-holding file passed at first, because the over-read
+usually does not crash, and the test checked only the path. It went red once it
+also checked the snippet's bytes. **What it changed:** `p` is `c_void_p`, and
+SCM-2 now ingests a body with NULs and checks that it reads back whole.
+
+---
 ## Against a real life, the VECTOR LEG made retrieval WORSE
 
 2026-08-29. Every retrieval measurement this project has ever run asks viki

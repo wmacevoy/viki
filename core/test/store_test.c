@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ---- faults ---- */
 static long gFaultAt = 0, gFaultCount = 0;
@@ -97,6 +98,26 @@ static int64_t rows(Peer p, const char *zSql){
 }
 
 static void digest(Peer p, VkId out){ CHECK( vk_digest(p.st, out)==VK_OK ); }
+
+/* A database in a real file, for tests that measure pages or memory: SQLCipher
+** keeps a temporary database ("") in RAM (TEMP_STORE 2), which would measure
+** nothing. Each test gets its own directory, removed by drop_file. */
+static char gDir[64];
+static void open_file(Peer *p, const char *zName, char *zPath, size_t n){
+    if( !gDir[0] ){
+        snprintf(gDir, sizeof gDir, "%s/vk-test-XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+        if( !mkdtemp(gDir) ){ gDir[0] = 0; CHECK( !"mkdtemp" ); return; }
+    }
+    snprintf(zPath, n, "%s/%s", gDir, zName);
+    unlink(zPath);
+    CHECK( sqlite3_open(zPath, &p->db)==SQLITE_OK );
+}
+static void drop_file(Peer p, const char *zPath){
+    char z[96];
+    drop(p);
+    unlink(zPath);
+    snprintf(z, sizeof z, "%s-journal", zPath); unlink(z);
+}
 
 /* ---- A: identity ---- */
 static void t_sha(void){
@@ -491,8 +512,8 @@ static int pages_of_batch(Peer p, int from, int to){
     return cur;
 }
 static void t_log4(void){
-    Peer p; int small, big, i;
-    CHECK( sqlite3_open("",&p.db)==SQLITE_OK );
+    Peer p; int small, big, i; char path[96];
+    open_file(&p,"log4.db",path,sizeof path);
     sqlite3_exec(p.db,"PRAGMA cache_size=32;PRAGMA synchronous=OFF",0,0,0);
     CHECK( vk_open(p.db,B("alice"),gGrants,7,&p.st)==VK_OK );
     for(i=0;i<8;i++) (void)pages_of_batch(p,i*256+1,(i+1)*256);
@@ -502,7 +523,7 @@ static void t_log4(void){
     printf("  pages written per 256 rows: %d at 2k rows, %d at 16k rows\n",small,big);
     CHECK( small>0 );
     CHECK( big < small + small/2 );
-    drop(p);
+    drop_file(p,path);
 }
 /* A logged row has no id index, so it must still be erasable by id. */
 static void t_w3_logged(void){
@@ -827,6 +848,110 @@ static void t_q8(void){
     CHECK( vk_get(ro.st,second,&c)==VK_EDENIED );
     vk_cursor_close(&c);
     drop(p); drop(ro);
+    {   /* a row from an unentitled author reads as absent (R-4a) */
+        Peer m = loose_peer("mallory"), al = peer("alice");
+        VkAssertion x = mk("mallory","k",1,"claim"); VkId xi; VkMergeReport rep;
+        memset(&rep,0,sizeof(rep));
+        CHECK( vk_put(m.st,&x,xi)==VK_OK );
+        CHECK( vk_merge(al.st,m.st,&rep)==VK_OK && rep.added==1 );
+        CHECK( vk_get(al.st,xi,&c)==VK_NOTFOUND );
+        vk_cursor_close(&c);
+        drop(m); drop(al);
+    }
+}
+static void t_q4(void){
+    Peer p = peer("alice"), m = loose_peer("mallory"), ro = peer("mallory");
+    VkAssertion a = mk("alice","k",1,"one"), b = mk("alice","k",2,"two");
+    VkAssertion c = mk("alice","f",1,"left"), d = mk("alice","f",2,"right"), e = mk("alice","f",3,"healed");
+    VkAssertion up = mk("mallory","k",9,"takeover");
+    VkId ia, ib, ic, id, ie, iu, two[2]; VkMergeReport rep; int bHead = -1, n = -1;
+    CHECK( vk_put(p.st,&a,ia)==VK_OK );
+    b.supersedes = (const VkId*)&ia; b.nSupersedes = 1;
+    CHECK( vk_put(p.st,&b,ib)==VK_OK );
+    CHECK( vk_standing(p.st,B("k"),ia,&bHead,&n)==VK_OK && bHead==0 && n==1 );   /* superseded */
+    CHECK( vk_standing(p.st,B("k"),ib,&bHead,&n)==VK_OK && bHead==1 && n==1 );   /* current */
+    CHECK( vk_put(p.st,&c,ic)==VK_OK && vk_put(p.st,&d,id)==VK_OK );
+    CHECK( vk_standing(p.st,B("f"),ic,&bHead,&n)==VK_OK && bHead==1 && n==2 );   /* one head of a fork */
+    memcpy(two[0],ic,32); memcpy(two[1],id,32);
+    e.supersedes = (const VkId*)two; e.nSupersedes = 2;
+    CHECK( vk_put(p.st,&e,ie)==VK_OK );
+    CHECK( vk_standing(p.st,B("f"),id,&bHead,&n)==VK_OK && bHead==0 && n==1 );
+    CHECK( vk_standing(p.st,B("f"),ie,&bHead,&n)==VK_OK && bHead==1 && n==1 );
+    /* an unentitled supersession leaves the head standing */
+    up.supersedes = (const VkId*)&ib; up.nSupersedes = 1;
+    CHECK( vk_put(m.st,&up,iu)==VK_OK );
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_merge(p.st,m.st,&rep)==VK_OK );
+    CHECK( vk_standing(p.st,B("k"),ib,&bHead,&n)==VK_OK && bHead==1 && n==1 );
+    CHECK( vk_standing(p.st,B("none"),ib,&bHead,&n)==VK_NOTFOUND );
+    CHECK( vk_standing(ro.st,B("k"),ib,&bHead,&n)==VK_EDENIED );
+    drop(p); drop(m); drop(ro);
+}
+static int ranked(Peer p, const char *zQ, VkId *out, int nMax){
+    VkSearch s; VkId id; int n = 0; VkStatus st;
+    st = vk_search_open(p.st,&vkBm25,B(zQ),&s);
+    if( st!=VK_OK ){ vk_search_close(&s); return -(int)st; }
+    while( vk_search_next(&s,id)==VK_OK ){ if( n<nMax ) memcpy(out[n],id,32); n++; }
+    vk_search_close(&s);
+    return n;
+}
+static void t_q6_bm25(void){
+    Peer p = peer("alice");
+    VkAssertion a = mk("alice","a",1,"the parking lot sensor went silent"),
+                b = mk("alice","b",1,"sensor sensor sensor: the sensor log"),
+                c = mk("alice","c",1,"nothing to see"),
+                d = mk("alice","d",1,"a later note about the sensor");
+    VkId ia, ib, ic, id, hit[8]; VkSearch s; VkCoverage cov;
+    CHECK( vk_put(p.st,&a,ia)==VK_OK && vk_put(p.st,&b,ib)==VK_OK && vk_put(p.st,&c,ic)==VK_OK );
+    CHECK( ranked(p,"sensor",hit,8)==-(int)VK_BLIND );     /* not yet indexed: blind, never not-found */
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    CHECK( vk_bm25_enable(p.st)==VK_OK );                   /* a second time changes nothing */
+    CHECK( vk_put(p.st,&d,id)==VK_OK );                     /* rows written after enabling go in too */
+    CHECK( ranked(p,"sensor",hit,8)==3 );                   /* the rows written before were back-filled */
+    CHECK( id_eq(hit[0],ib) );                              /* ranked: the dense mention first */
+    CHECK( ranked(p,"parking nothing",hit,8)==2 );         /* terms are OR'd, not AND'd */
+    CHECK( ranked(p,"\"sensor\" OR (",hit,8)==3 );          /* query syntax is quoted, not run */
+    CHECK( ranked(p,"lot\"sensor",hit,8)==1 );              /* a quote inside a word is a phrase, not an error */
+    CHECK( ranked(p,"absent",hit,8)==0 );
+    CHECK( vk_search_open(p.st,&vkBm25,B("sensor"),&s)==VK_OK );
+    CHECK( vk_search_coverage(&s,&cov)==VK_OK && cov.bExhaustive==0 && strcmp(cov.zMethod,"bm25")==0 && cov.nSearched==4 );
+    vk_search_close(&s);
+    CHECK( vkBm25.selfcheck(p.st)==VK_OK );
+    drop(p);
+}
+static void t_q5_bm25(void){
+    Peer p = peer("alice");
+    VkAssertion a = mk("alice","k",1,"secret word");
+    VkId i, t, ids[9], hit[4]; uint64_t lo, hi;
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    CHECK( vk_put(p.st,&a,i)==VK_OK );
+    CHECK( ranked(p,"secret",hit,4)==1 );
+    CHECK( rows(p,"SELECT count(*) FROM vk_bm25_data WHERE instr(block,'secret')>0")>0 );   /* the control */
+    CHECK( vk_erase(p.st,i,B("t"),gRank0,t)==VK_OK );
+    CHECK( ranked(p,"secret",hit,4)==0 );                   /* erased: gone from the answers */
+    CHECK( rows(p,"SELECT count(*) FROM vk_bm25_data WHERE instr(block,'secret')>0")==0 );  /* and the pages */
+    append_n(p,"alice","door",1,4,ids);                     /* bodies "door/1" .. "door/4" */
+    CHECK( ranked(p,"door",hit,4)==4 );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,3,B("t"),gRank0,t)==VK_OK );
+    CHECK( ranked(p,"door",hit,4)==1 );                     /* a forgotten range leaves the answers */
+    /* and the index itself: FTS5 checks every entry against assertion's rows */
+    CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
+    CHECK( vk_log_span(p.st,B("door"),B("alice"),&lo,&hi)==VK_OK && lo==4 );
+    drop(p);
+}
+static void t_env4(void){
+    Peer p = peer("alice");
+    printf("  SQLite %s\n", sqlite3_libversion());
+    CHECK( sqlite3_libversion_number()>=3044000 );          /* secure-delete */
+    CHECK( sqlite3_compileoption_used("ENABLE_FTS5") );
+    {   /* SQLCipher, not stock SQLite: stock SQLite answers an unknown pragma with no row */
+        sqlite3_stmt *st = 0;
+        CHECK( sqlite3_prepare_v2(p.db,"PRAGMA cipher_version",-1,&st,0)==SQLITE_OK );
+        CHECK( sqlite3_step(st)==SQLITE_ROW );
+        if( sqlite3_column_text(st,0) ) printf("  SQLCipher %s\n", (const char*)sqlite3_column_text(st,0));
+        sqlite3_finalize(st);
+    }
+    drop(p);
 }
 static void t_q2(void){
     Peer p = peer("alice");
@@ -864,8 +989,8 @@ static void t_q5(void){
 /* ---- ENV-2: memory does not follow the store ---- */
 static sqlite3_int64 merge_highwater(int n){
     Peer a, b; VkMergeReport rep; int i; VkId id; char body[256], key[32];
-    sqlite3_int64 hw;
-    sqlite3_open("",&a.db); sqlite3_open("",&b.db);
+    sqlite3_int64 hw; char pa[96], pb[96];
+    open_file(&a,"env2a.db",pa,sizeof pa); open_file(&b,"env2b.db",pb,sizeof pb);
     sqlite3_exec(a.db,"PRAGMA cache_size=32;PRAGMA synchronous=OFF;PRAGMA journal_mode=MEMORY",0,0,0);
     sqlite3_exec(b.db,"PRAGMA cache_size=32;PRAGMA synchronous=OFF;PRAGMA journal_mode=MEMORY",0,0,0);
     CHECK( vk_open(a.db,B("alice"),gGrants,7,&a.st)==VK_OK );
@@ -884,7 +1009,7 @@ static sqlite3_int64 merge_highwater(int n){
     CHECK( vk_merge(b.st,a.st,&rep)==VK_OK );
     CHECK( rep.added==n );
     { sqlite3_int64 cur; sqlite3_status64(SQLITE_STATUS_MEMORY_USED,&cur,&hw,0); }
-    drop(a); drop(b);
+    drop_file(a,pa); drop_file(b,pb);
     return hw;
 }
 static void t_env2(void){
@@ -1010,6 +1135,10 @@ static const Test aTest[] = {
     {"Q-5","erased content never appears",t_q5},
     {"Q-6","grep is exact and exhaustive",t_q6_grep},
     {"Q-8","a hit's id reads back as its whole assertion",t_q8},
+    {"Q-4","a hit says whether it is current, superseded, or one head of a fork",t_q4},
+    {"ENV-4","the SQLite underneath is SQLCipher, 3.44 or later, with FTS5",t_env4},
+    {"Q-6","bm25 is ranked, OR'd, quoted, and blind until indexed",t_q6_bm25},
+    {"Q-5","erased and forgotten content leaves the bm25 index",t_q5_bm25},
     {"ENV-2","merge memory does not grow with the store",t_env2},
     {"-","every sqlite call fails in turn; retry reaches the same store",t_fault_sql},
     {"-","every allocation fails in turn; retry reaches the same store",t_fault_mem},
@@ -1032,5 +1161,6 @@ int main(void){
         nFail += gFailed;
     }
     printf("%d of %d failed\n",nFail,(int)(sizeof(aTest)/sizeof(aTest[0])));
+    if( gDir[0] ) rmdir(gDir);
     return nFail!=0;
 }

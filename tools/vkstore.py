@@ -14,7 +14,9 @@ MAX_LINKS, MAX_SKIP = 16, 32
 
 
 class Bytes(C.Structure):
-    _fields_ = [("p", C.c_char_p), ("n", C.c_uint32)]
+    # A raw pointer, not c_char_p: ctypes would hand a c_char_p back as a
+    # Python bytes cut at the first NUL, and a body is bytes (A-4a).
+    _fields_ = [("p", C.c_void_p), ("n", C.c_uint32)]
 
 
 class Assertion(C.Structure):
@@ -63,6 +65,8 @@ for name, args, res in [
     ("vk_row_close", [C.POINTER(Row)], None),
     ("vk_get", [P, C.POINTER(Id), C.POINTER(Cursor)], C.c_int),
     ("vk_cursor_close", [C.POINTER(Cursor)], None),
+    ("vk_standing", [P, Bytes, C.POINTER(Id), C.POINTER(C.c_int), C.POINTER(C.c_int)], C.c_int),
+    ("vk_bm25_enable", [P], C.c_int),
     ("vk_search_open", [P, P, Bytes, C.POINTER(Search)], C.c_int),
     ("vk_search_next", [C.POINTER(Search), C.POINTER(Id)], C.c_int),
     ("vk_search_coverage", [C.POINTER(Search), C.POINTER(Coverage)], C.c_int),
@@ -74,6 +78,7 @@ for name, args, res in [
     fn = getattr(LIB, name)
     fn.argtypes, fn.restype = args, res
 GREP = C.addressof(C.c_void_p.in_dll(LIB, "vkGrep"))
+BM25 = C.addressof(C.c_void_p.in_dll(LIB, "vkBm25"))
 
 
 class VkError(Exception):
@@ -81,7 +86,8 @@ class VkError(Exception):
 
 
 def _b(v):
-    return Bytes(v, len(v))
+    """Borrows v's buffer: the caller keeps v alive while the store reads it."""
+    return Bytes(C.cast(C.c_char_p(v), C.c_void_p), len(v))
 
 
 class Record:
@@ -101,7 +107,7 @@ class Record:
 
 
 class Store:
-    """One diary, opened by the host. Plaintext only: this SQLite has no codec."""
+    """One diary, opened by the host. Unkeyed: the library links SQLCipher, but no key is set yet."""
 
     def __init__(self, path, principal, rights):
         self.db, self.st = P(), P()
@@ -162,10 +168,31 @@ class Store:
         finally:
             LIB.vk_cursor_close(C.byref(c))
 
+    def standing(self, akey, id_):
+        """Q-4: (is_head, heads on the akey); heads 0 if the akey has none."""
+        head, n = C.c_int(), C.c_int()
+        rc = LIB.vk_standing(self.st, _b(akey), C.byref(Id(*id_)), C.byref(head), C.byref(n))
+        if rc == NOTFOUND:
+            return False, 0
+        if rc != OK:
+            raise VkError(f"standing: {self.errmsg()}")
+        return bool(head.value), n.value
+
+    def bm25_enable(self):
+        if LIB.vk_bm25_enable(self.st) != OK:
+            raise VkError(f"bm25: {self.errmsg()}")
+
     def grep(self, text):
         """(ids, coverage) for an exact substring of any readable body."""
+        return self.search(GREP, text)
+
+    def bm25(self, text):
+        """(ids, coverage), best first; (None, None) if blind (not indexed)."""
+        return self.search(BM25, text)
+
+    def search(self, method, text):
         s, cov, out, ids = Search(), Coverage(), Id(), []
-        rc = LIB.vk_search_open(self.st, GREP, _b(text), C.byref(s))
+        rc = LIB.vk_search_open(self.st, method, _b(text), C.byref(s))
         try:
             if rc == BLIND:
                 return None, None

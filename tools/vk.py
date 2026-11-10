@@ -2,11 +2,15 @@
 """vk.py -- a host over viki_store.h for a sprawled project (REQ3/SCM, DOGFOOD_v3.md).
 
   vk.py --store DIARY --plaintext ingest-git REPO_DIR [--name NAME]
-  vk.py --store DIARY --plaintext grep TEXT [--repo NAME]
+  vk.py --store DIARY --plaintext grep TEXT [--repo NAME] [--all] [--k N]
+  vk.py --store DIARY --plaintext find WORDS [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext coverage
   vk.py --store DIARY --plaintext heads NAME
 
 Exit status: 0 found or done, 1 searched and not found, 3 blind (Q-2), 2 error.
+grep is exact bytes and exhaustive; find is bm25, ranked, best first. Each hit
+is marked current, superseded, or one head of a fork (Q-4), and superseded
+versions are hidden unless --all, with the count hidden said.
 
 Git keeps the working trees; the diary mirrors them. The mapping:
   file      akey "<repo>/<path>", body the bytes. A new version supersedes
@@ -253,38 +257,62 @@ def ingested(store):
     return out
 
 
-def snippet(body, text):
-    at = body.find(text)
+def snippet(body, words):
+    """The first line holding any of the words, compared without case."""
+    low = body.lower()
+    hits = [i for i in (low.find(w.lower()) for w in words) if i >= 0]
+    at = min(hits) if hits else 0
     start = body.rfind(b"\n", 0, at) + 1
     end = body.find(b"\n", at)
     line = body[start:end if end >= 0 else len(body)]
     return line[:160].decode("utf-8", "replace").strip()
 
 
-def cmd_grep(store, text, repo):
+def standing_of(store, r):
+    """Q-4, in words: current, superseded, or one head of a fork."""
+    head, n = store.standing(r.akey, r.id)
+    if not head:
+        return "superseded"
+    return "current" if n == 1 else f"head 1 of {n} (forked)"
+
+
+def cmd_search(store, text, repo, method, show_all, k):
     seen = ingested(store)
     if repo is not None and repo not in seen:
         print(f"blind: repository {repo!r} was not ingested; ingested: {', '.join(sorted(seen)) or 'none'}")
         return 3
-    ids, cov = store.grep(text.encode())
+    method = "grep" if method == "grep" else "bm25"
+    ids, cov = store.grep(text.encode()) if method == "grep" else store.bm25(text.encode())
     if ids is None:
-        print("blind: grep failed its self-check (Q-3)")
+        why = "it failed its self-check (Q-3)" if method == "grep" else "the diary has no bm25 index yet, or it failed its self-check (Q-3)"
+        print(f"blind: {method}: {why}")
         return 3
-    hits = 0
+    words = [text.encode()] if method == "grep" else [w for w in text.encode().split() if w]
+    shown = matched = hidden = 0
     for i in ids:
         r = store.get(i)
-        if r is None or r.kind == b"ingest":
+        if r is None or r.kind in (b"ingest", b"label"):
             continue
         akey = r.akey.decode("utf-8", "replace")
         if repo is not None and not (akey == repo or akey.startswith(repo + "/")):
             continue
-        hits += 1
-        print(f"{r.kind.decode()}  {r.reference.decode('utf-8', 'replace') or akey}  {i.hex()[:12]}")
-        print(f"    {snippet(r.body, text.encode())}")
+        matched += 1
+        where = standing_of(store, r)
+        if where == "superseded" and not show_all:
+            hidden += 1
+            continue
+        if k is not None and shown >= k:
+            continue
+        shown += 1
+        print(f"{r.kind.decode()}  {r.reference.decode('utf-8', 'replace') or akey}  {i.hex()[:12]}  [{where}]")
+        print(f"    {snippet(r.body, words)}")
     scope = [repo] if repo is not None else sorted(seen)
-    print(f"coverage: {cov['method']}, exhaustive, {cov['searched']} assertions; repositories: "
+    reach = "exhaustive" if cov["exhaustive"] else f"ranked, so not-found covers only these {matched} matches"
+    print(f"coverage: {cov['method']}, {reach}, over {cov['searched']} assertions; repositories: "
           + ", ".join(f"{n} ({len(seen[n]['refs'])} refs)" for n in scope))
-    return 0 if hits else 1
+    print(f"shown {shown} of {matched} matches; {hidden} superseded versions hidden"
+          + ("" if show_all else " (--all shows them)"))
+    return 0 if matched else 1
 
 
 def cmd_coverage(store):
@@ -316,14 +344,17 @@ def main(argv):
     ap = argparse.ArgumentParser(prog="vk.py", description=__doc__.split("\n")[0])
     ap.add_argument("--store", required=True)
     ap.add_argument("--plaintext", action="store_true",
-                    help="required: this build has no encryption, and a default nobody chose is refused")
+                    help="required: this host sets no key yet, and a default nobody chose is refused")
     sub = ap.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("ingest-git")
     g.add_argument("dir")
     g.add_argument("--name")
-    s = sub.add_parser("grep")
-    s.add_argument("text")
-    s.add_argument("--repo")
+    for name, help_ in (("grep", "exact bytes, exhaustive"), ("find", "bm25, ranked")):
+        s = sub.add_parser(name, help=help_)
+        s.add_argument("text")
+        s.add_argument("--repo")
+        s.add_argument("--all", action="store_true", help="also show superseded versions")
+        s.add_argument("--k", type=int, default=None if name == "grep" else 10)
     sub.add_parser("coverage")
     h = sub.add_parser("heads")
     h.add_argument("name")
@@ -335,12 +366,13 @@ def main(argv):
     try:
         if args.cmd == "ingest-git":
             name = args.name or os.path.basename(os.path.abspath(args.dir))
+            store.bm25_enable()   # this diary is for searching: keep the ranked index (Q-6)
             stats, rec = ingest_git(store, args.dir, name)
             print(f"{name}: {stats['commits']} commits read, {stats['added']} assertions added, "
                   f"{rec['refused_holdout']} holdout paths refused, {rec['ignored']} ignored")
             return 0
-        if args.cmd == "grep":
-            return cmd_grep(store, args.text, args.repo)
+        if args.cmd in ("grep", "find"):
+            return cmd_search(store, args.text, args.repo, args.cmd, args.all, args.k)
         if args.cmd == "coverage":
             return cmd_coverage(store)
         return cmd_heads(store, args.name)

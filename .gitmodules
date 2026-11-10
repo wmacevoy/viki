@@ -4,3 +4,6 @@
 [submodule "vendor/sqlite-ndvss"]
 	path = vendor/sqlite-ndvss
 	url = git@github.com:wmacevoy/sqlite-ndvss.git
+[submodule "vendor/sqlcipher-libressl"]
+	path = vendor/sqlcipher-libressl
+	url = https://github.com/wmacevoy/sqlcipher-libressl.git

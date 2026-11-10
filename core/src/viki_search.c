@@ -88,3 +88,148 @@ void vk_search_close(VkSearch *s){
     sqlite3_finalize(s->pSt);
     s->pSt = 0;
 }
+
+
+/* ---- bm25 (Q-6) ----
+** The index is an FTS5 table over assertion's own bodies (external content):
+** it keeps no second copy of the text. secure-delete (SQLite 3.44+) removes an
+** erased body's words from the index's pages, not only from its answers (Q-5,
+** W-3). A contentless_delete table was tried first and does not: it marks the
+** row deleted and leaves its terms readable in the leaf (core/DESIGN_v3.md).
+** Triggers keep the index current through every path that writes, erases or
+** forgets. Each hands FTS5 the old body itself, so nothing re-reads assertion
+** after the row has changed: the order trap src/ fell into (CONTRIBUTING.md,
+** chunk_fts) cannot happen here. */
+
+/* Every row is in the index, an erased one as an empty document: FTS5 checks an
+** external-content index row for row against its table (integrity-check). */
+static const char *const azBm25[] = {
+    "CREATE VIRTUAL TABLE vk_bm25 USING fts5(body, content='assertion', content_rowid='seq')",
+    "INSERT INTO vk_bm25(vk_bm25, rank) VALUES('secure-delete', 1)",
+    "CREATE TRIGGER vk_bm25_ai AFTER INSERT ON assertion"
+    " BEGIN INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, new.body); END",
+    "CREATE TRIGGER vk_bm25_au AFTER UPDATE OF body ON assertion"
+    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, old.body);"
+    " INSERT INTO vk_bm25(rowid, body) VALUES(new.seq, new.body); END",
+    "CREATE TRIGGER vk_bm25_ad AFTER DELETE ON assertion"
+    " BEGIN INSERT INTO vk_bm25(vk_bm25, rowid, body) VALUES('delete', old.seq, old.body); END",
+    "INSERT INTO vk_bm25(rowid, body) SELECT seq, body FROM assertion",
+};
+
+static int run(VkStore *p, const char *zSql){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, zSql, &pSt);
+    if( rc==SQLITE_OK ){
+        rc = vk_step(pSt);
+        if( rc==SQLITE_DONE || rc==SQLITE_ROW ) rc = SQLITE_OK;
+    }
+    sqlite3_finalize(pSt);
+    return rc;
+}
+
+/* *pb is 1 if the index exists. */
+static int bm25_exists(VkStore *p, int *pb){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='vk_bm25'", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = vk_step(pSt);
+    *pb = rc==SQLITE_ROW;
+    sqlite3_finalize(pSt);
+    return (rc==SQLITE_ROW || rc==SQLITE_DONE) ? SQLITE_OK : rc;
+}
+
+VkStatus vk_bm25_enable(VkStore *p){
+    int b = 0, rc;
+    size_t i;
+    if( !vk_has_right(p, VK_READ) ) return vk_refuse(p, VK_EDENIED, "D-3a0: an index of what is read requires r");
+    rc = bm25_exists(p, &b);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    if( b ) return VK_OK;
+    rc = run(p, "SAVEPOINT vk_bm25");
+    for(i=0; rc==SQLITE_OK && i<sizeof(azBm25)/sizeof(azBm25[0]); i++) rc = run(p, azBm25[i]);
+    if( rc==SQLITE_OK ) rc = run(p, "RELEASE vk_bm25");
+    if( rc==SQLITE_OK ) return VK_OK;
+    {
+        /* The undo goes straight to SQLite: it must not be one of the failures the test build injects. */
+        VkStatus st = vk_sql_status(p, rc);
+        sqlite3_exec(vk_store_db(p), "ROLLBACK TO vk_bm25; RELEASE vk_bm25", 0, 0, 0);
+        return st;
+    }
+}
+
+/* The query's words, each quoted and OR'd: FTS5's MATCH is an AND, and
+** its syntax is not the caller's to run. *pz is sqlite3_malloc'd. */
+static int bm25_query(VkBytes q, char **pz){
+    sqlite3_str *s = sqlite3_str_new(0);
+    uint32_t i = 0, nWord = 0;
+    while( i<q.n ){
+        uint32_t j;
+        while( i<q.n && (q.p[i]==' ' || q.p[i]=='\t' || q.p[i]=='\n' || q.p[i]=='\r') ) i++;
+        if( i==q.n ) break;
+        if( nWord++ ) sqlite3_str_appendall(s, " OR ");
+        sqlite3_str_appendchar(s, 1, '"');
+        for(j=i; j<q.n && !(q.p[j]==' ' || q.p[j]=='\t' || q.p[j]=='\n' || q.p[j]=='\r'); j++){
+            if( q.p[j]=='"' ) sqlite3_str_appendchar(s, 1, '"');
+            sqlite3_str_appendchar(s, 1, (char)q.p[j]);
+        }
+        sqlite3_str_appendchar(s, 1, '"');
+        i = j;
+    }
+    if( sqlite3_str_errcode(s) ){ sqlite3_free(sqlite3_str_finish(s)); return SQLITE_NOMEM; }
+    *pz = sqlite3_str_finish(s);
+    if( nWord==0 ){ sqlite3_free(*pz); *pz = 0; return SQLITE_EMPTY; }
+    return SQLITE_OK;
+}
+
+static VkStatus bm25_open(VkStore *p, VkBytes q, sqlite3_stmt **ppOut){
+    char *z = 0;
+    int rc = bm25_query(q, &z);
+    if( rc==SQLITE_EMPTY ) return vk_refuse(p, VK_EINVAL, "Q-6: bm25 needs at least one word");
+    if( rc!=SQLITE_OK ) return VK_ENOMEM;
+    rc = vk_prepare(p,
+        "SELECT a.id FROM vk_bm25 JOIN assertion a ON a.seq=vk_bm25.rowid"
+        " WHERE vk_bm25 MATCH ?1 AND a.body IS NOT NULL AND " VK_VALID("a")
+        " ORDER BY bm25(vk_bm25), a.id", ppOut);
+    if( rc!=SQLITE_OK ){ sqlite3_free(z); return vk_sql_status(p, rc); }
+    sqlite3_bind_text(*ppOut, 1, z, -1, sqlite3_free);
+    return VK_OK;
+}
+
+/* A planted row in a temporary index of its own, queried through the same
+** query builder, so a broken builder or a missing FTS5 reads as blind. */
+static VkStatus bm25_probe(VkStore *p, const char *zWord, int *pnHit){
+    sqlite3_stmt *pSt = 0;
+    char *z = 0;
+    VkBytes q;
+    int rc;
+    q.p = (const uint8_t*)zWord; q.n = (uint32_t)strlen(zWord);
+    rc = bm25_query(q, &z);
+    if( rc!=SQLITE_OK ) return VK_ENOMEM;
+    rc = vk_prepare(p, "SELECT count(*) FROM temp.vk_bm25_probe WHERE vk_bm25_probe MATCH ?1", &pSt);
+    if( rc!=SQLITE_OK ){ sqlite3_free(z); return vk_sql_status(p, rc); }
+    sqlite3_bind_text(pSt, 1, z, -1, sqlite3_free);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ) *pnHit = sqlite3_column_int(pSt, 0);
+    sqlite3_finalize(pSt);
+    return rc==SQLITE_ROW ? VK_OK : vk_sql_status(p, rc);
+}
+
+static VkStatus bm25_selfcheck(VkStore *p){
+    int b = 0, nHit = 0, rc;
+    VkStatus st;
+    rc = bm25_exists(p, &b);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    if( !b ) return VK_BLIND;                    /* not yet indexed (Q-2) */
+    rc = run(p, "CREATE VIRTUAL TABLE IF NOT EXISTS temp.vk_bm25_probe USING fts5(b)");
+    if( rc==SQLITE_OK ) rc = run(p, "INSERT INTO temp.vk_bm25_probe(rowid, b)"
+                                    " SELECT 1, 'a planted word' WHERE NOT EXISTS (SELECT 1 FROM temp.vk_bm25_probe)");
+    if( rc!=SQLITE_OK ) return VK_BLIND;
+    st = bm25_probe(p, "planted", &nHit);
+    if( st!=VK_OK ) return st;
+    if( nHit!=1 ) return VK_BLIND;
+    st = bm25_probe(p, "missing", &nHit);
+    if( st!=VK_OK ) return st;
+    return nHit ? VK_BLIND : VK_OK;
+}
+
+const VkSearchMethod vkBm25 = { "bm25", 0, bm25_open, bm25_selfcheck };

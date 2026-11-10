@@ -24,6 +24,7 @@ VkStatus vk_sql_status(VkStore *p, int rc);
 VkStatus vk_refuse(VkStore *p, VkStatus rc, const char *zWhy);
 void vk_bind_bytes(sqlite3_stmt *pSt, int i, VkBytes b);
 int  vk_has_right(const VkStore *p, int right);
+sqlite3 *vk_store_db(VkStore *p);
 
 #ifdef VK_TEST_FAULTS
 int vk_test_fault(void);

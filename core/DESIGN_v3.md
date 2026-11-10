@@ -8,9 +8,12 @@ Drafted by Claude Opus 5.5, 2026-11-09. Covers the first slice only: `include/vi
 
     sh core/test/store-check.sh
 
-Builds with ASan and UBSan and exits nonzero on any red. It needs a C compiler, system SQLite and
-Python 3. It links stock SQLite on purpose: the caller opens and keys the `sqlite3*`, so encryption at
-rest (N-7) is not exercised here.
+Builds with ASan and UBSan and exits nonzero on any red. It needs a C compiler, Python 3, git, the
+`vendor/sqlcipher-libressl` submodule (`git submodule update --init vendor/sqlcipher-libressl`), and
+LibreSSL at `LIBRESSL_PREFIX` (default `$HOME/libressl`), installed as that submodule's README says.
+The check builds SQLCipher once, out of tree, into `core/build-store/sqlcipher`, and links it with no
+fallback to the system SQLite (ENV-4). The caller still opens and keys the `sqlite3*`. The tests open
+their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 
 ## Decisions
 
@@ -57,6 +60,17 @@ rest (N-7) is not exercised here.
   the cursor's columns. A logged row has no id index, so the statement tries the unlogged rows first,
   and the scan only runs when they hold nothing.
 
+- **bm25 is an FTS5 table over `assertion`'s own bodies** (external content), turned on per diary by
+  the host with `vk_bm25_enable`. Until then the method is blind. It is off by default, because the
+  puck's record path should not pay for an index it does not query. Triggers keep it current through
+  every write, erase and forget. `secure-delete` makes erased words leave its pages, not only its
+  answers. A `contentless_delete` table was tried first and does not do that (FINDINGS.md,
+  2026-11-10). Every row is indexed, an erased one as an empty document, because FTS5 checks an
+  external-content index row for row. The query's words are each quoted and OR'd: FTS5's MATCH is an
+  AND, and its syntax is not the caller's to run. The self-check queries a planted row in a temporary
+  index through the same query builder.
+- **`vk_standing` answers Q-4 from `arm`**: whether a row is a head, and how many heads its akey has.
+
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
 
 - **Python through ctypes, not C.** The host shells out to git and keeps a map of every commit's
@@ -70,8 +84,13 @@ rest (N-7) is not exercised here.
   reader who has not granted that principal sees none of its rows (R-4a). The tests ran into this.
 - **Re-ingest reads the whole history each time** and relies on ids to dedupe. viki plus the puck
   (434 commits, 2,800 rows) takes about 2 s. That is fine at this size and not measured larger.
-- **Unencrypted, behind an explicit `--plaintext`**, because stock SQLite has no codec. A SQLCipher
-  build that exports `sqlite3_key` is the next step for this host.
+- **Unkeyed, behind an explicit `--plaintext`.** The library now links SQLCipher, so keying the
+  diary is a host change. It touches keys, so it waits for a decision.
+- **Superseded versions are hidden by default, and the number hidden is said.** Without that, a phrase
+  that lived through ten commits returned ten rows. `--all` shows them, each marked (Q-4).
+- **`find` ranks whole files.** Nothing is chunked, so a long document that mentions every query word
+  in passing outranks a short one that answers. Common words match nearly everything, and the snippet
+  is the first line holding any query word, not the best one.
 
 ## Testing
 
@@ -88,6 +107,6 @@ rest (N-7) is not exercised here.
 ## Not done
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
-sync, regex, bm25, Q-4's current-or-superseded mark on a hit, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
+sync, regex, Q-4's relations (L is not built), the withdraw and seal tiers, keys, references, relations, an ESP32 build.
 Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
 row against a range tombstone or walking skip links: nothing reads them yet except the next append.

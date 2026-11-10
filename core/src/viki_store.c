@@ -48,6 +48,7 @@ VkStatus vk_sql_status(VkStore *p, int rc){
 
 const char *vk_errmsg(const VkStore *p){ return p->zErr ? p->zErr : ""; }
 int vk_sqlite_code(const VkStore *p){ return p->rcSql; }
+sqlite3 *vk_store_db(VkStore *p){ return p->db; }
 
 void vk_bind_bytes(sqlite3_stmt *pSt, int i, VkBytes b){
     /* A NULL pointer would bind SQL NULL, not an empty value. */
@@ -939,10 +940,12 @@ VkStatus vk_cursor_open(VkStore *p, int64_t afterSeq, VkCursor *c){
 VkStatus vk_get(VkStore *p, const VkId id, VkCursor *c){
     /* The unlogged arm uses the id index; the logged arm is LOG-4's scan, and
     ** LIMIT 1 stops before it when the first arm found the row. */
+    /* A row from an unentitled author reads as absent (R-4a). */
     VkStatus st = cursor_prepare(p,
-        "SELECT " VK_ROW_COLUMNS " FROM assertion WHERE id=?1 AND log=x''"
+        "SELECT " VK_ROW_COLUMNS " FROM assertion a WHERE a.id=?1 AND a.log=x'' AND " VK_VALID("a")
         " UNION ALL"
-        " SELECT " VK_ROW_COLUMNS " FROM assertion INDEXED BY assertion_log WHERE log<>x'' AND id=?1"
+        " SELECT " VK_ROW_COLUMNS " FROM assertion a INDEXED BY assertion_log"
+        " WHERE a.log<>x'' AND a.id=?1 AND " VK_VALID("a")
         " LIMIT 1", c);
     if( st!=VK_OK ) return st;
     sqlite3_bind_blob(c->pRow, 1, id, VK_ID_BYTES, SQLITE_TRANSIENT);
@@ -988,6 +991,26 @@ VkStatus vk_cursor_next(VkCursor *c){
     c->a.supersedes  = (const VkId*)c->links[0]; c->a.nSupersedes  = an[0];
     c->a.derivedFrom = (const VkId*)c->links[1]; c->a.nDerivedFrom = an[1];
     return VK_OK;
+}
+
+VkStatus vk_standing(VkStore *p, VkBytes akey, const VkId id, int *pbHead, int *pnHeads){
+    /* arm holds exactly the rows no valid assertion supersedes (LOG-3). */
+    sqlite3_stmt *pSt = 0;
+    int rc;
+    *pbHead = 0; *pnHeads = 0;
+    if( !vk_has_right(p, VK_READ) ) return vk_refuse(p, VK_EDENIED, "D-3a0: every read path requires r");
+    rc = vk_prepare(p, "SELECT count(*), coalesce(sum(id=?2),0) FROM arm WHERE akey=?1", &pSt);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    vk_bind_bytes(pSt, 1, akey);
+    sqlite3_bind_blob(pSt, 2, id, VK_ID_BYTES, SQLITE_STATIC);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ){
+        *pnHeads = sqlite3_column_int(pSt, 0);
+        *pbHead = sqlite3_column_int(pSt, 1)>0;
+    }
+    sqlite3_finalize(pSt);
+    if( rc!=SQLITE_ROW ) return vk_sql_status(p, rc);
+    return *pnHeads ? VK_OK : VK_NOTFOUND;
 }
 
 void vk_cursor_close(VkCursor *c){

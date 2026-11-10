@@ -275,6 +275,11 @@ core's interface. They are not in the 1.0 scope, which Warren closes (FIN-4).
   measured, not before.)*
 - **ENV-3** *(since v3)* Optional parts are optional at build time: a build without vectors links no
   embedding runtime and carries no model.
+- **ENV-4** *(since v3, 2026-11-10)* viki is built and checked on one SQLite: SQLCipher-LibreSSL,
+  vendored and pinned, at SQLite 3.44 or later, with FTS5. There is no fallback to another SQLite.
+  3.44 is the floor because bm25's index needs secure-delete to make erased words leave its pages
+  (Q-5). *"3.43+ could be a requirement."* *"vendor sqlcipher-libressl this is the real baseline
+  anyway."* — Warren, 2026-11-09.
 
 ## 1.0 scope — DRAFT, not closed (FIN-4)
 
@@ -295,6 +300,7 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | withdraw | W-1 to W-11, W-13 | **including `erase`**: MISSION-1 requires forgetting, and W-1 has three tiers, not one |
 | grep, regex, bm25 | Q-1 to Q-7, without vector; E-2 | the regex dialect is still open (Not yet answered 7) |
 | (on an ESP32) | ENV-1, ENV-2, ENV-3 | |
+| (one SQLite) | ENV-4 | Warren, 2026-11-09 |
 | (the process) | FIN-1 to FIN-7; C-8 | |
 
 **In: added by Warren** (2026-11-09)
@@ -374,7 +380,9 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   2026-11-09), as SHAPE-1 says. v2 gave it separate framing so that no other signature could
   authorize an erasure (F-2). Here the kind is inside the framed id, so a signature over the id
   already covers it.
-- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep alone; ENV-2 is measured for merge alone.
+- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep and bm25, not yet for regex; ENV-2 is measured for
+  merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
+  (L) are not built, so it says nothing about them yet.
 
 ## Chosen falsehoods (K4)
 

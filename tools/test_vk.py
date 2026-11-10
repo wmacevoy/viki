@@ -124,6 +124,16 @@ def t_scm2(s):
     check(out.count("file  git:") == 2, "one search returns hits from both", out)
     rc, out = s.vk("grep", "beta one")
     check(rc == 0 and "checkin  git:beta@" in out, "a commit message is searchable", out)
+    with open(os.path.join(b, "blob.bin"), "wb") as f:   # bytes with NULs: a body is bytes, not a C string
+        f.write(b"\x00\x01binary-marker\x00\xff" * 50)
+    s.commit(b, "binary")
+    s.vk("ingest-git", b)
+    rc, out = s.vk("grep", "binary-marker")
+    check(rc == 0 and ":blob.bin" in out, "a body holding NUL bytes is found", out)
+    check(any(ln.startswith("    ") and "binary-marker" in ln for ln in out.splitlines()),
+          "and its bytes read back whole, not cut at the first NUL", out)
+    rc, out = s.vk("find", "binary-marker")
+    check(rc == 0 and ":blob.bin" in out, "and is found ranked", out)
 
 
 def t_scm3(s):
@@ -181,6 +191,44 @@ def t_scm5(s):
     check(rc == 0, "everything else is", out)
 
 
+def t_q4(s):
+    a = s.repo("gamma")
+    s.write(a, "plan.md", "first draft of the plan\n")
+    s.commit(a, "draft")
+    s.write(a, "plan.md", "final plan\n")
+    s.commit(a, "final")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("grep", "first draft")
+    check(rc == 0 and "shown 0 of 1 matches; 1 superseded versions hidden" in out, "a superseded version is hidden, and counted", out)
+    rc, out = s.vk("grep", "first draft", "--all")
+    check("[superseded]" in out and ":plan.md" in out, "--all shows it, marked superseded", out)
+    rc, out = s.vk("grep", "final plan")
+    check("[current]" in out, "the current version is marked current", out)
+    b = two_branches(s)
+    s.vk("ingest-git", b, "--name", "beta")
+    rc, out = s.vk("grep", "line", "--repo", "beta")
+    check(out.count("[head 1 of 2 (forked)]") == 2, "each side of a fork is marked a head of it", out)
+
+
+def t_q6(s):
+    rc, out = s.vk("find", "sensor")
+    check(rc == 3 and out.startswith("blind: bm25"), "a diary with no index is blind", out)
+    a = s.repo("alpha")
+    s.write(a, "a.md", "the parking lot sensor went silent\n")
+    s.write(a, "b.md", "sensor sensor sensor: the sensor log\n")
+    s.write(a, "c.md", "nothing here\n")
+    s.commit(a, "notes")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("find", "sensor")
+    files = [ln for ln in out.splitlines() if ln.startswith("file  ")]
+    check(rc == 0 and len(files) == 2 and ":b.md" in files[0], "ranked: the dense mention first", out)
+    check("ranked, so not-found covers only these" in out, "a ranked answer says what its not-found covers", out)
+    rc, out = s.vk("find", "parking nothing")
+    check(len([ln for ln in out.splitlines() if ln.startswith("file  ")]) == 2, "words are OR'd", out)
+    rc, out = s.vk("find", "sensor", "--k", "1")
+    check(len([ln for ln in out.splitlines() if ln.startswith("file  ")]) == 1 and "shown 1 of" in out, "--k truncates and says so", out)
+
+
 def main():
     sys.path.insert(0, HERE)
     run("SCM-1", "a repository's history goes in once, every branch and tag", t_scm1)
@@ -188,7 +236,9 @@ def main():
     run("SCM-3", "heads are current check-ins; a merge heals the fork", t_scm3)
     run("SCM-4", "coverage names repositories and refs; an unknown one is blind", t_scm4)
     run("SCM-5", "holdout paths are refused whatever the rules; ignored paths stay out", t_scm5)
-    print(f"{failed} of 5 failed")
+    run("Q-4", "each hit says current, superseded, or one head of a fork", t_q4)
+    run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
+    print(f"{failed} of 7 failed")
     return failed != 0
 
 

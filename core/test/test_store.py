@@ -11,7 +11,7 @@ import random
 import sys
 
 LIB = C.CDLL(os.environ["VIKI_STORE_LIB"])
-SQL = C.CDLL("libsqlite3.so.0")
+SQL = LIB   # SQLite is linked into the library (store-check.sh), so one handle reaches both
 OK, EXISTS, DONE, NOTFOUND, FORKED = 0, 1, 2, 3, 4
 ALL = 15
 Id = C.c_ubyte * 32

@@ -130,6 +130,11 @@ void vk_cursor_close(VkCursor *c);
 ** index, so finding one this way is a scan (LOG-4). */
 VkStatus vk_get(VkStore *p, const VkId id, VkCursor *c);
 
+/* Q-4: where a held row stands on its akey. *pbHead is 1 if no valid
+** assertion supersedes it; *pnHeads is how many heads the akey has, and more
+** than one is a fork (R-5). VK_NOTFOUND if the akey has no heads. */
+VkStatus vk_standing(VkStore *p, VkBytes akey, const VkId id, int *pbHead, int *pnHeads);
+
 /* Merge: one row at a time, re-checking each id on arrival. */
 typedef struct {
     int64_t added, present, quarantined;
@@ -158,6 +163,12 @@ typedef struct VkSearchMethod {
 } VkSearchMethod;
 
 extern const VkSearchMethod vkGrep;
+/* bm25: ranked full-text over bodies (Q-6). The query's words are each
+** quoted and OR'd; no query syntax runs. Its index is a projection the host
+** turns on once per diary with vk_bm25_enable, which back-fills it; until
+** then the method is blind (Q-2). It needs SQLite built with FTS5. */
+extern const VkSearchMethod vkBm25;
+VkStatus vk_bm25_enable(VkStore *p);
 
 typedef struct {
     VkStore *p;

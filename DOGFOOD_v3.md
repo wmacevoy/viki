@@ -101,9 +101,19 @@ chosen falsehood: author is unauthenticated, and it is labelled as such.
   rows. A second viki ingest added 0. `grep puck_rec_forget_oldest` returns the puck's files and
   commits with their paths. `grep anything --repo tribe` reports blind. The puck has one head, and
   viki is forked, which is true: its branches have diverged.
-- Every version is a hit, so a phrase that survived ten commits returns ten rows. Q-4, marking each
-  hit current or superseded, is the next fix to the output.
-- Not yet in slice 1: bm25, and an encrypted diary (SQLCipher).
+- Committed as `50b7a37`.
+
+**Q-4 and bm25: built on 2026-11-10, uncommitted.** Every hit is marked current, superseded, or one
+head of a fork. Superseded versions are hidden unless `--all`, and the number hidden is said.
+`vk.py find` is bm25, ranked, and its coverage says what a ranked not-found covers. The check now
+runs on vendored SQLCipher-LibreSSL (ENV-4). On the real diary, viki and the puck again (2,812 rows,
+80 MB with the index): `find "range tombstone full database"` answers in about 0.2 s, and of its
+1,495 matches 1,246 are superseded versions.
+- What bm25 does not do well yet: it ranks whole files, common words match almost everything, and
+  the snippet is the first line holding any word, not the best one. Chunking is the obvious next step
+  for ranking, and it is a projection choice, not a requirement.
+- Not yet: an encrypted diary. The library links SQLCipher now, but keying the diary touches keys,
+  so it waits for Warren.
 
 ## Slices, each one vertical
 
