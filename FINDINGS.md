@@ -11,7 +11,106 @@ expectation -- re-run the command before quoting the number. Where a later
 measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
----
+## A librarian update from the diff costs a fifth of a whole-file one, with the same outlines (2026-11-10)
+
+`test/librarian/cost.py`; plan and counter-results first in `PLAN-cost.md`. 13 current files in viki and the
+versions they superseded, 9 KB to 244 KB, Sonnet throughout. W is today's update: the outline carried forward from
+both versions whole, and every node's entry rewritten with the whole file resent. W' is W run again, the noise
+floor. Cost is the CLI's own figure. Agreement is the share of W's nodes found with the same span (±1 line).
+
+| iteration | what changes | cost, 13 files | share of W | outline agreement with W |
+| --------- | ------------ | -------------- | ---------- | ------------------------ |
+| W' | W again | $7.73 (W) | 1.00 | 98.7% (the floor) |
+| D1 | outline from the previous outline + the diff; entries only for nodes whose span the diff touches | $2.02 | 0.26 | 97.6% |
+| D2 | D1, and the judge may ask to open line ranges | $2.15 | 0.28 | 98.0% |
+| D3 | D1's outline; entries only where a node's *own* text changed, sending only that text | $1.53 | 0.20 | as D1 |
+
+- **The saving grows with the file:** FINDINGS.md (244 KB, 28 lines changed) costs 7% of W under D1. A 12 KB file
+  costs about the same either way, because a call's fixed cost dominates.
+- **Opening sections bought nothing:** the judge almost never asked, so D2 is dropped.
+- **One file is past the stated bar:** REQUIREMENTS_v2.md, D1 91.8% against W' 100% (8 points; the bar was 5).
+  Across all 13 the gap is 1 point.
+- **Entries:** D3 asked about 94 of 1,117 nodes, and left none without an entry. Entry quality was not compared,
+  and retrieval was not re-measured. The plan requires a retrieval check before D3 replaces W.
+- Spent $21.38 in all, including the starting states ($5.92).
+
+## The librarian finds the right file far more often than no librarian: file MRR 0.482 against 0.170 (2026-11-10)
+
+Warren: "An outline only without questions that resolve it's content implies a librarian has already understood
+the content. you can't have that without the librarian." So B below is not a no-librarian arm: the outline is the
+librarian's first product. The baseline is no librarian at all: whole files, searched by bm25 and by one vector
+per file (the pinned MiniLM, which reads a file's first 256 wordpieces). `test/librarian/nolib.py`, 26 DEV
+questions, file level. Node level cannot be compared, because without a librarian there are no nodes.
+
+| arm | r@1 | r@5 | file MRR |
+| --- | --- | --- | -------- |
+| no librarian (whole files) | 3 | 6 | 0.170 |
+| librarian (Sonnet outlines + node entries) | 9 | 16 | 0.482 |
+
+D over no librarian: 20 wins, 2 losses, 4 ties, sign test p = 0.0001. Post hoc, at Warren's reframing, on DEV.
+TEST is unread. The librarian also says *where*: in D the right passage is first for 6 of 26, which whole files
+cannot do.
+
+### Within the librarian: outline alone (B) against outline + questions (D)
+
+
+`test/librarian/` plan v2 (written first), Sonnet outlines of 285 of viki's 288 current files (whole files, none
+split; $14.78), Sonnet librarian entries for every node with text (9,845; $33.41). 35 questions: 26 DEV, plus 9 of
+Warren's own, 5 of which quote their answer. Node-level scoring: the node's own text must hold the answer.
+
+| set | n | B MRR | D MRR | D over B |
+| --- | - | ----- | ----- | -------- |
+| all but quoted | 30 | 0.337 | 0.394 | 12 wins, 9 losses, p = 0.66 |
+| DEV | 26 | 0.351 | 0.374 | 10 wins, 7 losses |
+| Warren's, unquoted | 4 | 0.247 | 0.528 | 2 wins, 2 losses |
+| Warren's, quoted | 5 | 0.800 | 0.800 | all ties |
+
+- **Warren's 9 questions are not a test, for either arm** (Warren: "the questions could not be written without the
+  work to outline and understand"). Their answer passages were written in response to them, 5 quoting them
+  outright. A hit on one measures that history, not retrieval. The only independent set is DEV: D 0.374 against
+  B 0.351, 10 wins and 7 losses, not shown. The rows for Warren's questions stand as a record only.
+- **The counter-result did not fire** (D's MRR is above B's, and D wins more than it loses), and the gain is
+  **not shown**: the sign test is far from 0.05. File-level MRR is about level (0.488 against 0.499).
+- **The first D run was flawed and is marked so in the ledger:** each entry was embedded as one vector, so its
+  questions were diluted by the summary, or cut at 256 wordpieces. D then trailed (0.285). One vector per question
+  is what the design meant. This was found by tracing Q31 after seeing DEV results, so this table is post hoc on
+  DEV. TEST (18 held out) is unread.
+- **The class the librarian was for:** of 4 vocabulary-mismatch questions, Q31 went from none to rank 1. Its entry
+  holds "What happens if I delete the search index or embedding cache?", cosine 0.563. Q33 went from none to 13.
+  Q30 and Q34 are still missed: for Q30, the librarian's best question scores 0.161 against a top hit of 0.526. It
+  did not anticipate "every laptop redoing work a colleague's machine already finished".
+
+**What it changed:** nothing settled. 26 independent questions are too few to tell a 0.02 MRR gain from chance.
+A question set for this has to come from people who have not seen the answer passages and did not cause them. Reading TEST
+once, or a larger question set, is the next information, and it is Warren's call.
+
+## The librarian was built without outlines, so its eval measured the wrong design (2026-11-10)
+
+**The error, first.** The librarian's goal (Warren: "concept mapping and outlining with summaries") rests on the
+outline design already built and measured here: Sonnet outlines with the carry-forward protocol, which keep 96-99%
+of concepts (test/chunking), and OL-4 search that returns outline nodes. The librarian built on 2026-11-10 used
+none of it. It was Haiku writing flat question/answer entries per 20-40 lines, in 60,000-character batches, with
+vectors over fixed 20-line windows. So `test/librarian/`'s numbers say nothing about a concept librarian, and the
+conclusion first drawn from them ("the entries hurt; leave them out") was wrong guidance. Warren caught it: "that
+k3 meant all you just tested did not matter and gave bad guidance."
+
+What the runs do show, about what was actually run (`ledger.tsv`, 26 DEV questions, file-level ranks):
+
+- **Fixed-window vectors beat bm25 at file level:** hybrid MRR 0.577 against 0.324, 15 wins and 0 losses. This
+  is a fact about 20-line windows, not about concept units.
+- **Flat entries lowered MRR** (hybrid+qa 0.479). Traced on Q30 and Q31: where a document was small (VIKI_DESIGN.md),
+  the right idea did get its own entry ("how is an embedding computed only once across peers?"). It was worded from
+  the answer's side, though, and ranked 608th and 1,665th for the real queries. Adding one question in the asker's
+  words made it rank 1st and 53rd (post hoc, one entry each). In a large document (CONTRIBUTING.md, 1,102 lines),
+  four decisions (D-9 to D-12) were packed into one entry, and 205 lines had none: no concept was isolated.
+- **The first run was invalid:** `test/retrieval-queries.tsv` (every query and anchor, TEST rows included) was in
+  the corpus. It is now excluded from the corpus, gold, results, and the librarian's input.
+- **178 of 466 files are `test/chunking/` snapshots,** duplicates that compete in every arm.
+- **The pinned MiniLM runs on x86** (ONNX Runtime 1.29.0) and reproduces `embed-selftest`'s cosines exactly.
+
+**What it changed:** the next librarian works on outlines. Its units are outline nodes (the concepts), carried
+forward by the existing protocol, each with a summary and questions in the asker's words. Vectors are made per node,
+and search returns nodes (OL-4).
 ## Reverse deltas store about half of what any chunking did, so storage is not the outline's job
 
 2026-11-10. Warren: "the storage should be reverse-diffed, yes? the latest is a plain blob, earlier

@@ -177,9 +177,8 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
     forgotten message is not ingested again, and a transcript that shrank is refused. This assumes
     transcripts are append-only.
   - **Forgetting:** `vk.py forget-chat SESSION [--from N --to M]` is one range tombstone.
-  - **The hook:** `tools/vk-chat-hook.sh` runs on PreCompact and Stop (`.claude/settings.json`). It
-    does nothing unless `VIKI_CHAT_STORE` is set, needs `VIKI_CHAT_KEYFILE` with it, and exits 1,
-    never 2, because a Stop hook that exits 2 keeps Claude from stopping.
+  - **The hook** that ran this on PreCompact and Stop is the compaction experiment's, and lives in
+    `../compaction` (`hooks/vk-chat-hook.sh`, moved 2026-11-10). viki provides only the command.
   - **This session's transcript:** 1,245 messages in 0.4 s, a 3.4 MB encrypted diary. 240 thinking
     blocks had no readable text.
 

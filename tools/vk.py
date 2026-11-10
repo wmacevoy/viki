@@ -344,7 +344,6 @@ Previous version:
 New version:
 {new}"""
 
-MAX_BYTES = 60000   # two versions of this must fit one call (Not yet answered 14)
 
 
 def text_lines(body):
@@ -430,10 +429,10 @@ def ask_judge(cmd, prompt):
     return r.stdout
 
 
-def outline_one(store, judge, cmd, r, prev):
-    """Ask for and write the outline of file version r. prev: (record, its outline nodes) to carry
-    forward, or None. Returns 'written', 'exists', or why it was skipped."""
-    key = vk.outline_key(r.id, judge)
+def outline_answer(judge, ask, r, prev):
+    """Ask the judge for r's outline: (tree in lines, lines), or why not. Calls nothing in the store, so
+    several run at once. A file is never cut: how a large document divides is the judge's to say (Warren,
+    2026-11-10: "do not split large files; that's the librarians task")."""
     lines = text_lines(r.body)
     if lines is None:
         return "not text"
@@ -442,17 +441,20 @@ def outline_one(store, judge, cmd, r, prev):
     path = r.akey.decode("utf-8", "replace")
     if prev is not None:
         plines = text_lines(prev[0].body) or []
-        if len(r.body) + len(prev[0].body) > MAX_BYTES:
-            return "too large"
         prompt = CARRY.format(path=path, outline=json.dumps(to_lines(prev[1], plines), indent=1),
                               prev=numbered(plines), new=numbered(lines))
     else:
-        if len(r.body) > MAX_BYTES:
-            return "too large"
         prompt = FIRST.format(path=path, numbered=numbered(lines))
-    tree = line_tree(ask_judge(cmd, prompt), len(lines))
-    if tree is None:
-        return "unparseable"
+    tree = line_tree(ask(prompt), len(lines))
+    return (tree, lines) if tree is not None else "unparseable"
+
+
+def outline_write(store, judge, r, prev, got):
+    """Write an answer from outline_answer: 'written', or why not."""
+    if isinstance(got, str):
+        return got
+    tree, lines = got
+    key = vk.outline_key(r.id, judge)
     body = json.dumps(to_bytes(tree, lines), ensure_ascii=False).encode()
     derived = [r.id] + ([prev[2]] if prev is not None else [])
     t = now_utc()
@@ -491,26 +493,63 @@ def file_versions(store, repo, history):
     return out
 
 
-def cmd_outline(store, repo, judge_name, history, limit, cmd):
+def skipped(akey, skip):
+    """akey starts with one of the skip prefixes (a file or a directory, as 'repo/path')."""
+    a = akey.decode("utf-8", "replace") if isinstance(akey, bytes) else akey
+    return any(a == s or a.startswith(s.rstrip("/") + "/") for s in skip)
+
+
+def cmd_outline(store, repo, judge_name, history, limit, cmd, skip=(), jobs=4):
     model, judge = JUDGES[judge_name]
     cmd = cmd or f"claude -p --model {model} --tools \"\" --no-session-persistence --output-format text"
-    tally, asked = collections.Counter(), 0
+    tally, due = collections.Counter(), []
     for r in file_versions(store, repo, history):
+        if skipped(r.akey, skip):
+            continue
         st, _ = store.current(vk.outline_key(r.id, judge))
         if st in (vk.OK, vk.FORKED):
             tally["already outlined"] += 1
             continue
-        if limit is not None and asked >= limit:
+        lines = text_lines(r.body)
+        if not lines:   # nothing to ask: these do not count against --limit
+            tally["not text" if lines is None else "empty"] += 1
+            continue
+        if limit is not None and len(due) >= limit:
             tally["left for a later run"] += 1
             continue
-        why = outline_one(store, judge, cmd, r, previous_outline(store, judge, r))
-        if why in ("written", "unparseable") or why.startswith("refused"):
-            asked += 1
+        due.append(r)
+    calls = 0
+
+    def counted(prompt):   # parts make more calls than files; this counts calls
+        nonlocal calls
+        calls += 1
+        return ask_judge(cmd, prompt)
+
+    def answer(r, prev):
+        try:
+            return outline_answer(judge, counted, r, prev)
+        except (vk.VkError, subprocess.TimeoutExpired) as e:
+            return f"judge failed: {e}"
+
+    def record(r, prev, got):
+        why = outline_write(store, judge, r, prev, got)
         if why != "written" and why not in ("not text", "empty"):
             print(f"  {r.akey.decode('utf-8', 'replace')}: {why}", file=sys.stderr)
-        tally["refused" if why.startswith("refused") else why] += 1
+        tally["refused" if why.startswith("refused") else "judge failed" if why.startswith("judge failed") else why] += 1
+
+    if history or jobs <= 1:   # carrying forward needs each previous outline written first
+        for r in due:
+            prev = previous_outline(store, judge, r)
+            record(r, prev, answer(r, prev))
+    else:
+        import concurrent.futures
+        pre = [(r, previous_outline(store, judge, r)) for r in due]
+        with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+            got = list(pool.map(lambda rp: answer(*rp), pre))
+        for (r, prev), g in zip(pre, got):
+            record(r, prev, g)
     print(f"outlines by {judge.decode()}: " + ", ".join(f"{n} {k}" for k, n in sorted(tally.items())) +
-          f"; {asked} judge calls")
+          f"; {calls} judge calls")
     return 0
 
 
@@ -700,13 +739,12 @@ def cmd_search(store, text, repo, method, show_all, k):
     return 0 if matched else 1
 
 
-# ---- vectors (Q-6) and the librarian ----
+# ---- vectors (Q-6) and the librarian (LIB) ----
 
-# The chunking is part of the model's name (Q-6): a file head is embedded in windows of 20 lines advancing 15
-# (invented: the model reads at most 256 wordpieces, and 40 lines of code exceed it), a librarian's entry whole.
-CHUNKING = "viki-chunk-1"
-CHUNK_LINES, CHUNK_STRIDE = 20, 15
+# The search unit is the outline node (OL-4): a judge's concepts, not a size. A file with no outline by the
+# chosen judge is one unit, whole. The chunking is part of the model's name (Q-6).
 MODEL_DIR = os.environ.get("VIKI_MODEL_DIR", "/opt/viki-bin/model")
+VEC_CHARS = 2000   # (invented) the most node text embedded; the model reads at most 256 wordpieces anyway
 
 
 def is_text(body):
@@ -717,29 +755,7 @@ def is_text(body):
         return False
 
 
-def line_spans(body):
-    """Byte spans of 20-line windows advancing 15, the last ending at the end."""
-    starts = [0] + [i + 1 for i, c in enumerate(body) if c == 10 and i + 1 < len(body)]
-    out = []
-    for a in range(0, len(starts), CHUNK_STRIDE):
-        b = a + CHUNK_LINES
-        out.append((starts[a], starts[b] if b < len(starts) else len(body)))
-        if b >= len(starts):
-            break
-    return out
-
-
-def entry_spans(body):
-    """Byte spans of a librarian's entries: blocks separated by a blank line."""
-    out, at = [], 0
-    for block in body.split(b"\n\n"):
-        if block.strip():
-            out.append((at, at + len(block)))
-        at += len(block) + 2
-    return out
-
-
-def text_heads(store, kinds, repo=None):
+def text_heads(store, kinds, repo=None, skip=()):
     """The current, readable text bodies of these kinds (a fork's heads all count)."""
     for r in store.walk():
         if r.kind not in kinds or not r.body or not is_text(r.body):
@@ -747,199 +763,250 @@ def text_heads(store, kinds, repo=None):
         akey = r.akey.decode("utf-8", "replace")
         if repo is not None and not (akey.startswith(repo + "/") or akey.startswith(f"qa/{repo}/")):
             continue
+        if skip and skipped(akey.split("#", 1)[0].removeprefix("qa/"), skip):
+            continue
         if store.standing(r.akey, r.id)[0]:
             yield r
 
 
-def vector_model(emb):
-    return f"{emb.id}/{CHUNKING}".encode()
+def outline_nodes(store, judge, r):
+    """The nodes of judge's current outline of file version r, the root (depth 0) first: dicts of path
+    (titles from the root down), lo, hi, depth, and own (its byte segments less its children's). One root
+    node holding everything if there is no outline."""
+    root = {"path": [], "lo": 0, "hi": len(r.body), "depth": 0}
+    st, body = store.current(vk.outline_key(r.id, judge))
+    tops = json.loads(body) if st == vk.OK and body else []
+    out = [root]
+
+    def walk(nodes, path, depth):
+        for n in nodes:
+            d = {"path": path + [n["title"]], "lo": n["lo"], "hi": n["hi"], "depth": depth}
+            out.append(d)
+            d["kids"] = n.get("children") or []
+            walk(d["kids"], d["path"], depth + 1)
+    walk(tops, [], 1)
+    root["kids"] = tops
+    for d in out:
+        segs, at = [], d["lo"]
+        for k in sorted(d.pop("kids"), key=lambda k: k["lo"]):
+            if k["lo"] > at:
+                segs.append((at, k["lo"]))
+            at = max(at, k["hi"])
+        if at < d["hi"]:
+            segs.append((at, d["hi"]))
+        d["own"] = segs
+    return out
 
 
-def cmd_embed(store, repo, kinds):
+def own_text(body, node):
+    return b"".join(body[a:b] for a, b in node["own"]).decode("utf-8", "replace")
+
+
+def node_text(body, node):
+    """What is embedded for a node: its titles, then its own text."""
+    return (" > ".join(node["path"]) + "\n" + own_text(body, node))[:VEC_CHARS]
+
+
+def vector_model(emb, judge):
+    """Nodes by judge's outline; a librarian's entry as one vector per question and one for its summary
+    (embedded whole, an entry's questions were diluted by its summary, or cut at 256 wordpieces)."""
+    return f"{emb.id}/outline:{judge.decode()}/per-question".encode()
+
+
+def entry_lines(body):
+    """(lo, hi) of each 'Q:' and 'Summary:' line of an entry."""
+    out, at = [], 0
+    for line in body.split(b"\n"):
+        if line.startswith(b"Q: ") or line.startswith(b"Summary: "):
+            out.append((at, at + len(line)))
+        at += len(line) + 1
+    return out
+
+
+def cmd_embed(store, repo, judge, skip=(), librarian=LIBRARIANS["sonnet"][1]):
+    """Vectors of every outline node of the current files, and of librarian's entries (no one else's)."""
     import vkembed
     emb = vkembed.Embedder(MODEL_DIR)
-    model, n, rows = vector_model(emb), 0, 0
+    model, n, rows, empty = vector_model(emb, judge), 0, 0, 0
     store.exec("BEGIN")
     try:
-        for r in text_heads(store, kinds, repo):
-            for lo, hi in (entry_spans if r.kind == b"qa" else line_spans)(r.body):
-                store.vector_put(r.id, model, lo, hi, emb.embed(r.body[lo:hi].decode("utf-8", "replace")))
-                n += 1
+        for r in text_heads(store, {b"file", b"qa"}, repo, skip):
+            if r.kind == b"qa" and r.author != librarian:
+                continue
+            if r.kind == b"qa":
+                for lo, hi in entry_lines(r.body):
+                    text = r.body[lo:hi].decode("utf-8", "replace").split(": ", 1)[1]
+                    store.vector_put(r.id, model, lo, hi, emb.embed(text))
+                    n += 1
+            else:
+                for node in outline_nodes(store, judge, r):
+                    text = own_text(r.body, node)
+                    if not text.strip():
+                        empty += 1   # a node all of whose text is in its children: they carry it
+                        continue
+                    store.vector_put(r.id, model, node["lo"], node["hi"], emb.embed(node_text(r.body, node)))
+                    n += 1
             rows += 1
         store.exec("COMMIT")
     except BaseException:
         store.exec("ROLLBACK")
         raise
-    print(f"{n} vectors of {rows} bodies under {model.decode()}")
+    print(f"{n} vectors of {rows} bodies under {model.decode()}; {empty} nodes with no text of their own")
     return 0
 
 
-LIBRARIAN_PROMPT = (
-    "You are the librarian of a software project's repository. For each file below, write the entries a developer "
-    "would look for that the file answers. Each entry gives questions in two styles: a question (\"where is the "
-    "embedding computed?\") and a search phrase (\"function that computes the embedding\"). Word them as someone who "
-    "has not read the file would, and also with the file's own names. Cover what the file defines, decides, explains "
-    "and warns about. Each entry names the lines it rests on (the numbers shown) and gives a one-sentence answer "
-    "that names the identifiers. About one entry per 20 to 40 lines of substance; at most 30 per part.\n"
-    'Answer with only JSON: {"<part label>": [{"lo": N, "hi": N, "questions": ["...", "..."], "answer": "..."}]}\n\n')
-PART_CHARS = 60_000   # (invented) the most file text in one part, and in one call
+LIBRARIAN_PROMPT = """You are the librarian of a software project's repository. Below is one file, with numbered lines,
+and the numbered nodes of its outline (each a concept, with the lines it spans). For each node listed, write:
+- "summary": two or three sentences on what that concept says, decides or warns about, naming its identifiers;
+- "questions": three to six questions a developer would ask that this node answers. Word most of them as someone
+  who has not read the file would ask, in their own terms (for example "how do I stop every machine redoing the
+  same work?"), and some with the file's own names (for example "where is the embedding defined?").
+Answer with only JSON: {{"<node number>": {{"summary": "...", "questions": ["...", "..."]}}, ...}}
+
+File {path}:
+{numbered}
+
+Outline nodes:
+{nodes}
+"""
+NODES_PER_CALL = 60   # (invented) a call answers for at most this many nodes; the file is always sent whole
 
 
-def parts_of(akey, body):
-    """(label, first line, numbered text) pieces of one file, each within PART_CHARS."""
-    lines = body.decode("utf-8", "replace").split("\n")
-    out, a = [], 0
-    while a < len(lines):
-        b, size = a, 0
-        while b < len(lines) and (b == a or size + len(lines[b]) + 8 <= PART_CHARS):
-            size += len(lines[b]) + 8
-            b += 1
-        label = akey if a == 0 and b == len(lines) else f"{akey} (lines {a + 1}-{b})"
-        out.append((label, "\n".join(f"{i + 1}: {lines[i]}" for i in range(a, b))))
-        a = b
-    return out
+def entry_body(path, node, lines_of, e):
+    a, b = lines_of(node)
+    qs = [" ".join(str(q).split()) for q in e.get("questions") or [] if str(q).strip()]
+    return "\n".join([f"{path} lines {a}-{b}: {' > '.join(node['path']) or '(outside every section)'}",
+                      f"Summary: {' '.join(str(e.get('summary', '')).split())}"] + [f"Q: {q}" for q in qs]).encode()
 
 
-def qa_body(path, entries, n_lines):
-    """The librarian's entries as text: one block per entry, a blank line between."""
-    blocks = []
-    for e in sorted(entries, key=lambda e: (e["lo"], e["hi"])):
-        qs = [" ".join(str(q).split()) for q in e.get("questions") or [] if str(q).strip()]
-        if not qs:
-            continue
-        lo, hi = max(1, int(e["lo"])), min(n_lines, int(e["hi"]))
-        blocks.append("\n".join([f"{path} lines {lo}-{hi}"] + [f"Q: {q}" for q in qs]
-                                + [f"A: {' '.join(str(e.get('answer', '')).split())}"]))
-    return "\n\n".join(blocks).encode()
+def has_entry(store, r, node):
+    """The node already has an entry made from this version of its file."""
+    head = store.head_id(b"qa/" + r.akey + f"#{node['lo']}-{node['hi']}".encode())
+    return head is not None and r.id in (store.get(head).derived_from or [])
 
 
-def cmd_librarian(store, repo, name, limit, cmd, skip=(), jobs=4):
-    """skip: file akeys the librarian must not read (an evaluation's own question file, with its held-out half)."""
+def cmd_librarian(store, repo, name, judge, limit, cmd, skip=(), jobs=4):
+    """LIB-1: for each current file outlined by judge, one entry per node, written by the librarian model."""
     model, principal = LIBRARIANS[name]
     cmd = cmd or f"claude -p --model {model} --tools \"\" --no-session-persistence --output-format text"
-    todo = []
-    for r in text_heads(store, {b"file"}, repo):
-        if r.akey.decode("utf-8", "replace") in skip:
+    todo, no_outline = [], 0
+    for r in text_heads(store, {b"file"}, repo, skip):
+        okey = vk.outline_key(r.id, judge)
+        oid = store.head_id(okey)
+        if oid is None:
+            no_outline += 1
             continue
-        key = b"qa/" + r.akey
-        head = store.head_id(key)
-        if head and r.id in (store.get(head).derived_from or []):
-            continue   # this version already has its entries
-        todo.append(r)
-    batches, cur, size = [], [], 0
-    for r in todo:
-        for label, text in parts_of(r.akey.decode(), r.body):
-            if cur and size + len(text) > PART_CHARS:
-                batches.append(cur)
-                cur, size = [], 0
-            cur.append((r, label, text))
-            size += len(text)
-    if cur:
-        batches.append(cur)
+        nodes = [n for n in outline_nodes(store, judge, r) if own_text(r.body, n).strip()]
+        due = [n for n in nodes if not has_entry(store, r, n)]
+        if due:
+            todo.append((r, oid, due))
     if limit is not None:
-        batches = batches[:limit]
-    got, calls, bad = {}, 0, 0
+        todo = todo[:limit]
+    jobs_list = []
+    for r, oid, due in todo:
+        lines = text_lines(r.body)
+        starts = [0]
+        for ln in lines:
+            starts.append(starts[-1] + len(ln))
+        import bisect
 
-    def ask(batch):   # the calls run in parallel; the store is written from this thread only, below
-        prompt = LIBRARIAN_PROMPT + "\n\n".join(f"=== {label} ===\n{text}" for _, label, text in batch)
+        def lines_of(n, starts=starts):
+            return bisect.bisect_right(starts, n["lo"]), max(1, bisect.bisect_left(starts, n["hi"]))
+        for i in range(0, len(due), NODES_PER_CALL):
+            jobs_list.append((r, oid, due[i:i + NODES_PER_CALL], lines, lines_of))
+
+    def ask(job):
+        r, oid, group, lines, lines_of = job
+        listing = "\n".join(f"{k}. {' > '.join(n['path']) or '(text outside every section)'} (lines {lines_of(n)[0]}-"
+                            f"{lines_of(n)[1]})" for k, n in enumerate(group, 1))
+        prompt = LIBRARIAN_PROMPT.format(path=r.akey.decode(), numbered=numbered(lines), nodes=listing)
         try:
-            return batch, ask_judge(cmd, prompt)
+            return job, ask_judge(cmd, prompt)
         except (vk.VkError, subprocess.TimeoutExpired) as e:
-            print(f"  a librarian call failed: {e}", file=sys.stderr)
-            return batch, ""
+            print(f"  {r.akey.decode()}: the librarian failed: {e}", file=sys.stderr)
+            return job, ""
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
-        answers = list(pool.map(ask, batches))
-    for batch, answer in answers:
-        calls += 1
+        answers = list(pool.map(ask, jobs_list))
+    written = missing = 0
+    for (r, oid, group, lines, lines_of), answer in answers:
         m = re.search(r"\{.*\}", answer, re.S)
         try:
-            parsed = json.loads(m.group(0)) if m else {}
+            got = json.loads(m.group(0)) if m else {}
         except json.JSONDecodeError:
-            parsed = {}
-        for r, label, _ in batch:
-            entries = parsed.get(label)
-            if not isinstance(entries, list):
-                bad += 1
+            got = {}
+        for k, n in enumerate(group, 1):
+            e = got.get(str(k))
+            if not isinstance(e, dict):
+                missing += 1
                 continue
-            ok = [e for e in entries if isinstance(e, dict) and isinstance(e.get("lo"), int)
-                  and isinstance(e.get("hi"), int) and e["lo"] <= e["hi"]]
-            got.setdefault(r.id, (r, []))[1].extend(ok)
-    written = 0
-    for r, entries in got.values():
-        body = qa_body(r.akey.decode(), entries, r.body.count(b"\n") + 1)
-        if not body:
-            continue
-        t = now_utc()
-        store.put(b"qa", b"qa/" + r.akey, body, ts=t.isoformat().encode(), rank=rank_of(t.timestamp()),
-                  reference=r.id.hex().encode(), derived_from=[r.id], chain=True)
-        written += 1
-    print(f"librarian {principal.decode()}: {written} files given entries, {calls} calls, {bad} parts unanswered, "
-          f"{len(todo)} files were due")
+            t = now_utc()
+            store.put(b"qa", b"qa/" + r.akey + f"#{n['lo']}-{n['hi']}".encode(), entry_body(r.akey.decode(), n, lines_of, e),
+                      ts=t.isoformat().encode(), rank=rank_of(t.timestamp()), reference=r.id.hex().encode(),
+                      derived_from=[r.id, oid], chain=True)
+            written += 1
+    print(f"librarian {principal.decode()}: {written} node entries written, {missing} nodes unanswered, "
+          f"{len(jobs_list)} calls over {len(todo)} files; {no_outline} files have no outline by {judge.decode()}")
     return 0
 
 
-def place(store, id_, node, cache):
-    """Where a hit points: (file akey, first line, last line), lines None for a whole file. A librarian's entry
-    points at the lines it names in its file."""
+def node_key(store, id_, node, cache):
+    """A hit as (file akey, lo, hi): the node it stands for. A librarian's entry stands for the node it
+    describes; a hit with no node, a file with no outline, stands for the whole file. None if it is not a
+    current file or an entry."""
     r = cache.get(id_) or cache.setdefault(id_, store.get(id_))
     if r is None:
         return None
     if r.kind == b"qa":
-        span = node[1:3] if node else (0, len(r.body))
-        head = r.body[span[0]:span[1]].split(b"\n", 1)[0].decode("utf-8", "replace")
-        m = re.match(r"(.*) lines (\d+)-(\d+)$", head)
-        return (m.group(1), int(m.group(2)), int(m.group(3))) if m and node else (r.akey[3:].decode(), None, None)
+        path, span = r.akey[3:].decode().rsplit("#", 1)
+        lo, hi = span.split("-")
+        return (path, int(lo), int(hi))
     if r.kind != b"file" or not store.standing(r.akey, r.id)[0]:
-        return None   # only current files are answers here
-    if node and node[0] is None:
-        lo, hi = node[1], node[2]
-        return (r.akey.decode(), r.body.count(b"\n", 0, lo) + 1, r.body.count(b"\n", 0, max(lo, hi - 1)) + 1)
-    return (r.akey.decode(), None, None)
+        return None
+    if node:
+        return (r.akey.decode(), node[1], node[2])
+    return (r.akey.decode(), 0, len(r.body))
 
 
-def ranked(store, emb, text, method, cache, with_qa=True):
-    """The places one method returns for text, best first, one per file (its best place). with_qa False
-    leaves the librarian's entries out, as if there were none. None if the method is blind (Q-2)."""
-    if method == "bm25":
-        hits, _ = store.bm25(text.encode())
-    else:
-        hits, _ = store.vector(emb.embed(text))
+def ranked(store, emb, text, method, cache, librarian=LIBRARIANS["sonnet"][1]):
+    """The nodes one method returns for text, best first, each once, counting only librarian's entries
+    (None: no entries at all). None if the method is blind (Q-2)."""
+    hits, _ = store.bm25(text.encode()) if method == "bm25" else store.vector(emb.embed(text))
     if hits is None:
         return None
     out, seen = [], set()
-    for id_, node in hits or []:
-        if not with_qa:
-            r = cache.get(id_) or cache.setdefault(id_, store.get(id_))
-            if r is not None and r.kind == b"qa":
-                continue
-        p = place(store, id_, node, cache)
-        if p and p[0] not in seen:
-            seen.add(p[0])
-            out.append(p)
+    for id_, node in hits:
+        r = cache.get(id_) or cache.setdefault(id_, store.get(id_))
+        if r is not None and r.kind == b"qa" and r.author != librarian:
+            continue
+        k = node_key(store, id_, node, cache)
+        if k and k not in seen:
+            seen.add(k)
+            out.append(k)
     return out
 
 
 def fuse(lists, k=60):
-    """Reciprocal-rank fusion by file, as src/ fused its legs (k=60)."""
-    score, best = {}, {}
+    """Reciprocal-rank fusion by node, as src/ fused its legs (k=60)."""
+    score = {}
     for lst in lists:
-        for rank, p in enumerate(lst, 1):
-            score[p[0]] = score.get(p[0], 0) + 1 / (k + rank)
-            best.setdefault(p[0], p)
-    return [best[f] for f in sorted(score, key=lambda f: -score[f])]
+        for rank, key in enumerate(lst, 1):
+            score[key] = score.get(key, 0) + 1 / (k + rank)
+    return sorted(score, key=lambda key: -score[key])
 
 
-def cmd_ask(store, text, k):
+def cmd_ask(store, text, k, judge, with_qa=True):
     import vkembed
     emb = vkembed.Embedder(MODEL_DIR)
-    store.use_vectors(vector_model(emb))
+    store.use_vectors(vector_model(emb, judge))
+    store.use_outlines(judge)
     cache = {}
-    legs = {m: ranked(store, emb, text, m, cache) for m in ("bm25", "vector")}
+    lib = LIBRARIANS["sonnet"][1] if with_qa else None
+    legs = {m: ranked(store, emb, text, m, cache, lib) for m in ("bm25", "vector")}
     blind = [m for m, lst in legs.items() if lst is None]
-    for i, (f, a, b) in enumerate(fuse([lst for lst in legs.values() if lst])[:k], 1):
-        print(f"[{i}] {f}" + (f"  lines {a}-{b}" if a else ""))
-    print("legs: " + ", ".join(f"{m} {len(lst)} files" for m, lst in legs.items() if lst is not None)
+    for i, (f, lo, hi) in enumerate(fuse([lst for lst in legs.values() if lst])[:k], 1):
+        print(f"[{i}] {f}  bytes {lo}-{hi}")
+    print("legs: " + ", ".join(f"{m} {len(lst)} nodes" for m, lst in legs.items() if lst is not None)
           + (f"; blind: {', '.join(blind)} (vector: run embed)" if blind else ""))
     return 0 if any(legs.values()) else (3 if blind else 1)
 
@@ -994,6 +1061,8 @@ def main(argv):
     ol.add_argument("--history", action="store_true", help="every version, oldest first, not only current ones")
     ol.add_argument("--limit", type=int, help="at most this many judge calls this run")
     ol.add_argument("--judge-cmd", help="the command that answers a prompt on stdin (default: the claude CLI)")
+    ol.add_argument("--skip", action="append", default=[], metavar="PATH", help="a file or directory, as repo/path")
+    ol.add_argument("--jobs", type=int, default=4, help="judge calls in parallel (with --history, one at a time)")
     it = sub.add_parser("ingest-transcript", help="a conversation's messages into its log (SCM-7)")
     it.add_argument("path", nargs="?")
     it.add_argument("--session")
@@ -1002,19 +1071,23 @@ def main(argv):
     fc.add_argument("session")
     fc.add_argument("--from", dest="frm", type=int)
     fc.add_argument("--to", type=int)
-    em = sub.add_parser("embed", help="vectors of current text bodies (Q-6), with the host's pinned model")
+    em = sub.add_parser("embed", help="vectors of each outline node of the current files, and of the librarian's entries (Q-6)")
     em.add_argument("--repo")
-    em.add_argument("--kinds", default="file,qa")
-    lb = sub.add_parser("librarian", help="a model writes questions and answers about each current file")
+    em.add_argument("--judge", choices=sorted(JUDGES), default="sonnet", help="whose outlines set the units")
+    em.add_argument("--skip", action="append", default=[], metavar="PATH")
+    lb = sub.add_parser("librarian", help="a model writes a summary and questions for every outline node (LIB-1)")
     lb.add_argument("--repo")
-    lb.add_argument("--model", choices=sorted(LIBRARIANS), default="haiku")
-    lb.add_argument("--limit", type=int, help="at most this many calls this run")
+    lb.add_argument("--model", choices=sorted(LIBRARIANS), default="sonnet")
+    lb.add_argument("--judge", choices=sorted(JUDGES), default="sonnet", help="whose outlines it works on")
+    lb.add_argument("--limit", type=int, help="at most this many files this run")
     lb.add_argument("--judge-cmd", help="the command that answers a prompt on stdin (default: the claude CLI)")
-    lb.add_argument("--skip", action="append", default=[], metavar="AKEY", help="a file the librarian must not read")
+    lb.add_argument("--skip", action="append", default=[], metavar="PATH", help="a file or directory the librarian must not read")
     lb.add_argument("--jobs", type=int, default=4, help="calls in parallel")
-    ak = sub.add_parser("ask", help="bm25 and vector, fused by file")
+    ak = sub.add_parser("ask", help="bm25 and vector over outline nodes and the librarian's entries, fused by node")
     ak.add_argument("text")
     ak.add_argument("--k", type=int, default=10)
+    ak.add_argument("--judge", choices=sorted(JUDGES), default="sonnet")
+    ak.add_argument("--no-entries", action="store_true", help="leave the librarian's entries out")
     sub.add_parser("coverage")
     h = sub.add_parser("heads")
     h.add_argument("name")
@@ -1063,13 +1136,15 @@ def main(argv):
         if args.cmd == "coverage":
             return cmd_coverage(store)
         if args.cmd == "embed":
-            return cmd_embed(store, args.repo, {k.encode() for k in args.kinds.split(",")})
+            return cmd_embed(store, args.repo, JUDGES[args.judge][1], args.skip)
         if args.cmd == "librarian":
-            return cmd_librarian(store, args.repo, args.model, args.limit, args.judge_cmd, args.skip, args.jobs)
+            return cmd_librarian(store, args.repo, args.model, JUDGES[args.judge][1], args.limit, args.judge_cmd,
+                                 args.skip, args.jobs)
         if args.cmd == "ask":
-            return cmd_ask(store, args.text, args.k)
+            return cmd_ask(store, args.text, args.k, JUDGES[args.judge][1], not args.no_entries)
         if args.cmd == "outline":
-            return cmd_outline(store, args.repo, args.judge, args.history, args.limit, args.judge_cmd)
+            return cmd_outline(store, args.repo, args.judge, args.history, args.limit, args.judge_cmd, args.skip,
+                               args.jobs)
         if args.cmd == "ingest-transcript":
             path, session = args.path, args.session
             if args.hook:

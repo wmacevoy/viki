@@ -535,4 +535,5 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
     keep-the-outline protocol passed on code and prose, and Haiku passed on prose only. A file the
     size of FINDINGS.md (237 KB) does not fit two whole versions in one call, so a large file needs
     a protocol that sends only the changed regions. Both of these are design, not requirement;
-    recorded here until a design note holds them.
+    recorded here until a design note holds them. *Partly answered* (Warren, 2026-11-10): "do not split large files; that's
+    the librarians task." A file goes to the judge whole, and how it divides is the judge's to say.

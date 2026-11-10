@@ -370,11 +370,12 @@ def t_ol_cmd(s):
 FAKE_LIBRARIAN = r"""
 import json, os, re, sys
 prompt = sys.stdin.read()
-labels = re.findall(r"^=== (.+) ===$", prompt, re.M)
+path = re.search(r"^File (.+):$", prompt, re.M).group(1)
 with open(os.environ["VK_FAKE_LOG"], "a") as f:
-    f.write("\n".join(labels) + "\n")
-print(json.dumps({l: [{"lo": 1, "hi": 2, "questions": ["where is the marker defined?", "marker definition"],
-                       "answer": "the first lines"}] for l in labels}))
+    f.write(path + "\n")
+nodes = re.findall(r"^(\d+)\. (.+?) \(lines", prompt.split("Outline nodes:", 1)[1], re.M)
+print(json.dumps({n: {"summary": "a summary", "questions": [f"where is the {t.lower()} part kept?", "marker definition"]}
+                  for n, t in nodes}))
 """
 
 
@@ -382,29 +383,33 @@ def t_librarian(s):
     lib = os.path.join(s.root, "librarian.py")
     with open(lib, "w") as f:
         f.write(FAKE_LIBRARIAN)
+    judge = os.path.join(s.root, "judge.py")
+    with open(judge, "w") as f:
+        f.write(FAKE_JUDGE)
     log = os.path.join(s.root, "librarian.log")
     os.environ["VK_FAKE_LOG"] = log
-    cmd = f"{sys.executable} {lib}"
+    cmd, jcmd = f"{sys.executable} {lib}", f"{sys.executable} {judge}"
     a = s.repo("alpha")
-    s.write(a, "notes.md", "# Notes\nthe marker is here\nmore\n")
-    s.write(a, "code.py", "def marker():\n    return 1\n")
-    s.write(a, "questions.tsv", "held out: never to be read\n")
+    s.write(a, "notes.md", "# Notes\nthe marker is here\n# More\nmore words\n")
+    s.write(a, "plain.md", "# Plain\nno outline will be asked for this one\n")
+    s.write(a, "questions.tsv", "# held out\nnever to be read\n")
     s.commit(a, "one")
     s.vk("ingest-git", a)
+    s.vk("outline", "--skip", "alpha/plain.md", "--judge-cmd", jcmd)
+    open(log, "w").close()
     rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
-    check(rc == 0 and "2 files given entries" in out and "1 calls" in out, "each current file gets entries", out)
+    check(rc == 0 and "2 node entries written" in out and "1 files have no outline" in out,
+          "one entry per outline node; a file with no outline is not guessed at", out)
     with open(log) as f:
         sent = f.read()
     check("alpha/notes.md" in sent and "questions.tsv" not in sent, "a skipped file is never sent", sent)
     rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
-    check(rc == 0 and "0 files were due" in out and "0 calls" in out, "a second run asks nothing", out)
-    s.write(a, "notes.md", "# Notes\nthe marker moved\nmore\n")
-    s.commit(a, "two")
-    s.vk("ingest-git", a)
-    rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
-    check(rc == 0 and "1 files were due" in out, "only the changed file is asked about again", out)
-    rc, out = s.vk("grep", "Q: where is the marker defined?")
-    check(rc == 0 and "qa" in out, "the entries are in the diary, in question form", out)
+    check(rc == 0 and "0 node entries written" in out and "0 calls" in out, "a second run asks nothing", out)
+    rc, out = s.vk("grep", "Q: marker definition")
+    check(rc == 0 and out.count("qa  ") == 2, "each node's entry is its own assertion, in question form", out)
+    s.vk("embed")
+    rc, out = s.vk("ask", "where is the more part kept?")
+    check(rc == 0 and "[1] alpha/notes.md  bytes 27-45" in out, "an entry's hit returns its node", out)
 
 
 MODEL_DIR = os.environ.get("VIKI_MODEL_DIR", "/opt/viki-bin/model")
@@ -420,12 +425,12 @@ def t_vector(s):
     s.commit(a, "one")
     s.vk("ingest-git", a)
     rc, out = s.vk("ask", "animals drinking")
-    check(rc == 3 and "blind: vector" in out and "bm25 0 files" in out,
+    check(rc == 3 and "blind: vector" in out and "bm25 0 nodes" in out,
           "before embed, the vector leg is blind and says so, apart from bm25 finding nothing", out)
     rc, out = s.vk("embed")
-    check(rc == 0 and "2 vectors of 2 bodies" in out, "each current text body is embedded", out)
+    check(rc == 0 and "2 vectors of 2 bodies" in out, "a file with no outline is one unit, whole", out)
     rc, out = s.vk("ask", "animals drinking")
-    check(rc == 0 and out.startswith("[1] alpha/pasture.md") and "bm25 0 files" in out,
+    check(rc == 0 and out.startswith("[1] alpha/pasture.md") and "bm25 0 nodes" in out,
           "a query sharing no word with the file finds it by vector", out)
     bad = os.path.join(s.root, "badmodel")
     os.makedirs(bad)
@@ -437,6 +442,25 @@ def t_vector(s):
     r = subprocess.run(VK + ["--store", s.store, "--plaintext", "embed"], capture_output=True, text=True, env=env)
     check(r.returncode == 2 and "does not match viki-manifest.json" in r.stderr, "a model that fails its pin is refused",
           r.stdout + r.stderr)
+
+
+def t_ol_large(s):
+    judge = os.path.join(s.root, "judge.py")
+    with open(judge, "w") as f:
+        f.write(FAKE_JUDGE)
+    os.environ["VK_FAKE_LOG"] = os.path.join(s.root, "judge.log")
+    a = s.repo("alpha")
+    sections = [f"# Section {i}\n" + "".join(f"line {j} of section {i}, with some words in it.\n" for j in range(60))
+                for i in range(50)]
+    sections[47] = sections[47].replace("line 30 of", "the marker-late line 30 of")
+    s.write(a, "big.md", "".join(sections))
+    s.commit(a, "one")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("outline", "--judge-cmd", f"{sys.executable} {judge}")
+    calls = int(out.rsplit(";", 1)[1].split()[0]) if ";" in out else 0
+    check(rc == 0 and "1 written" in out and calls == 1, "a large file goes to the judge whole, in one call", out)
+    rc, out = s.vk("grep", "marker-late", "--outlines", "vk.judge.sonnet")
+    check(rc == 0 and "in: Section 47" in out, "a word near the end lands in its own section", out)
 
 
 def transcript_lines(session, n0, n):
@@ -505,22 +529,6 @@ def t_scm7(s):
         f.write("\n".join(transcript_lines("sess1", 0, 2)) + "\n")
     rc, out = chat("ingest-transcript", tr)
     check(rc == 2 and "not append-only" in out, "a transcript that shrank is refused", out)
-    # the hook script: off without its store; never exit 2
-    script = os.path.join(HERE, "vk-chat-hook.sh")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("VIKI_CHAT")}
-    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True, env=env)
-    check(r.returncode == 0 and not r.stdout, "the hook does nothing unless configured", r.stderr)
-    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True,
-                       env=dict(env, VIKI_CHAT_STORE=diary))
-    check(r.returncode == 1 and "VIKI_CHAT_KEYFILE" in r.stderr, "a store without a key is refused, exit 1", r.stderr)
-    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True,
-                       env=dict(env, VIKI_CHAT_STORE=diary, VIKI_CHAT_KEYFILE=os.path.join(s.root, "missing.key")))
-    check(r.returncode == 1, "a failing ingest exits 1, never 2", r.stderr)
-    with open(tr, "a") as f:
-        f.write("\n".join(transcript_lines("sess1", 2, 4)) + "\n")
-    r = subprocess.run(["sh", script], input=hook, capture_output=True, text=True,
-                       env=dict(env, VIKI_CHAT_STORE=diary, VIKI_CHAT_KEYFILE=key))
-    check(r.returncode == 0, "configured, the hook ingests", r.stderr)
 
 
 def main():
@@ -536,9 +544,10 @@ def main():
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
     run("OL-3", "vk.py outline asks a judge, carries outlines forward, and writes each once", t_ol_cmd)
     run("SCM-7", "a transcript goes in as a log, once, and a range of it can be forgotten", t_scm7)
+    run("OL-1", "a large file is outlined whole: dividing it is the judge's task", t_ol_large)
     run("Q-6", "vk.py embed and ask: a query in other words finds the file by vector", t_vector)
-    run("LIB-1", "vk.py librarian writes entries per current file, skips what it is told, asks once", t_librarian)
-    print(f"{failed} of 13 failed")
+    run("LIB-1", "vk.py librarian writes an entry per outline node, skips what it is told, asks once", t_librarian)
+    print(f"{failed} of 14 failed")
     return failed != 0
 
 
