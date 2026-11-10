@@ -124,6 +124,7 @@ class Record:
         self.author, self.kind, self.akey = get(a.author), get(a.kind), get(a.akey)
         self.ts, self.reference, self.body = get(a.ts), get(a.reference), get(a.body)
         self.erased = bool(a.erased)
+        self.log, self.pos = get(a.log), a.pos   # LOG-1: empty and 0 when not in a log
         self.supersedes = [bytes(a.supersedes[i]) for i in range(a.nSupersedes)]
         self.derived_from = [bytes(a.derivedFrom[i]) for i in range(a.nDerivedFrom)]
 
