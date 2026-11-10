@@ -1108,6 +1108,119 @@ static void t_ds4(void){
     CHECK( sqlite3_exec(p.db,"INSERT INTO vk_bm25(vk_bm25, rank) VALUES('integrity-check', 1)",0,0,0)==SQLITE_OK );
     drop(p);
 }
+/* ---- OL: outlines ---- */
+static VkAssertion outline_of(const char *zWho, const VkId target, const char *zJson, VkId key,
+                              const VkId *der, uint32_t nDer){
+    VkAssertion a = mk(zWho,"x",1,zJson);
+    vk_outline_key(target,B(zWho),key);
+    a.kind = B("outline");
+    a.akey.p = key; a.akey.n = VK_ID_BYTES;
+    a.reference.p = target; a.reference.n = VK_ID_BYTES;
+    a.derivedFrom = der; a.nDerivedFrom = nDer;
+    return a;
+}
+static const char *zGood =
+    "[{\"title\":\"first half\",\"lo\":0,\"hi\":1500,\"children\":["
+    "{\"title\":\"opening\",\"lo\":0,\"hi\":500},{\"title\":\"middle\",\"lo\":500,\"hi\":1500}]},"
+    "{\"title\":\"second half\",\"lo\":1500,\"hi\":2900,\"children\":[]}]";
+static void t_ol1(void){
+    Peer p = peer("alice"), q = peer("bob");
+    char buf[4000]; VkId tid, key, oid, missing; VkAssertion t0, o; VkMergeReport rep;
+    static const char *azBad[] = {
+        "not json",
+        "{\"title\":\"x\",\"lo\":0,\"hi\":10}",                         /* not a list */
+        "[{\"lo\":0,\"hi\":10}]",                                         /* no title */
+        "[{\"title\":\"x\",\"lo\":10,\"hi\":10}]",                     /* empty range */
+        "[{\"title\":\"x\",\"lo\":-1,\"hi\":10}]",                     /* before the start */
+        "[{\"title\":\"x\",\"lo\":0,\"hi\":100,\"children\":[{\"title\":\"y\",\"lo\":50,\"hi\":150}]}]",  /* outside its parent */
+        "[{\"title\":\"x\",\"lo\":0,\"hi\":100},{\"title\":\"y\",\"lo\":50,\"hi\":150}]",               /* siblings overlap */
+        "[{\"title\":\"x\",\"lo\":0,\"hi\":100},{\"title\":\"y\",\"lo\":0,\"hi\":40}]",                 /* out of order */
+        "[{\"title\":\"x\",\"lo\":0,\"hi\":10,\"extra\":1}]",        /* an unknown field */
+        "[{\"title\":7,\"lo\":0,\"hi\":10}]",                            /* a title that is not text */
+        "[{\"title\":\"x\",\"lo\":0,\"hi\":99999}]",                   /* past the target's end */
+        "[1]",                                                                /* a node that is not an object */
+        "[{\"title\":\"x\",\"lo\":0,\"hi\":10,\"children\":[[]]}]",  /* a list inside children */
+    };
+    size_t i;
+    doc(0,buf,sizeof buf);
+    t0 = mk("alice","big",1,buf);
+    CHECK( vk_put(p.st,&t0,tid)==VK_OK );
+    o = outline_of("alice",tid,zGood,key,(const VkId*)&tid,1);
+    CHECK( vk_put(p.st,&o,oid)==VK_OK );
+    for(i=0;i<sizeof(azBad)/sizeof(azBad[0]);i++){
+        VkId bad;
+        VkStatus st;
+        o = outline_of("alice",tid,azBad[i],key,(const VkId*)&tid,1);
+        st = vk_put(p.st,&o,bad);
+        if( st!=VK_EINVAL || strncmp(vk_errmsg(p.st),"OL-1",4)!=0 ) printf("  accepted: %s\n",azBad[i]);
+        CHECK( st==VK_EINVAL );
+    }
+    {   /* JSON text, not JSONB: a valid outline's JSONB bytes are refused */
+        sqlite3_stmt *st = 0; VkId bad; VkAssertion x;
+        CHECK( sqlite3_prepare_v2(p.db,"SELECT jsonb(?1)",-1,&st,0)==SQLITE_OK );
+        sqlite3_bind_text(st,1,zGood,-1,SQLITE_STATIC);
+        CHECK( sqlite3_step(st)==SQLITE_ROW );
+        x = outline_of("alice",tid,"",key,(const VkId*)&tid,1);
+        x.body.p = (const uint8_t*)sqlite3_column_blob(st,0);
+        x.body.n = (uint32_t)sqlite3_column_bytes(st,0);
+        CHECK( vk_put(p.st,&x,bad)==VK_EINVAL );
+        sqlite3_finalize(st);
+    }
+    {   /* the frame: the akey, the reference, the link to the target */
+        VkId bad, other; VkAssertion x;
+        memset(other,9,sizeof other);
+        x = outline_of("alice",tid,zGood,key,(const VkId*)&tid,1); x.akey = B("not the key");
+        CHECK( vk_put(p.st,&x,bad)==VK_EINVAL );
+        x = outline_of("alice",tid,zGood,key,(const VkId*)&other,1);       /* derived from something else */
+        CHECK( vk_put(p.st,&x,bad)==VK_EINVAL );
+        memset(missing,5,sizeof missing);
+        x = outline_of("alice",missing,zGood,key,(const VkId*)&missing,1); /* a target this store lacks */
+        CHECK( vk_put(p.st,&x,bad)==VK_EINVAL && strncmp(vk_errmsg(p.st),"OL-1",4)==0 );
+    }
+    /* by merge: a broken shape is quarantined; a target not yet held is no reason to refuse */
+    {
+        VkId k2, i2; VkAssertion x;
+        memset(&rep,0,sizeof rep);
+        x = outline_of("bob",tid,azBad[5],k2,(const VkId*)&tid,1);
+        vk_assertion_id(&x,i2);
+        CHECK( vk_ingest(p.st,&x,i2,&rep)==VK_OK && rep.quarantined==1 );   /* a broken shape */
+        x = outline_of("bob",missing,zGood,k2,(const VkId*)&missing,1);
+        vk_assertion_id(&x,i2);
+        CHECK( vk_ingest(p.st,&x,i2,&rep)==VK_OK && rep.added==1 );         /* a target not yet held */
+        x = outline_of("bob",tid,azBad[10],k2,(const VkId*)&tid,1);
+        vk_assertion_id(&x,i2);
+        CHECK( vk_ingest(p.st,&x,i2,&rep)==VK_OK && rep.quarantined==2 );   /* past a held target's end */
+    }
+    drop(p); drop(q);
+}
+static void t_ol2(void){
+    Peer p = peer("alice"), b = peer("bob");
+    char buf[4000]; VkId tid, ka, kb, oa, ob, oa2; VkAssertion t0, o; VkRow r; VkMergeReport rep;
+    doc(0,buf,sizeof buf);
+    t0 = mk("alice","big",1,buf);
+    CHECK( vk_put(p.st,&t0,tid)==VK_OK );
+    o = outline_of("alice",tid,zGood,ka,(const VkId*)&tid,1);
+    CHECK( vk_put(p.st,&o,oa)==VK_OK );
+    memset(&rep,0,sizeof rep);
+    CHECK( vk_merge(b.st,p.st,&rep)==VK_OK );
+    o = outline_of("bob",tid,"[{\"title\":\"all of it\",\"lo\":0,\"hi\":2900}]",kb,(const VkId*)&tid,1);
+    CHECK( vk_put(b.st,&o,ob)==VK_OK );
+    memset(&rep,0,sizeof rep);
+    CHECK( vk_merge(p.st,b.st,&rep)==VK_OK );
+    CHECK( !id_eq(ka,kb) );                                     /* two authors: two keys, side by side */
+    CHECK( vk_current(p.st,(VkBytes){ka,VK_ID_BYTES},&r)==VK_OK && id_eq(r.id,oa) ); vk_row_close(&r);
+    CHECK( vk_current(p.st,(VkBytes){kb,VK_ID_BYTES},&r)==VK_OK && id_eq(r.id,ob) ); vk_row_close(&r);
+    /* one author's newer outline supersedes the older, and may name it as carried forward (OL-3) */
+    {
+        VkId der[2]; memcpy(der[0],tid,32); memcpy(der[1],oa,32);
+        o = outline_of("alice",tid,"[{\"title\":\"the document\",\"lo\":0,\"hi\":2900}]",ka,(const VkId*)der,2);
+        o.supersedes = (const VkId*)&oa; o.nSupersedes = 1; o.rank[15] = 2;
+        CHECK( vk_put(p.st,&o,oa2)==VK_OK );
+    }
+    CHECK( vk_current(p.st,(VkBytes){ka,VK_ID_BYTES},&r)==VK_OK && id_eq(r.id,oa2) ); vk_row_close(&r);
+    CHECK( vk_current(p.st,(VkBytes){kb,VK_ID_BYTES},&r)==VK_OK && id_eq(r.id,ob) ); vk_row_close(&r);
+    drop(p); drop(b);
+}
 static void t_q2(void){
     Peer p = peer("alice");
     VkSearch s; VkCoverage c; VkId id;
@@ -1202,10 +1315,14 @@ static VkStatus script_step(Script *s, int k){
     case 13: { char buf[4000]; VkAssertion x = version(buf,sizeof buf,0,0); return vk_put(s->p.st,&x,s->b0); }
     case 14: { char buf[4000]; VkAssertion x = version(buf,sizeof buf,1,(const VkId*)&s->b0); return vk_put(s->p.st,&x,s->b1); }
     case 15: return vk_erase(s->p.st,s->b1,B("t"),gRank0,id);
+    /* OL-1: an outline of the surviving version, so its checks are failed in turn too */
+    case 16: { VkId key; VkAssertion o = outline_of("alice",s->b0,"[{\"title\":\"top\",\"lo\":0,\"hi\":100}]",
+                                                key,(const VkId*)&s->b0,1);
+               return vk_put(s->p.st,&o,id); }
     }
     return VK_OK;
 }
-#define NSCRIPT 16
+#define NSCRIPT 17
 
 /* Runs the script once, failing the k-th tick; 0 means no fault. A step that
 ** fails must succeed when retried, and the store must end up the same. */
@@ -1295,6 +1412,8 @@ static const Test aTest[] = {
     {"Q-6","grep is exact and exhaustive",t_q6_grep},
     {"Q-8","a hit's id reads back as its whole assertion",t_q8},
     {"Q-4","a hit says whether it is current, superseded, or one head of a fork",t_q4},
+    {"OL-1","an outline's shape and frame are checked on write and on merge",t_ol1},
+    {"OL-2","outlines by two authors stand side by side; an author's newer one supersedes",t_ol2},
     {"DS-1","a delta rebuilds its version exactly, and a malformed one is refused",t_ds_codec},
     {"DS-1","the latest is whole, the superseded a delta, and both read and search as written",t_ds1},
     {"DS-2","a long chain stays within the bound and every version reads back",t_ds2},

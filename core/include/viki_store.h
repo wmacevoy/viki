@@ -67,6 +67,16 @@ typedef struct {
 
 typedef struct VkStore VkStore;
 
+/* OL-1: an outline is an assertion of kind "outline" about one target. Its
+** reference is the target's id, its derived_from names the target (and may
+** name the outline it carried forward, OL-3), and its akey is this key, so one
+** author's outlines of a target form one chain and two authors' stand side by
+** side (OL-2). Its body is JSON: a list of nodes
+**   {"title": text, "lo": integer, "hi": integer, "children": [nodes]}
+** where lo..hi (hi exclusive) is a byte range of the target's body, a child
+** lies inside its parent, and siblings are in order and do not overlap. */
+void vk_outline_key(const VkId target, VkBytes author, VkId out);
+
 /* The id of an assertion: pure, and needs no store. */
 void vk_assertion_id(const VkAssertion *a, VkId out);
 

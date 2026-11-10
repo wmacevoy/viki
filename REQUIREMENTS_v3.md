@@ -249,10 +249,11 @@ core's interface. They are not in the 1.0 scope, which Warren closes (FIN-4).
 - **SCM-6** *(since v3)* Chat transcripts may be ingested. Forgetting one is a tombstone (W-1,
   W-15): *"chat is fine - that what tombstones are for."*
 
-## OL — Outlines: judged concepts, which search returns (new series, DRAFT)
+## OL — Outlines: judged concepts, which search returns (new series)
 
-**Status: draft**, by Claude Opus 5.5 on 2026-11-10, on Warren's instruction: *"commit, then draft
-the outline design into requirements"*. No ID here binds until Warren confirms the series. The
+**Status: confirmed** by Warren, 2026-11-10: *"confirm OL, use your drafted answers for 12 and 13"*.
+Drafted by Claude Opus 5.5 the same day, on *"commit, then draft the outline design into
+requirements"*. The
 evidence is two FINDINGS entries of 2026-11-10, from `test/chunking/`. Sizes cut by rule or by
 content-defined chunking store about as well as structure. An outline judged by Sonnet, given the
 previous version and its outline and asked to keep it, stored less than line-anchored
@@ -449,6 +450,10 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 - **N-7, through the first host** (`tools/vk.py`, 2026-11-10): the diary key is 64 hex characters,
   used raw with no KDF. A passphrase is refused, because N-8 (passwords, slow KDF) is not built and
   must not share N-7's path.
+- **OL-1 and OL-2** (new in v3, built 2026-11-10): an outline's frame and JSON body are checked on
+  write and on merge, and its akey keeps one author's outlines on one chain. OL-3's link to a
+  carried-forward outline is accepted, and nothing reads it yet. OL-4 (search returns nodes) and OL-5
+  (the flag) are not built. OL-6 holds by construction: core makes no model call.
 - **DS-1 to DS-4** (new in v3, built 2026-11-10): `core/src/viki_delta.c` and `vk_body`, tested in
   `store_test.c` and in the fault script.
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep and bm25, not yet for regex; ENV-2 is measured for
@@ -489,14 +494,13 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
     pair of ids, so disagreeing judgments fork (R-5); or the author and the sorted pair, so they
     stand side by side, optionally with only that author allowed to supersede, an exception to
     v2's R-7.
-12. **An outline's akey** (OL-2), the same question as a relation's (11). Drafted: the target's id
-    and the author, so one author's newer outline of a target supersedes that author's older one,
-    and two authors' outlines stand side by side. *(invented)*
-13. **Erasing a target and its outlines' titles** (OL-5). W-13 flags a derivative of an erased
-    source and leaves the decision to a person. An outline's titles are short descriptions of the
-    erased text, so flagging leaves that description readable until someone acts. Proposed: keep
-    W-13 (flag), and have the host erase an outline's body when it erases the outline's target,
-    as a stated policy.
+12. *Answered* (Warren, 2026-11-10, taking the draft): **an outline's akey** (OL-2) is made from the
+    target's id and the author. So one author's newer outline of a target supersedes that author's
+    older one, and two authors' outlines stand side by side. *(invented, then confirmed)*
+13. *Answered* (Warren, 2026-11-10, taking the draft): **erasing a target and its outlines' titles**
+    (OL-5). W-13 stands: viki flags an outline of an erased target and leaves the decision to a
+    person. A host that erases a target also erases the bodies of that target's outlines, as its
+    stated policy, because the titles describe the erased text.
 14. **Which judge, and for which content** (OL-2). Measured on three files: Sonnet under the
     keep-the-outline protocol passed on code and prose, and Haiku passed on prose only. A file the
     size of FINDINGS.md (237 KB) does not fit two whole versions in one call, so a large file needs

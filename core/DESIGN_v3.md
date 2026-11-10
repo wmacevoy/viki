@@ -90,6 +90,16 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   - **Measured** on the viki and puck diary: file bodies went from 53 MB to 15.3 MB, and the file
     from 77 MB to 43 MB (the bm25 index is about 19 MB of that). 1,738 of 3,018 rows are deltas.
     Ingest time and search time did not visibly change.
+- **An outline (OL-1) is checked by SQLite's JSON functions**, so there is no parser of ours. Its
+  reference is the target's id, its akey is `vk_outline_key(target, author)` (a hash, like a range
+  tombstone's), and it is never logged. The frame is checked in `shape_error`. The body is checked
+  by one query over `json_tree`: a list of objects, each with a text title, integer `lo` and `hi`
+  (byte offsets, `hi` exclusive), optional `children` and nothing else, children inside the parent,
+  and siblings in order. The body is bound as text, because a BLOB given to the JSON functions may
+  be read as JSONB, and an outline is JSON text. A write needs the target held and readable, and
+  the ranges are checked against its length. On merge the target may arrive later, so only a held
+  target's length is checked. An outline whose target never arrives is kept, and its ranges are
+  checked by whoever reads it.
 - **`vk_standing` answers Q-4 from `arm`**: whether a row is a head, and how many heads its akey has.
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
@@ -136,7 +146,7 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 ## Not done
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
-sync, regex, Q-4's relations (L is not built), compressing deltas or whole bodies, measuring the DS
+sync, regex, Q-4's relations (L is not built), OL-4 (search returning outline nodes), OL-5's flag, compressing deltas or whole bodies, measuring the DS
 thresholds, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
 Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
 row against a range tombstone or walking skip links: nothing reads them yet except the next append.

@@ -6,6 +6,7 @@
 
 #define VK_TOMBSTONE "tombstone"
 #define VK_RANGE     "tombstone.range"
+#define VK_OUTLINE   "outline"
 #define VK_TOMB_KINDS "(CAST('" VK_TOMBSTONE "' AS BLOB),CAST('" VK_RANGE "' AS BLOB))"
 
 /* An assertion counts only if its author held the right its frame needs

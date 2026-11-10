@@ -195,6 +195,34 @@ static void log_key(VkBytes author, VkBytes log, VkId out){
     sha256_final(&c, out);
 }
 
+/* OL-1: one author's outlines of one target share this key (OL-2). */
+void vk_outline_key(const VkId target, VkBytes author, VkId out){
+    static const char zTag[] = "viki.outline.v3";
+    VkBytes t;
+    sha256_ctx c;
+    t.p = target; t.n = VK_ID_BYTES;
+    sha256_init(&c);
+    sha256_update(&c, (const unsigned char*)zTag, sizeof(zTag));
+    hash_field(&c, t);
+    hash_field(&c, author);
+    sha256_final(&c, out);
+}
+
+/* OL-1, the frame: what can be checked without a store. */
+static const char *outline_frame_error(const VkAssertion *a){
+    VkId key;
+    uint32_t i;
+    int bLinked = 0;
+    if( a->log.n ) return "OL-1: an outline is not logged";
+    if( a->reference.n!=VK_ID_BYTES ) return "OL-1: an outline's reference is its target's id";
+    vk_outline_key(a->reference.p, a->author, key);
+    if( a->akey.n!=VK_ID_BYTES || memcmp(a->akey.p, key, VK_ID_BYTES)!=0 )
+        return "OL-1: an outline's akey is vk_outline_key(target, author)";
+    for(i=0; i<a->nDerivedFrom; i++) bLinked |= memcmp(a->derivedFrom[i], a->reference.p, VK_ID_BYTES)==0;
+    if( !bLinked ) return "OL-1: an outline names its target in derived_from";
+    return 0;
+}
+
 /* NULL if well formed, else the requirement it breaks. */
 static const char *shape_error(const VkAssertion *a){
     if( a->author.n==0 || a->kind.n==0 || a->akey.n==0 ) return "A-2: author, kind and akey are required";
@@ -219,6 +247,10 @@ static const char *shape_error(const VkAssertion *a){
         if( a->pos || a->nSkip ) return "LOG-1: a position needs a log";
     }else if( a->pos<1 || a->pos>VK_MAX_POS || a->nSkip!=skip_count(a->pos) ){
         return "LOG-2: the position and its skip links disagree";
+    }
+    if( bytes_is(a->kind, VK_OUTLINE) && !a->erased ){
+        const char *z = outline_frame_error(a);
+        if( z ) return z;
     }
     if( bytes_is(a->kind, VK_TOMBSTONE) ){
         if( a->erased ) return "W-2: a tombstone cannot be erased";
@@ -895,6 +927,99 @@ static int store_row(VkStore *p, const VkAssertion *a, const VkId id, int *pbAdd
     return rc;
 }
 
+/* ---- OL-1: an outline's body ---- */
+
+static const char *const azOutlineBad[] = {
+    0,
+    "OL-1: an outline is a JSON list of nodes",
+    "OL-1: every node is an object",
+    "OL-1: a node has a text title, integer lo and hi, optional children, and nothing else",
+    "OL-1: a node's range is lo < hi, starting from 0",
+    "OL-1: a child lies inside its parent",
+    "OL-1: siblings are in order and do not overlap",
+    "OL-1: a range runs past the end of the target's body",
+};
+
+/* SQLite reads the JSON, so there is no parser of ours. The body is bound as
+** text: a BLOB given to the JSON functions may be read as JSONB, and an outline
+** is JSON text. A list anywhere but a node's children is caught as a node that
+** is not an object, or as a field a node may not have. nTarget < 0 skips the
+** range check, for a target this store does not hold. */
+static int outline_body_error(VkStore *p, VkBytes body, sqlite3_int64 nTarget, const char **pzBad){
+    static const char zSql[] =
+        "WITH t AS (SELECT * FROM json_tree(?1)),"
+        " nodes AS (SELECT o.id, o.parent AS arr, CAST(o.key AS INTEGER) AS ix,"
+        "   json_type(o.value,'$.title') AS tt, json_type(o.value,'$.lo') AS tl,"
+        "   json_type(o.value,'$.hi') AS th, json_type(o.value,'$.children') AS tc,"
+        "   json_extract(o.value,'$.lo') AS lo, json_extract(o.value,'$.hi') AS hi,"
+        "   (SELECT count(*) FROM json_each(o.value)) AS nk FROM t o WHERE o.type='object'),"
+        " arrs AS (SELECT id, parent FROM t WHERE type='array')"
+        " SELECT CASE"
+        "  WHEN json_type(?1)<>'array' THEN 1"
+        "  WHEN EXISTS(SELECT 1 FROM t WHERE parent IN (SELECT id FROM arrs) AND type<>'object') THEN 2"
+        "  WHEN EXISTS(SELECT 1 FROM nodes WHERE tt IS NOT 'text' OR tl IS NOT 'integer' OR th IS NOT 'integer'"
+        "    OR (tc IS NOT NULL AND tc<>'array') OR nk<>3+(tc IS NOT NULL)) THEN 3"
+        "  WHEN EXISTS(SELECT 1 FROM nodes WHERE lo<0 OR hi<=lo) THEN 4"
+        "  WHEN EXISTS(SELECT 1 FROM nodes c JOIN arrs a ON a.id=c.arr JOIN nodes q ON q.id=a.parent"
+        "    WHERE c.lo<q.lo OR c.hi>q.hi) THEN 5"
+        "  WHEN EXISTS(SELECT 1 FROM nodes x JOIN nodes y ON y.arr=x.arr AND y.ix=x.ix+1 WHERE y.lo<x.hi) THEN 6"
+        "  WHEN ?2>=0 AND (SELECT max(hi) FROM nodes)>?2 THEN 7"
+        "  ELSE 0 END";
+    sqlite3_stmt *pSt = 0;
+    int rc, code = 0;
+    *pzBad = 0;
+    rc = vk_prepare(p, "SELECT json_valid(?1)", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_text(pSt, 1, body.n ? (const char*)body.p : "", (int)body.n, SQLITE_STATIC);
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW && !sqlite3_column_int(pSt, 0) ) code = 1;
+    sqlite3_finalize(pSt);
+    if( rc!=SQLITE_ROW ) return rc;
+    if( !code ){
+        rc = vk_prepare(p, zSql, &pSt);
+        if( rc!=SQLITE_OK ) return rc;
+        sqlite3_bind_text(pSt, 1, body.n ? (const char*)body.p : "", (int)body.n, SQLITE_STATIC);
+        sqlite3_bind_int64(pSt, 2, nTarget);
+        rc = vk_step(pSt);
+        if( rc==SQLITE_ROW ) code = sqlite3_column_int(pSt, 0);
+        sqlite3_finalize(pSt);
+        if( rc!=SQLITE_ROW ) return rc;
+    }
+    if( code>0 && code<(int)(sizeof(azOutlineBad)/sizeof(azOutlineBad[0])) ) *pzBad = azOutlineBad[code];
+    return SQLITE_OK;
+}
+
+/* The length of the target's body, -1 if not held, -2 if erased. */
+static int target_length(VkStore *p, const uint8_t *target, sqlite3_int64 *pn){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p,
+        "SELECT body IS NULL, length(" VK_BODY("") ") FROM assertion WHERE id=?1 AND log=x''"
+        " UNION ALL SELECT body IS NULL, length(" VK_BODY("") ") FROM assertion INDEXED BY assertion_log"
+        " WHERE log<>x'' AND id=?1 LIMIT 1", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_blob(pSt, 1, target, VK_ID_BYTES, SQLITE_STATIC);
+    rc = vk_step(pSt);
+    *pn = -1;
+    if( rc==SQLITE_ROW ) *pn = sqlite3_column_int(pSt, 0) ? -2 : sqlite3_column_int64(pSt, 1);
+    sqlite3_finalize(pSt);
+    return (rc==SQLITE_ROW || rc==SQLITE_DONE) ? SQLITE_OK : rc;
+}
+
+/* OL-1 on a body. bWrite: the writer must hold a readable target, and the
+** ranges are checked against it. On arrival the target may come later, so
+** only a held target's length is checked. */
+static int outline_error(VkStore *p, const VkAssertion *a, int bWrite, const char **pzBad){
+    sqlite3_int64 n = -1;
+    int rc;
+    *pzBad = 0;
+    if( !bytes_is(a->kind, VK_OUTLINE) || a->erased ) return SQLITE_OK;
+    rc = target_length(p, a->reference.p, &n);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bWrite && n==-1 ){ *pzBad = "OL-1: the outline's target is not held"; return SQLITE_OK; }
+    if( bWrite && n==-2 ){ *pzBad = "OL-1: the outline's target is erased"; return SQLITE_OK; }
+    return outline_body_error(p, a->body, n<0 ? -1 : n, pzBad);
+}
+
 /* ---- write ---- */
 
 static int needed_right(const VkAssertion *a){
@@ -913,6 +1038,9 @@ VkStatus vk_put(VkStore *p, const VkAssertion *a, VkId idOut){
         return vk_refuse(p, VK_EDENIED, "I-1: the author must be this store's principal");
     if( !vk_has_right(p, needed_right(a)) )
         return vk_refuse(p, VK_EDENIED, "D-3: the principal lacks the right this write needs");
+    rc = outline_error(p, a, 1, &zBad);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    if( zBad ) return vk_refuse(p, VK_EINVAL, zBad);
     vk_assertion_id(a, idOut);
     rc = store_row(p, a, idOut, &bAdded);
     if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
@@ -1290,6 +1418,10 @@ VkStatus vk_ingest(VkStore *dst, const VkAssertion *a, const VkId id, VkMergeRep
         vk_assertion_id(a, aCheck);
         if( memcmp(aCheck, id, VK_ID_BYTES)!=0 ) zBad = "A-7: the id does not match the content";
     }
+    if( !zBad ){
+        rc = outline_error(dst, a, 0, &zBad);
+        if( rc!=SQLITE_OK ) return vk_sql_status(dst, rc);
+    }
     if( zBad ){
         rc = quarantine(dst, id, zBad);
         if( rc!=SQLITE_OK ) return vk_sql_status(dst, rc);
@@ -1363,3 +1495,4 @@ VkStatus vk_digest(VkStore *p, VkId out){
     if( rc!=SQLITE_DONE ) return vk_sql_status(p, rc);
     return VK_OK;
 }
+
