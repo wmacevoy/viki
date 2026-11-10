@@ -85,6 +85,23 @@ VkStatus vk_vector_put(VkStore *p, const VkId target, VkBytes model, uint32_t lo
     return rc==SQLITE_DONE ? VK_OK : vk_sql_status(p, rc);
 }
 
+VkStatus vk_vector_drop(VkStore *p, const VkId target, VkBytes model){
+    sqlite3_stmt *pSt = 0;
+    sqlite3_int64 seq = 0, len = 0;
+    int rc, found;
+    if( !vk_has_right(p, VK_READ) ) return vk_refuse(p, VK_EDENIED, "D-3a0: an index of what is read requires r");
+    found = vk_has_held_body(p, target, &seq, &len);
+    if( found<0 ) return vk_sql_status(p, -found);
+    if( !found ) return vk_refuse(p, VK_NOTFOUND, "Q-6: a vector is of a held, unerased body");
+    rc = vk_prepare(p, "DELETE FROM vk_vec WHERE model=?1 AND seq=?2", &pSt);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    vk_bind_bytes(pSt, 1, model);
+    sqlite3_bind_int64(pSt, 2, seq);
+    rc = vk_step(pSt);
+    sqlite3_finalize(pSt);
+    return rc==SQLITE_DONE ? VK_OK : vk_sql_status(p, rc);
+}
+
 /* Rows: the hit's id, no outline node, then the span (vk_search_hit). */
 static VkStatus vector_open(VkStore *p, VkBytes q, sqlite3_stmt **ppOut){
     int64_t dim = 0;

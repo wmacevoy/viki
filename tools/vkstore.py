@@ -84,6 +84,7 @@ for name, args, res in [
     ("vk_search_hit", [C.POINTER(Search), C.POINTER(Hit)], C.c_int),
     ("vk_use_outlines", [P, Bytes], None),
     ("vk_use_vectors", [P, Bytes], None),
+    ("vk_vector_drop", [P, C.POINTER(Id), Bytes], C.c_int),
     ("vk_vector_put", [P, C.POINTER(Id), Bytes, C.c_uint32, C.c_uint32, C.POINTER(C.c_float), C.c_uint32], C.c_int),
     ("vk_outline_key", [C.POINTER(Id), Bytes, C.POINTER(Id)], None),
     ("vk_search_coverage", [C.POINTER(Search), C.POINTER(Coverage)], C.c_int),
@@ -303,6 +304,11 @@ class Store:
         rc = LIB.vk_vector_put(self.st, C.byref(Id(*id_)), _b(model), lo, hi, buf, len(vec))
         if rc != OK:
             raise VkError(f"vector put: {self.errmsg()}")
+
+    def vector_drop(self, id_, model):
+        """Every vector of id_'s body under model goes (before embedding it afresh)."""
+        if LIB.vk_vector_drop(self.st, C.byref(Id(*id_)), _b(model)) != OK:
+            raise VkError(f"vector drop: {self.errmsg()}")
 
     def vector(self, vec):
         """(hits, coverage), nearest first; (None, None) if blind. A hit's node is (None, lo, hi, None)."""

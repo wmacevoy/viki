@@ -485,7 +485,9 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   reports blind with no model chosen or no vectors under it, deletes a body's vectors when it is erased or
   forgotten, and merges none. The host's embedder is `src/`'s, built by `tools/build-embed.sh` against the pinned
   ONNX Runtime and MiniLM, which run on x86 too (the selftest's cosines reproduce exactly).
-- **LIB-1** (drafted and built 2026-11-10): `vk.py librarian`, tested with a fake model.
+- **LIB-1** (drafted and built 2026-11-10): `vk.py librarian`, one entry per outline node, tested with a fake
+  model. An update asks only about nodes whose own text changed and carries the rest (FINDINGS 2026-11-10: the
+  same retrieval at about a quarter of the cost).
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, bm25 and vector, not yet for regex; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.

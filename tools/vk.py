@@ -33,6 +33,7 @@ in the check-in's body, not in the frame.
 import argparse
 import collections
 import datetime
+import difflib
 import fnmatch
 import json
 import os
@@ -323,26 +324,58 @@ as blank lines between them, may be left out.
 
 {numbered}"""
 
-CARRY = """Below are two versions of the file {path}, each with numbered lines, and the outline of the
-previous version. Write the outline of the new version.
+CARRY = """Below are the outline of the previous version of the file {path}, and the changes from it to the new
+version as a diff. In the diff, each line shows a line number and a mark: "+" a line of the new version that is new,
+"-" a line of the previous version that was removed (its number is the previous version's), " " an unchanged line
+of the new version, shown for context. The new version has {n} lines; lines not shown are unchanged, shifted by the
+lines added or removed above them.
 
-Prefer to leave the outline the same: keep each node's title, its place in the outline and its
-children, and move its line numbers to where that text now is. Change the outline only to reflect a
-change in structure (a concept added, removed, moved, split or merged) or text rewritten whole cloth.
-Do not split or merge anything because of its length.
+Write the outline of the new version. Prefer to leave the outline the same: keep each node's title, its place and
+its children, and move its line numbers to where that text now is. Change the outline only where the changes alter
+structure (a concept added, removed, moved, split or merged) or rewrite text whole cloth. Do not split or merge
+anything because of its length.
 
 Answer with only JSON: the whole outline of the new version, a list of top-level nodes, each
 {{"title": "<a short name for the concept>", "start": <first line>, "end": <last line>, "children": [<nodes>]}}.
 Line numbers are the new version's.
 
-Outline of the previous version:
+Outline of the previous version (the previous version's line numbers):
 {outline}
 
-Previous version:
-{prev}
+Changes:
+{diff}"""
 
-New version:
-{new}"""
+
+def numbered_diff(a, b):
+    """The diff of two versions' lines (str, no endings), numbered: the new version's numbers for added and
+    context lines, the previous version's for removed ones. Only the hunks, with 3 lines of context: an
+    update costs about the size of the change, not of the file (FINDINGS 2026-11-10)."""
+    out = []
+    for group in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_grouped_opcodes(3):
+        out.append("@@")
+        for op, a1, a2, b1, b2 in group:
+            if op == "equal":
+                out += [f"{j + 1} {b[j]}" for j in range(b1, b2)]
+            if op in ("delete", "replace"):
+                out += [f"{i + 1}- {a[i]}" for i in range(a1, a2)]
+            if op in ("insert", "replace"):
+                out += [f"{j + 1}+ {b[j]}" for j in range(b1, b2)]
+    return "\n".join(out)
+
+
+def changed_new_lines(a, b):
+    """The new version's line numbers (1-based) that are new, or that border a removal."""
+    out = set()
+    for op, a1, a2, b1, b2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op in ("insert", "replace"):
+            out.update(range(b1 + 1, b2 + 1))
+        if op == "delete":
+            out.update({max(1, b1), b1 + 1})
+    return out
+
+
+def str_lines(body):
+    return [ln.rstrip("\n").rstrip("\r") for ln in body.decode("utf-8", "replace").split("\n")]
 
 
 
@@ -439,10 +472,10 @@ def outline_answer(judge, ask, r, prev):
     if not lines:
         return "empty"
     path = r.akey.decode("utf-8", "replace")
-    if prev is not None:
+    if prev is not None:   # the previous outline and the diff; neither version whole
         plines = text_lines(prev[0].body) or []
-        prompt = CARRY.format(path=path, outline=json.dumps(to_lines(prev[1], plines), indent=1),
-                              prev=numbered(plines), new=numbered(lines))
+        prompt = CARRY.format(path=path, n=len(lines), outline=json.dumps(to_lines(prev[1], plines), indent=1),
+                              diff=numbered_diff(str_lines(prev[0].body), str_lines(r.body)))
     else:
         prompt = FIRST.format(path=path, numbered=numbered(lines))
     tree = line_tree(ask(prompt), len(lines))
@@ -460,7 +493,7 @@ def outline_write(store, judge, r, prev, got):
     t = now_utc()
     try:
         store.put(b"outline", key, body, ts=t.isoformat().encode(), rank=rank_of(t.timestamp()),
-                  reference=r.id, derived_from=derived)
+                  reference=r.id, derived_from=derived, chain=True)   # a redo supersedes (OL-2), never forks
     except vk.VkError as e:
         return f"refused: {e}"
     return "written"
@@ -499,7 +532,8 @@ def skipped(akey, skip):
     return any(a == s or a.startswith(s.rstrip("/") + "/") for s in skip)
 
 
-def cmd_outline(store, repo, judge_name, history, limit, cmd, skip=(), jobs=4):
+def cmd_outline(store, repo, judge_name, history, limit, cmd, skip=(), jobs=4, redo=()):
+    """redo: files whose current version is outlined again, from its predecessor's outline, though it has one."""
     model, judge = JUDGES[judge_name]
     cmd = cmd or f"claude -p --model {model} --tools \"\" --no-session-persistence --output-format text"
     tally, due = collections.Counter(), []
@@ -507,7 +541,7 @@ def cmd_outline(store, repo, judge_name, history, limit, cmd, skip=(), jobs=4):
         if skipped(r.akey, skip):
             continue
         st, _ = store.current(vk.outline_key(r.id, judge))
-        if st in (vk.OK, vk.FORKED):
+        if st in (vk.OK, vk.FORKED) and not skipped(r.akey, redo):
             tally["already outlined"] += 1
             continue
         lines = text_lines(r.body)
@@ -823,8 +857,10 @@ def entry_lines(body):
     return out
 
 
-def cmd_embed(store, repo, judge, skip=(), librarian=LIBRARIANS["sonnet"][1]):
-    """Vectors of every outline node of the current files, and of librarian's entries (no one else's)."""
+def cmd_embed(store, repo, judge, skip=(), librarian=LIBRARIANS["sonnet"][1], only=()):
+    """Vectors of every outline node of the current files, and of librarian's entries (no one else's). A body's
+    vectors are dropped first, so spans of an outline it no longer has do not linger. only: these files and
+    their entries alone. Every run embeds afresh; skipping unchanged bodies is not built."""
     import vkembed
     emb = vkembed.Embedder(MODEL_DIR)
     model, n, rows, empty = vector_model(emb, judge), 0, 0, 0
@@ -833,6 +869,9 @@ def cmd_embed(store, repo, judge, skip=(), librarian=LIBRARIANS["sonnet"][1]):
         for r in text_heads(store, {b"file", b"qa"}, repo, skip):
             if r.kind == b"qa" and r.author != librarian:
                 continue
+            if only and not skipped(r.akey.decode("utf-8", "replace").removeprefix("qa/").split("#", 1)[0], only):
+                continue
+            store.vector_drop(r.id, model)
             if r.kind == b"qa":
                 for lo, hi in entry_lines(r.body):
                     text = r.body[lo:hi].decode("utf-8", "replace").split(": ", 1)[1]
@@ -879,74 +918,163 @@ def entry_body(path, node, lines_of, e):
                       f"Summary: {' '.join(str(e.get('summary', '')).split())}"] + [f"Q: {q}" for q in qs]).encode()
 
 
+EXCERPT_PROMPT = """You are the librarian of a software project's repository. The file {path} has changed. Below are
+the nodes of its outline whose own text the change touched, or that are new, each with its text (numbered lines of
+the new version) and the entry it had before, if any. For each node, write its entry afresh:
+- "summary": two or three sentences on what that concept says, decides or warns about, naming its identifiers;
+- "questions": three to six questions a developer would ask that this node answers. Word most of them as someone
+  who has not read the file would ask, in their own terms, and some with the file's own names.
+Prefer to keep the previous entry where its meaning still holds.
+Answer with only JSON: {{"<node number>": {{"summary": "...", "questions": ["...", "..."]}}, ...}}
+
+{nodes}
+"""
+
+
 def has_entry(store, r, node):
     """The node already has an entry made from this version of its file."""
     head = store.head_id(b"qa/" + r.akey + f"#{node['lo']}-{node['hi']}".encode())
     return head is not None and r.id in (store.get(head).derived_from or [])
 
 
+def titles_of(node):
+    return " > ".join(node["path"]) or "(outside every section)"
+
+
+def entries_by_file(store, librarian):
+    """{file akey: {titles: record}}: every current, non-empty entry by librarian."""
+    out = {}
+    for r in store.walk():
+        if r.kind != b"qa" or r.author != librarian or not r.body or not store.standing(r.akey, r.id)[0]:
+            continue
+        head = r.body.split(b"\n", 1)[0].decode("utf-8", "replace")
+        out.setdefault(r.akey[3:].rsplit(b"#", 1)[0], {})[head.split(": ", 1)[1] if ": " in head else ""] = r
+    return out
+
+
+def parse_entry(body):
+    text = body.decode("utf-8", "replace")
+    summ = next((l[9:] for l in text.split("\n") if l.startswith("Summary: ")), "")
+    return {"summary": summ, "questions": [l[3:] for l in text.split("\n") if l.startswith("Q: ")]}
+
+
 def cmd_librarian(store, repo, name, judge, limit, cmd, skip=(), jobs=4):
-    """LIB-1: for each current file outlined by judge, one entry per node, written by the librarian model."""
+    """LIB-1: an entry for every outline node of each current file. A file whose previous version has entries is
+    updated: only the nodes whose own text changed, or that are new, are asked about, from their own text; the
+    rest are carried to their new spans with no call, and the entries of nodes that went are retired. A file
+    with no entries yet is sent whole (FINDINGS 2026-11-10: an update this way costs a fifth)."""
     model, principal = LIBRARIANS[name]
     cmd = cmd or f"claude -p --model {model} --tools \"\" --no-session-persistence --output-format text"
-    todo, no_outline = [], 0
+    held = entries_by_file(store, principal)
+    plans, no_outline = [], 0
     for r in text_heads(store, {b"file"}, repo, skip):
-        okey = vk.outline_key(r.id, judge)
-        oid = store.head_id(okey)
+        oid = store.head_id(vk.outline_key(r.id, judge))
         if oid is None:
             no_outline += 1
             continue
         nodes = [n for n in outline_nodes(store, judge, r) if own_text(r.body, n).strip()]
-        due = [n for n in nodes if not has_entry(store, r, n)]
-        if due:
-            todo.append((r, oid, due))
-    if limit is not None:
-        todo = todo[:limit]
-    jobs_list = []
-    for r, oid, due in todo:
+        if all(has_entry(store, r, n) for n in nodes):
+            continue
+        cur = held.get(r.akey, {})
+        prev = next((p for p in (store.get(i) for i in r.supersedes) if p and p.kind == b"file" and p.body), None)
         lines = text_lines(r.body)
         starts = [0]
         for ln in lines:
             starts.append(starts[-1] + len(ln))
         import bisect
 
-        def lines_of(n, starts=starts):
-            return bisect.bisect_right(starts, n["lo"]), max(1, bisect.bisect_left(starts, n["hi"]))
-        for i in range(0, len(due), NODES_PER_CALL):
-            jobs_list.append((r, oid, due[i:i + NODES_PER_CALL], lines, lines_of))
+        def line_no(off, starts=starts):
+            return bisect.bisect_right(starts, off)
 
-    def ask(job):
-        r, oid, group, lines, lines_of = job
-        listing = "\n".join(f"{k}. {' > '.join(n['path']) or '(text outside every section)'} (lines {lines_of(n)[0]}-"
-                            f"{lines_of(n)[1]})" for k, n in enumerate(group, 1))
-        prompt = LIBRARIAN_PROMPT.format(path=r.akey.decode(), numbered=numbered(lines), nodes=listing)
+        def lines_of(n, line_no=line_no):
+            return line_no(n["lo"]), max(1, line_no(max(n["lo"], n["hi"] - 1)))
+        if cur and prev is not None:
+            changed = changed_new_lines(str_lines(prev.body), str_lines(r.body))
+            ask = [n for n in nodes if titles_of(n) not in cur or
+                   any(line_no(a) <= x <= line_no(max(a, b - 1)) for a, b in n["own"] for x in changed)]
+        else:
+            ask = nodes
+        plans.append({"r": r, "oid": oid, "nodes": nodes, "ask": ask, "cur": cur, "lines": lines,
+                      "lines_of": lines_of, "line_no": line_no, "excerpt": bool(cur and prev is not None)})
+    if limit is not None:
+        plans = plans[:limit]
+    calls = []
+    for pl in plans:
+        for i in range(0, len(pl["ask"]), NODES_PER_CALL):
+            calls.append((pl, pl["ask"][i:i + NODES_PER_CALL]))
+
+    def ask(call):
+        pl, group = call
+        r = pl["r"]
+        if pl["excerpt"]:
+            parts = []
+            for k, n in enumerate(group, 1):
+                text = "".join(f"{pl['line_no'](a) + j}\t{ln}\n" for a, b in n["own"]
+                               for j, ln in enumerate(r.body[a:b].decode("utf-8", "replace").splitlines()))
+                old = pl["cur"].get(titles_of(n))
+                parts.append(f"=== node {k}: {titles_of(n)} (lines {pl['lines_of'](n)[0]}-{pl['lines_of'](n)[1]}) ===\n"
+                             + text + (f"\nPrevious entry: {json.dumps(parse_entry(old.body))}" if old else ""))
+            prompt = EXCERPT_PROMPT.format(path=r.akey.decode(), nodes="\n\n".join(parts))
+        else:
+            listing = "\n".join(f"{k}. {titles_of(n)} (lines {pl['lines_of'](n)[0]}-{pl['lines_of'](n)[1]})"
+                                for k, n in enumerate(group, 1))
+            prompt = LIBRARIAN_PROMPT.format(path=r.akey.decode(), numbered=numbered(pl["lines"]), nodes=listing)
         try:
-            return job, ask_judge(cmd, prompt)
+            return call, ask_judge(cmd, prompt)
         except (vk.VkError, subprocess.TimeoutExpired) as e:
             print(f"  {r.akey.decode()}: the librarian failed: {e}", file=sys.stderr)
-            return job, ""
+            return call, ""
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
-        answers = list(pool.map(ask, jobs_list))
-    written = missing = 0
-    for (r, oid, group, lines, lines_of), answer in answers:
+        answers = list(pool.map(ask, calls))
+    fresh = {}
+    missing = 0
+    for (pl, group), answer in answers:
         m = re.search(r"\{.*\}", answer, re.S)
         try:
             got = json.loads(m.group(0)) if m else {}
         except json.JSONDecodeError:
             got = {}
         for k, n in enumerate(group, 1):
-            e = got.get(str(k))
-            if not isinstance(e, dict):
+            if isinstance(got.get(str(k)), dict):
+                fresh[(id(pl), titles_of(n))] = got[str(k)]
+            else:
                 missing += 1
-                continue
-            t = now_utc()
-            store.put(b"qa", b"qa/" + r.akey + f"#{n['lo']}-{n['hi']}".encode(), entry_body(r.akey.decode(), n, lines_of, e),
-                      ts=t.isoformat().encode(), rank=rank_of(t.timestamp()), reference=r.id.hex().encode(),
-                      derived_from=[r.id, oid], chain=True)
-            written += 1
-    print(f"librarian {principal.decode()}: {written} node entries written, {missing} nodes unanswered, "
-          f"{len(jobs_list)} calls over {len(todo)} files; {no_outline} files have no outline by {judge.decode()}")
+    asked = carried = retired = 0
+    for pl in plans:
+        r, used = pl["r"], set()
+        for n in pl["nodes"]:
+            t = titles_of(n)
+            e = fresh.get((id(pl), t))
+            if e is None and n in pl["ask"]:
+                continue   # asked and unanswered: left for a later run
+            old = pl["cur"].get(t)
+            if e is None:
+                if old is None:
+                    continue
+                e, carried = parse_entry(old.body), carried + 1
+            else:
+                asked += 1
+            key = b"qa/" + r.akey + f"#{n['lo']}-{n['hi']}".encode()
+            used.add(t)
+            t0 = now_utc()
+            # Supersession acts within one akey (R-1a): the entry chains on its node's key, and if the node moved,
+            # the key it had is retired by an empty entry. The old entry is named as a source either way.
+            store.put(b"qa", key, entry_body(r.akey.decode(), n, pl["lines_of"], e), ts=t0.isoformat().encode(),
+                      rank=rank_of(t0.timestamp()), reference=r.id.hex().encode(),
+                      derived_from=[r.id, pl["oid"]] + ([old.id] if old else []), chain=True)
+            if old is not None and old.akey != key and store.standing(old.akey, old.id)[0]:
+                store.put(b"qa", old.akey, b"", ts=t0.isoformat().encode(), rank=rank_of(t0.timestamp()),
+                          reference=r.id.hex().encode(), derived_from=[r.id, old.id], chain=True)
+        for t, old in pl["cur"].items():
+            if t not in used and store.standing(old.akey, old.id)[0]:
+                t0 = now_utc()   # the node went: its entry is retired by an empty one, and stays readable before it
+                store.put(b"qa", old.akey, b"", ts=t0.isoformat().encode(), rank=rank_of(t0.timestamp()),
+                          reference=r.id.hex().encode(), derived_from=[r.id, pl["oid"]], chain=True)
+                retired += 1
+    print(f"librarian {principal.decode()}: {asked} node entries written, {carried} carried, {retired} retired, "
+          f"{missing} nodes unanswered, {len(calls)} calls over {len(plans)} files; "
+          f"{no_outline} files have no outline by {judge.decode()}")
     return 0
 
 
@@ -958,6 +1086,8 @@ def node_key(store, id_, node, cache):
     if r is None:
         return None
     if r.kind == b"qa":
+        if not r.body or not store.standing(r.akey, r.id)[0]:
+            return None   # superseded or retired
         path, span = r.akey[3:].decode().rsplit("#", 1)
         lo, hi = span.split("-")
         return (path, int(lo), int(hi))
@@ -1062,6 +1192,8 @@ def main(argv):
     ol.add_argument("--limit", type=int, help="at most this many judge calls this run")
     ol.add_argument("--judge-cmd", help="the command that answers a prompt on stdin (default: the claude CLI)")
     ol.add_argument("--skip", action="append", default=[], metavar="PATH", help="a file or directory, as repo/path")
+    ol.add_argument("--redo", action="append", default=[], metavar="PATH",
+                    help="outline this file's current version again, from its predecessor's outline")
     ol.add_argument("--jobs", type=int, default=4, help="judge calls in parallel (with --history, one at a time)")
     it = sub.add_parser("ingest-transcript", help="a conversation's messages into its log (SCM-7)")
     it.add_argument("path", nargs="?")
@@ -1075,6 +1207,7 @@ def main(argv):
     em.add_argument("--repo")
     em.add_argument("--judge", choices=sorted(JUDGES), default="sonnet", help="whose outlines set the units")
     em.add_argument("--skip", action="append", default=[], metavar="PATH")
+    em.add_argument("--only", action="append", default=[], metavar="PATH", help="these files and their entries alone")
     lb = sub.add_parser("librarian", help="a model writes a summary and questions for every outline node (LIB-1)")
     lb.add_argument("--repo")
     lb.add_argument("--model", choices=sorted(LIBRARIANS), default="sonnet")
@@ -1136,7 +1269,7 @@ def main(argv):
         if args.cmd == "coverage":
             return cmd_coverage(store)
         if args.cmd == "embed":
-            return cmd_embed(store, args.repo, JUDGES[args.judge][1], args.skip)
+            return cmd_embed(store, args.repo, JUDGES[args.judge][1], args.skip, only=args.only)
         if args.cmd == "librarian":
             return cmd_librarian(store, args.repo, args.model, JUDGES[args.judge][1], args.limit, args.judge_cmd,
                                  args.skip, args.jobs)
@@ -1144,7 +1277,7 @@ def main(argv):
             return cmd_ask(store, args.text, args.k, JUDGES[args.judge][1], not args.no_entries)
         if args.cmd == "outline":
             return cmd_outline(store, args.repo, args.judge, args.history, args.limit, args.judge_cmd, args.skip,
-                               args.jobs)
+                               args.jobs, args.redo)
         if args.cmd == "ingest-transcript":
             path, session = args.path, args.session
             if args.hook:

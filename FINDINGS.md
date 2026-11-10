@@ -11,6 +11,31 @@ expectation -- re-run the command before quoting the number. Where a later
 measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
+## The diff update, built into vk.py, retrieves as well as a whole-file update at about a quarter of the cost (2026-11-10)
+
+`vk.py outline` now updates an outline from the previous outline and the diff. `vk.py librarian` re-asks only the
+nodes whose own text changed, or that are new, carries the rest to their new spans, and retires the entries of
+nodes that went. The retrieval check `PLAN-cost.md` required, from `test/librarian/retest_d3.py`: two copies of the
+diary with the same 13 files set to the same starting state (the previous version's outline and entries). One is
+updated by vk.py's diff path, the other by today's whole-file path (W, from cost.py's cached answers). Both are
+scored by eval.py.
+
+| questions | n | W | D3 | D3 better / worse |
+| --------- | - | - | -- | ----------------- |
+| answer in the 13 updated files (node MRR) | 19 | 0.320 | 0.324 | 7 / 2, p = 0.18 |
+| same, file MRR | 19 | 0.419 | 0.452 | 5 / 1 |
+| answer elsewhere (node MRR) | 11 | 0.429 | 0.431 | 1 / 1 |
+
+- **Retrieval is the same**, by the plan's test. The update cost $1.74, including 3 files outlined for the first
+  time (their answers had not parsed before). The whole-file path for the 13 costs about $7.70.
+- **The first comparison, against the diary's own whole-file outlines, was unfair:** it showed 0.403 against
+  0.324. Those outlines came from a different whole-file run from the starting state's. W from the same start
+  scores 0.320 too, so the gap was the starting outline, not the update. In FINDINGS.md the starting outline had
+  118 nodes, against 174. Run-to-run outline variance moves these scores more than the update method does.
+- **Built along the way:** `vk_vector_drop` in core (a body's vectors are dropped before it is embedded afresh).
+  Entries chain on their node's key and retire the key they leave, because supersession acts within one akey
+  (R-1a). And the outline test's fake judge had passed on an empty outline, until the test looked inside it.
+
 ## A librarian update from the diff costs a fifth of a whole-file one, with the same outlines (2026-11-10)
 
 `test/librarian/cost.py`; plan and counter-results first in `PLAN-cost.md`. 13 current files in viki and the

@@ -197,6 +197,10 @@ extern const VkSearchMethod vkVector;
 VkStatus vk_vector_put(VkStore *p, const VkId target, VkBytes model, uint32_t lo, uint32_t hi,
                        const float *v, uint32_t dim);
 void vk_use_vectors(VkStore *p, VkBytes model);   /* model is borrowed */
+/* Deletes every vector of target's body under model: what a host does before
+** embedding a body afresh, when its units changed (a new outline). VK_OK
+** whether or not there were any; VK_NOTFOUND if target is not held. */
+VkStatus vk_vector_drop(VkStore *p, const VkId target, VkBytes model);
 
 /* OL-4: whose outlines this store's searches use; author is borrowed. Empty,
 ** the default: none, and every hit is a whole assertion. A target with no

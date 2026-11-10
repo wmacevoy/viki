@@ -1300,6 +1300,13 @@ static void t_q6_vector(void){
     CHECK( vec_hits(p,q1,3,h,8,br,0,&st)==-1 && st==VK_BLIND );              /* another model's vectors are not these */
     vk_use_vectors(p.st,B("m1"));
 
+    CHECK( vk_vector_put(p.st,ib,B("m2"),0,3,va,3)==VK_OK );                 /* another model's, kept below */
+    CHECK( vk_vector_drop(p.st,ib,B("m1"))==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec WHERE model=CAST('m1' AS BLOB)")==2 );   /* ib's m1 went */
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==3 );                       /* m2's stayed */
+    CHECK( vk_vector_drop(p.st,ib,B("m1"))==VK_OK );                          /* again: nothing to drop */
+    CHECK( vk_vector_drop(p.st,t,B("m1"))==VK_NOTFOUND );
+    CHECK( vk_vector_put(p.st,ib,B("m1"),4,7,vb,3)==VK_OK );
     memset(&rep,0,sizeof rep);
     CHECK( vk_merge(q.st,p.st,&rep)==VK_OK && rep.added==3 );
     CHECK( rows(q,"SELECT count(*) FROM vk_vec")==0 );                       /* a projection: not merged (M-5) */
@@ -1307,10 +1314,10 @@ static void t_q6_vector(void){
     CHECK( vk_erase(p.st,ia,B("t"),gRank0,t)==VK_OK );
     n = vec_hits(p,q1,3,h,8,br,0,&st);
     CHECK( n==2 && id_eq(h[0].id,ic) );                                      /* erased: its vector went (W-3) */
-    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==2 );
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==3 );
     CHECK( vk_vector_put(p.st,ia,B("m1"),0,1,va,3)==VK_NOTFOUND );           /* and none can be made of it */
     CHECK( vk_forget(p.st,B("chat"),B("alice"),1,1,B("t"),gRank0,t)==VK_OK );
-    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==1 );                       /* forgotten: gone with the row */
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==2 );                       /* forgotten: gone with the row */
     drop(p); drop(q);
 }
 static void t_ol4(void){

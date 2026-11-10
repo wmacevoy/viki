@@ -3,6 +3,7 @@
 Each repository is built here with fixed names and dates, so a run repeats
 exactly. Prints PASS/FAIL lines in the form core/test/gate.py reads.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -310,15 +311,23 @@ log = os.environ.get("VK_FAKE_LOG")
 if log:
     with open(log, "a") as f:
         f.write("CARRY\n" if "Outline of the previous version" in prompt else "FIRST\n")
-block = prompt.split("New version:\n", 1)[1] if "New version:\n" in prompt else prompt
-lines = [ln for ln in block.splitlines() if re.match(r"^\d+\t", ln)]
+if "Changes:\n" in prompt:   # an update: the diff's new-version lines, "N text" or "N+ text"
+    block = prompt.split("Changes:\n", 1)[1]
+    lines = [re.sub(r"^(\d+)\+? ", r"\1\t", ln) for ln in block.splitlines() if re.match(r"^\d+\+? ", ln)]
+else:
+    lines = [ln for ln in prompt.splitlines() if re.match(r"^\d+\t", ln)]
 nodes = []
 for ln in lines:
     n, text = ln.split("\t", 1)
     if text.startswith("#"):
         nodes.append({"title": text.lstrip("# ").strip(), "start": int(n), "children": []})
+if "Changes:\n" in prompt:   # keep the previous outline's nodes the diff does not show (this edit only appends)
+    prev = json.loads(prompt.split("line numbers):\n", 1)[1].split("\n\nChanges:", 1)[0])
+    seen = {nd["title"] for nd in nodes}
+    nodes = sorted([{**p, "children": []} for p in prev if p["title"] not in seen] + nodes, key=lambda nd: nd["start"])
+last = max(int(ln.split("\t")[0]) for ln in lines)
 for i, nd in enumerate(nodes):
-    nd["end"] = nodes[i + 1]["start"] - 1 if i + 1 < len(nodes) else int(lines[-1].split("\t")[0])
+    nd["end"] = nodes[i + 1]["start"] - 1 if i + 1 < len(nodes) else last
 print("Here is the outline:\n" + json.dumps(nodes))
 """
 
@@ -359,6 +368,9 @@ def t_ol_cmd(s):
         outlines = [r for r in st.walk() if r.kind == b"outline"]
         check(len(outlines) == 2 and sorted(len(r.derived_from) for r in outlines) == [1, 2],
               "the carried outline names the one it carried (OL-3)")
+        carried = max(outlines, key=lambda r: len(r.derived_from))
+        titles = [n["title"] for n in json.loads(carried.body)]
+        check(titles == ["Alpha", "Beta", "Gamma"], "the update is made from the diff, and holds the new section", str(titles))
     finally:
         st.close()
     s.store = os.path.join(s.root, "limit.db")
@@ -370,10 +382,14 @@ def t_ol_cmd(s):
 FAKE_LIBRARIAN = r"""
 import json, os, re, sys
 prompt = sys.stdin.read()
-path = re.search(r"^File (.+):$", prompt, re.M).group(1)
+if "has changed" in prompt:   # an update: excerpts of the nodes whose own text changed
+    path = re.search(r"The file (\S+) has changed", prompt).group(1)
+    nodes = re.findall(r"^=== node (\d+): (.+?) \(lines", prompt, re.M)
+else:
+    path = re.search(r"^File (.+):$", prompt, re.M).group(1)
+    nodes = re.findall(r"^(\d+)\. (.+?) \(lines", prompt.split("Outline nodes:", 1)[1], re.M)
 with open(os.environ["VK_FAKE_LOG"], "a") as f:
-    f.write(path + "\n")
-nodes = re.findall(r"^(\d+)\. (.+?) \(lines", prompt.split("Outline nodes:", 1)[1], re.M)
+    f.write(("UPDATE " if "has changed" in prompt else "WHOLE ") + path + " " + ",".join(t for _, t in nodes) + "\n")
 print(json.dumps({n: {"summary": "a summary", "questions": [f"where is the {t.lower()} part kept?", "marker definition"]}
                   for n, t in nodes}))
 """
@@ -410,6 +426,28 @@ def t_librarian(s):
     s.vk("embed")
     rc, out = s.vk("ask", "where is the more part kept?")
     check(rc == 0 and "[1] alpha/notes.md  bytes 27-45" in out, "an entry's hit returns its node", out)
+    # an update: the More section's text changes, a new section is added; Notes is untouched
+    s.write(a, "notes.md", "# Notes\nthe marker is here\n# More\nmore words, now rewritten\n# Late\nadded later\n")
+    s.commit(a, "two")
+    s.vk("ingest-git", a)
+    s.vk("outline", "--skip", "alpha/plain.md", "--judge-cmd", jcmd)
+    open(log, "w").close()
+    rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
+    check(rc == 0 and "2 node entries written, 1 carried, 0 retired" in out,
+          "an update asks only the changed and new nodes; the untouched one is carried", out)
+    with open(log) as f:
+        sent = f.read()
+    check(sent.strip() == "UPDATE alpha/notes.md More,Late", "only their own text is sent, not the whole file", sent)
+    # a section goes: its entry is retired, not left current
+    s.write(a, "notes.md", "# Notes\nthe marker is here\n# Late\nadded later\n")
+    s.commit(a, "three")
+    s.vk("ingest-git", a)
+    s.vk("outline", "--skip", "alpha/plain.md", "--judge-cmd", jcmd)
+    rc, out = s.vk("librarian", "--skip", "alpha/questions.tsv", "--judge-cmd", cmd)
+    check(rc == 0 and "1 retired" in out, "the entry of a node that went is retired", out)
+    s.vk("embed")
+    rc, out = s.vk("ask", "where is the more part kept?")
+    check(rc == 0 and "bytes 27-45" not in out, "a retired entry is not returned", out)
 
 
 MODEL_DIR = os.environ.get("VIKI_MODEL_DIR", "/opt/viki-bin/model")
