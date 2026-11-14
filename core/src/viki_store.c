@@ -697,8 +697,10 @@ VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
     p->grants = grants; p->nGrants = nGrants;
     rc = sqlite3_create_function(db, "vk_rights", 1, SQLITE_UTF8, p, rights_func, 0, 0);
     if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_body", 2, SQLITE_UTF8, p, body_func, 0, 0);
+#ifndef VK_OMIT_VECTOR   /* ENV-3: built without core/src/viki_vector.c */
     if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_cosine", 2, SQLITE_UTF8|SQLITE_DETERMINISTIC, 0,
                                                      vk_cosine_func, 0, 0);
+#endif
     if( rc==SQLITE_OK ) rc = vk_regexp_register(db);
     if( rc==SQLITE_OK ) rc = exec_schema(p);
     if( rc==SQLITE_OK ) rc = ensure_dbase(p);
@@ -1576,6 +1578,15 @@ static int row_shape_ok(sqlite3_stmt *pRow){
         && sqlite3_column_type(pRow, 8)==SQLITE_BLOB && sqlite3_column_bytes(pRow, 8)==VK_ID_BYTES
         && sqlite3_column_bytes(pRow, 12)%VK_ID_BYTES==0
         && sqlite3_column_bytes(pRow, 12)<=VK_MAX_SKIP*VK_ID_BYTES;
+}
+
+VkStatus vk_derivatives(VkStore *p, const VkId id, VkCursor *c){
+    /* edge's key starts (parent, rel), so this is an index range. */
+    VkStatus st = cursor_prepare(p,
+        "SELECT " VK_ROW_COLUMNS " FROM edge e JOIN assertion a ON a.seq=e.child_seq"
+        " WHERE e.parent=?1 AND e.rel=1 AND " VK_VALID("a") " ORDER BY a.seq", c);
+    if( st==VK_OK ) sqlite3_bind_blob(c->pRow, 1, id, VK_ID_BYTES, SQLITE_TRANSIENT);
+    return st;
 }
 
 VkStatus vk_cursor_next(VkCursor *c){

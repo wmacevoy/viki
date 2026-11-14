@@ -424,6 +424,19 @@ def ingested(store):
     return out
 
 
+# V-5: what a diary holds is someone else's text, and a terminal runs the escape sequences it
+# is sent (OSC 52 writes the clipboard). Every body, path, title or ref is printed through
+# printable(), which spells out control characters and the bidi overrides instead of sending them.
+_ESCAPED = {c: f"\\x{c:02x}" for c in [*range(0x20), *range(0x7f, 0xa0)] if c != 0x09}
+_ESCAPED.update({c: f"\\u{c:04x}" for c in [*range(0x202a, 0x202f), *range(0x2066, 0x206a)]})
+
+
+def printable(text):
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    return text.translate(_ESCAPED)
+
+
 def snippet(body, words, pattern=None):
     """The first line holding any of the words, compared without case. For regex, the first line
     Python's re matches: display only, since its dialect is close to regexp.c's but not the same."""
@@ -441,7 +454,7 @@ def snippet(body, words, pattern=None):
     start = body.rfind(b"\n", 0, at) + 1
     end = body.find(b"\n", at)
     line = body[start:end if end >= 0 else len(body)]
-    return line[:160].decode("utf-8", "replace").strip()
+    return printable(line[:160].decode("utf-8", "replace").strip())
 
 
 def standing_of(store, r):
@@ -489,18 +502,18 @@ def cmd_search(store, text, repo, method, show_all, k):
         if k is not None and shown >= k:
             continue
         shown += 1
-        print(f"{r.kind.decode()}  {r.reference.decode('utf-8', 'replace') or akey}  {i.hex()[:12]}  [{where}]")
+        print(f"{printable(r.kind)}  {printable(r.reference) or printable(akey)}  {i.hex()[:12]}  [{where}]")
         body = r.body
         if node:   # OL-4: the smallest node of the chosen outline holding the match
             path, lo, hi, _ = node
-            print(f"    in: {' > '.join(path) or '(outside every section)'}  bytes {lo}-{min(hi, len(body))}")
+            print(f"    in: {printable(' > '.join(path)) or '(outside every section)'}  bytes {lo}-{min(hi, len(body))}")
             body = body[lo:hi]
         print(f"    {snippet(body, words, pattern)}")
     scope = [repo] if repo is not None else sorted(seen)
     reach = "exhaustive" if cov["exhaustive"] else f"ranked, so not-found covers only these {matched} matches"
     whole = f", {cov['whole']} of them searched whole" if store_outlines(store) else ""
     print(f"coverage: {cov['method']}, {reach}, over {cov['searched']} assertions{whole}; repositories: "
-          + ", ".join(f"{n} ({len(seen[n]['refs'])} refs)" for n in scope))
+          + ", ".join(f"{printable(n)} ({len(seen[n]['refs'])} refs)" for n in scope))
     print(f"shown {shown} of {matched} matches; {hidden} superseded versions hidden"
           + ("" if show_all else " (--all shows them)"))
     return 0 if matched else 1
@@ -512,10 +525,10 @@ def cmd_coverage(store):
         print("nothing ingested")
         return 1
     for name, rec in sorted(seen.items()):
-        print(f"{name}: {rec['dir']}, {rec['commits']} commits, {len(rec['refs'])} refs, "
+        print(f"{printable(name)}: {printable(rec['dir'])}, {rec['commits']} commits, {len(rec['refs'])} refs, "
               f"{rec['refused_holdout']} holdout paths refused, {rec['ignored']} ignored, rules {rec['rules']}")
         for ref, sha in sorted(rec["refs"].items()):
-            print(f"    {ref} {sha[:12]}")
+            print(f"    {printable(ref)} {printable(sha[:12])}")
     return 0
 
 
@@ -527,7 +540,7 @@ def cmd_heads(store, name):
     if st == vk.FORKED:
         print(f"{name}: forked -- more than one head")
         return 0
-    print(f"{name}: one head, {json.loads(body)['git']}")
+    print(f"{printable(name)}: one head, {printable(json.loads(body)['git'])}")
     return 0
 
 

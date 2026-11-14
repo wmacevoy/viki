@@ -167,7 +167,11 @@ VkStatus vk_search_hit(VkSearch *s, VkHit *out){
 VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out){
     sqlite3_stmt *pSt = 0;
     VkStatus st = VK_OK;
+#ifndef VK_OMIT_VECTOR   /* ENV-3 */
     int bVec = s->pMethod==&vkVector;
+#else
+    int bVec = 0;
+#endif
     int rc = vk_prepare(s->p, bVec
         ? "SELECT count(*), 0 FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a")
           " AND EXISTS(SELECT 1 FROM vk_vec v WHERE v.seq=a.seq AND v.model=?1)"

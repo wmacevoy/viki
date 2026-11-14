@@ -139,6 +139,13 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   a short id was read past (inside SQLite's page buffer, where ASan does not see it). The cursor now
   refuses such a row too, which is what `vk_verify` and `vk_get` meet on a tampered store. A row of
   the right shape whose frame does not make its id is still quarantined, row by row (M-7).
+- **A build without vectors (ENV-3)** leaves out `src/viki_vector.c` and defines `VK_OMIT_VECTOR`,
+  which drops `vk_cosine`'s registration and the vector branch of coverage. A flag, not lazy
+  registration at search time: SQLite refuses to redefine a function while any statement runs, so
+  registering at first use would fail whenever the host held a cursor open.
+- **`vk_derivatives` reads V-1's other direction**: the rows whose `derived_from` names an id, by the
+  `edge` key `(parent, rel)`. `edge` is filled from each frame as it is stored, never copied from a
+  source (V-1a).
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
 
@@ -165,6 +172,10 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   timing are visible.
 - **Superseded versions are hidden by default, and the number hidden is said.** Without that, a phrase
   that lived through ten commits returned ten rows. `--all` shows them, each marked (Q-4).
+- **Everything printed from the diary goes through `printable()`** (V-5): bodies, paths, outline
+  titles, refs and names are someone else's text, and a terminal runs the escape sequences it is sent
+  (OSC 52 writes the clipboard). Control characters and the bidi overrides are spelled out as `\xNN`
+  and `\uNNNN`, tab excepted.
 - **`find` ranks whole files.** Nothing is chunked, so a long document that mentions every query word
   in passing outranks a short one that answers. Common words match nearly everything, and the snippet
   is the first line holding any query word, not the best one.
@@ -212,6 +223,11 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   implementation is the point. Faults and memory stay in C, because they need the test build.
 - `tools/test_vk.py`: the host against scratch git repositories, with fixed names and dates. It is
   run by the same check.
+- `test/build-check.sh`: what a build contains, read from its objects. C-1: core imports no clock
+  function and its SQL asks SQLite for no time. ENV-3: core links without vectors into a program
+  that stores and searches (`test/novector.c`), and no object references an embedding runtime.
+- `test/refusal-check.py`: E-3, read from the source. Every literal that can reach `vk_refuse` begins
+  with a requirement ID, and `vk_refuse` is given nothing but a literal or `zBad`.
 - `test/gate.py`: the seed of FIN-3. Prints each in-scope ID as green, red, or not reached.
 
 ## Not done

@@ -463,6 +463,16 @@ Moved from v2 at 28966cd, each with a test named for it and seen red then green 
 code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed have not moved.
 
 - **As written:** A-1, A-3, A-4a, A-5, A-7; R-1, R-2, R-3, R-5, R-7; M-1, M-2, M-3, M-7; W-2, W-6.
+- **As written, 2026-11-14:** A-6, C-1, C-2, E-3, E-4, R-6, V-1, V-1a, V-5, W-10. How each is read here:
+  - **A-6**, with SHAPE-9's exceptions: erasing (W-3) removes a body and forgetting (W-15) removes rows.
+    Neither changes what remains, and every other operation leaves every held row as it was.
+  - **C-1** is checked on the build, not by a test that runs: core's objects import no clock function,
+    and its SQL asks SQLite for no time.
+  - **E-3** is read from the source: every message that can reach a refusal begins with an ID.
+  - **E-4** was not true until 2026-11-14. A source with short ids was read past rather than refused,
+    and was part-merged.
+  - **V-5** holds in core, where a body shaped like core's syntax acts as nothing. It also holds in the
+    first host, which prints no control character from the diary raw.
 - **R-4a:** moved for rights supplied by the host. Grants read from the diary are not built.
 - **A-2** *(changed in v3)*: the frame covers the body **by its hash**, so an id can be recomputed after
   erasure (SHAPE-3).
@@ -491,6 +501,9 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   forgotten, and merges none. The host's embedder is `src/`'s, built by `tools/build-embed.sh` against the pinned
   ONNX Runtime and MiniLM, which run on x86 too (the selftest's cosines reproduce exactly).
 - **LIB-1** moved, with the librarian, to `../viki-agent` (2026-11-10).
+- **Q-1 and ENV-3** (new in v3, tested 2026-11-14): every projection discarded and rebuilt gives the same
+  digest, heads and hits, and none is merged. A build with `VK_OMIT_VECTOR` and without
+  `core/src/viki_vector.c` stores and searches by every other method.
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, regex (built 2026-11-14), bm25 and vector; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.

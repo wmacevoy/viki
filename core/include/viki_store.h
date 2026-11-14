@@ -139,6 +139,11 @@ void vk_cursor_close(VkCursor *c);
 ** it whatever this returns. VK_NOTFOUND if not held. A logged row has no id
 ** index, so finding one this way is a scan (LOG-4). */
 VkStatus vk_get(VkStore *p, const VkId id, VkCursor *c);
+/* V-1: the held rows whose derived_from names id, in arrival order, read with
+** vk_cursor_next; vk_cursor_close it whatever this returns. The other
+** direction is the cursor's own a.derivedFrom. The edges are recomputed from
+** each frame as it arrives, never merged as data (V-1a). */
+VkStatus vk_derivatives(VkStore *p, const VkId id, VkCursor *c);
 
 /* Q-4: where a held row stands on its akey. *pbHead is 1 if no valid
 ** assertion supersedes it; *pnHeads is how many heads the akey has, and more
@@ -161,7 +166,8 @@ VkStatus vk_verify(VkStore *p, int64_t *pnBad);
 VkStatus vk_digest(VkStore *p, VkId out);
 
 /* Search: the one parameterized family. A method is a const table; a build
-** without a method simply does not link its table (ENV-3). */
+** without a method does not link its table. A build without vectors (ENV-3)
+** leaves out core/src/viki_vector.c and defines VK_OMIT_VECTOR. */
 typedef struct VkSearchMethod {
     const char *zName;
     int bExhaustive;   /* its "not found" covers every readable assertion */

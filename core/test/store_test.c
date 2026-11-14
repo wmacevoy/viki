@@ -339,6 +339,70 @@ static void t_r7(void){
     drop(p);
 }
 
+/* R-6: one history under one kind, its outcome as a number to compare across
+** kinds: current, the arms resolve sees, which arm wins, and the healed head. */
+static long kind_outcome(VkBytes kind){
+    Peer p = peer("alice");
+    VkAssertion x1 = mk("alice","k",1,"x1"), x2 = mk("alice","k",2,"x2"), y = mk("alice","k",9,"y"), h = mk("alice","k",0,"h");
+    VkId i1, i2, iy, ih, par[1], two[2]; VkRow r; long out = 0;
+    x1.kind = x2.kind = y.kind = h.kind = kind;
+    CHECK( vk_put(p.st,&x1,i1)==VK_OK );
+    memcpy(par[0],i1,32); x2.supersedes = (const VkId*)par; x2.nSupersedes = 1;
+    CHECK( vk_put(p.st,&x2,i2)==VK_OK );
+    out = out*10 + (vk_current(p.st,B("k"),&r)==VK_OK && id_eq(r.id,i2)); vk_row_close(&r);
+    CHECK( vk_put(p.st,&y,iy)==VK_OK );
+    out = out*10 + (vk_current(p.st,B("k"),&r)==VK_FORKED);
+    out = out*10 + (vk_resolve(p.st,B("k"),&r)==VK_OK && r.nArms==2 && id_eq(r.id,iy)); vk_row_close(&r);
+    memcpy(two[0],i2,32); memcpy(two[1],iy,32); h.supersedes = (const VkId*)two; h.nSupersedes = 2;
+    CHECK( vk_put(p.st,&h,ih)==VK_OK );
+    out = out*10 + (vk_current(p.st,B("k"),&r)==VK_OK && id_eq(r.id,ih) && r.nArms==1); vk_row_close(&r);
+    drop(p);
+    return out;
+}
+static void t_r6(void){
+    static const uint8_t bin[3] = {0, 0xff, 7};
+    VkBytes kb; long want = kind_outcome(B("note"));
+    kb.p = bin; kb.n = 3;
+    CHECK( want==1111 );                       /* the control: the history does what it says */
+    CHECK( kind_outcome(B("task"))==want );
+    CHECK( kind_outcome(B("x.never.seen.before"))==want );
+    CHECK( kind_outcome(kb)==want );           /* a kind core has no name for */
+}
+
+/* C-2: ts is the author's claim and seq is this store's arrival order; neither
+** stands in for the other. Rows written newest-ts-first walk in arrival order,
+** keep their ts bytes on every peer whatever order they arrive in, and a fork
+** resolves by rank, not by the later ts. */
+static void t_c2(void){
+    Peer p = peer("alice"), q = peer("alice");
+    VkAssertion late = mk("alice","x",1,"late"), early = mk("alice","y",1,"early");
+    VkAssertion f1 = mk("alice","f",1,"later ts, lower rank"), f2 = mk("alice","f",2,"earlier ts, higher rank");
+    VkId il, ie, id; VkCursor c; VkRow r; int64_t seqLate = 0; int n = 0;
+    late.ts = B("2026-12-01T00:00:00Z"); early.ts = B("2026-01-01T00:00:00Z");
+    f1.ts = B("2026-12-31T00:00:00Z");   f2.ts = B("2026-01-02T00:00:00Z");
+    CHECK( vk_put(p.st,&late,il)==VK_OK ); CHECK( vk_put(p.st,&early,ie)==VK_OK );
+    CHECK( vk_put(q.st,&early,id)==VK_OK ); CHECK( vk_put(q.st,&late,id)==VK_OK );
+    CHECK( vk_cursor_open(p.st,0,&c)==VK_OK );
+    while( vk_cursor_next(&c)==VK_OK ){
+        if( n==0 ){ CHECK( id_eq(c.id,il) ); seqLate = c.seq; }   /* arrival first, though its ts is later */
+        if( n==1 ) CHECK( id_eq(c.id,ie) );
+        n++;
+    }
+    vk_cursor_close(&c);
+    CHECK( n==2 );
+    CHECK( vk_cursor_open(p.st,seqLate,&c)==VK_OK );              /* "after" is by seq */
+    CHECK( vk_cursor_next(&c)==VK_OK && id_eq(c.id,ie) );
+    CHECK( vk_cursor_next(&c)==VK_DONE );
+    vk_cursor_close(&c);
+    CHECK( vk_get(q.st,il,&c)==VK_OK );                           /* ts as written, arriving second */
+    CHECK( c.a.ts.n==20 && memcmp(c.a.ts.p,"2026-12-01T00:00:00Z",20)==0 );
+    vk_cursor_close(&c);
+    CHECK( vk_put(p.st,&f1,id)==VK_OK ); CHECK( vk_put(p.st,&f2,ie)==VK_OK );
+    CHECK( vk_resolve(p.st,B("f"),&r)==VK_OK && id_eq(r.id,ie) );
+    vk_row_close(&r);
+    drop(p); drop(q);
+}
+
 /* a small history used by the order tests: a chain, a fork, an erasure */
 #define NHIST 6
 static void history(VkAssertion *as, VkId *ids, VkId par[][1], VkId *tomb){
@@ -617,6 +681,53 @@ static void t_w15(void){
     CHECK( vk_verify(p.st,&bad)==VK_OK && bad==0 );
     CHECK( vk_digest(p.st,d)==VK_OK );
     drop(p); drop(n);
+}
+/* W-10: once a range is forgotten, no table holds the local seq of a row in
+** it: not the heads, the links, the deltas, the vectors, the outline nodes, nor
+** the bm25 index. seq is a rowid, so a stale one would later name another row. */
+static void t_w10(void){
+    static const char *azSeq[] = {
+        "SELECT count(*) FROM assertion WHERE seq IN gone OR dbase IN gone",
+        "SELECT count(*) FROM arm WHERE seq IN gone",
+        "SELECT count(*) FROM range_tomb WHERE seq IN gone",
+        "SELECT count(*) FROM edge WHERE child_seq IN gone",
+        "SELECT count(*) FROM vk_onode WHERE outline_seq IN gone",
+        "SELECT count(*) FROM vk_vec WHERE seq IN gone",
+        "SELECT count(*) FROM vk_bm25_docsize WHERE id IN gone",
+    };
+    static const float v[2] = {1, 0};
+    Peer p = peer("alice");
+    VkId ids[9], t, par[1], o; unsigned i;
+    char key[40], zOutline[96];
+    VkAssertion a, ol;
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    append_n(p,"alice","door",1,3,ids);
+    a = reading("alice","door",4,key,sizeof key);          /* 4 supersedes 3: a link and a delta */
+    memcpy(par[0],ids[3],32); a.supersedes = (const VkId*)par; a.nSupersedes = 1;
+    a.derivedFrom = (const VkId*)par; a.nDerivedFrom = 1;
+    CHECK( vk_append(p.st,&a,ids[4])==VK_OK );
+    append_n(p,"alice","door",5,8,ids);
+    CHECK( vk_vector_put(p.st,ids[2],B("m"),0,4,v,2)==VK_OK );
+    memset(&ol,0,sizeof(ol));                              /* an outline of a row in the range */
+    ol = mk("alice","",1,"");
+    ol.kind = B("outline"); ol.reference.p = ids[2]; ol.reference.n = 32;
+    vk_outline_key(ids[2],B("alice"),o); ol.akey.p = o; ol.akey.n = 32;
+    ol.derivedFrom = (const VkId*)&ids[2]; ol.nDerivedFrom = 1;
+    snprintf(zOutline,sizeof zOutline,"[{\"title\":\"t\",\"lo\":0,\"hi\":4,\"children\":[]}]");
+    ol.body = B(zOutline);
+    CHECK( vk_put(p.st,&ol,t)==VK_OK );
+    CHECK( rows(p,"SELECT count(*) FROM vk_onode")>0 );    /* the control: each kind is there */
+    CHECK( rows(p,"SELECT count(*) FROM vk_vec")==1 );
+    CHECK( rows(p,"SELECT count(*) FROM edge WHERE child_seq IN (SELECT seq FROM assertion WHERE log=CAST('door' AS BLOB))")>0 );
+    CHECK( sqlite3_exec(p.db,"CREATE TEMP TABLE gone AS SELECT seq FROM assertion"
+                        " WHERE log=CAST('door' AS BLOB) AND pos BETWEEN 1 AND 5",0,0,0)==SQLITE_OK );
+    CHECK( rows(p,"SELECT count(*) FROM temp.gone")==5 );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,5,B("t"),gRank0,t)==VK_OK );
+    for(i=0; i<sizeof(azSeq)/sizeof(azSeq[0]); i++){
+        int64_t n = rows(p,azSeq[i]);
+        if( n!=0 ){ printf("  %lld left: %s\n",(long long)n,azSeq[i]); CHECK( n==0 ); }
+    }
+    drop(p);
 }
 /* The ids a tombstone carries are the ids later appends need. */
 static void t_w15_carry(void){
@@ -1659,6 +1770,247 @@ static void faults(int bMalloc){
 static void t_fault_sql(void){ faults(0); }
 static void t_fault_mem(void){ faults(1); }
 
+/* ---- V-1, V-1a: derivation ---- */
+static int derivatives(Peer p, const VkId id, VkId *out, int n){
+    VkCursor c; int k = 0;
+    VkStatus st = vk_derivatives(p.st,id,&c);
+    while( st==VK_OK && (st = vk_cursor_next(&c))==VK_OK ){ if( k<n ) memcpy(out[k],c.id,32); k++; }
+    vk_cursor_close(&c);
+    return st==VK_DONE ? k : -1;
+}
+/* Two sources, a summary derived from both (named out of order), and a row
+** that supersedes a source, which is not a derivation. */
+static VkAssertion gSum; static VkId gSrc[2];
+static void derived(Peer p, VkId ia, VkId ib, VkId is){
+    VkAssertion a = mk("alice","a",1,"source a"), b = mk("alice","b",1,"source b"), a2 = mk("alice","a",2,"a, corrected");
+    VkId id, par[1];
+    gSum = mk("alice","s",1,"a summary");
+    CHECK( vk_put(p.st,&a,ia)==VK_OK ); CHECK( vk_put(p.st,&b,ib)==VK_OK );
+    memcpy(gSrc[0],ib,32); memcpy(gSrc[1],ia,32);
+    gSum.derivedFrom = (const VkId*)gSrc; gSum.nDerivedFrom = 2;
+    CHECK( vk_put(p.st,&gSum,is)==VK_OK );
+    memcpy(par[0],ia,32); a2.supersedes = (const VkId*)par; a2.nSupersedes = 1;
+    CHECK( vk_put(p.st,&a2,id)==VK_OK );
+}
+/* V-1: a derived row names its sources, and each source finds it. */
+static void t_v1(void){
+    Peer p = peer("alice");
+    VkId ia, ib, is, got[4]; VkCursor c;
+    derived(p,ia,ib,is);
+    CHECK( vk_get(p.st,is,&c)==VK_OK && c.a.nDerivedFrom==2 );
+    CHECK( (id_eq(c.a.derivedFrom[0],ia) && id_eq(c.a.derivedFrom[1],ib)) || (id_eq(c.a.derivedFrom[0],ib) && id_eq(c.a.derivedFrom[1],ia)) );
+    vk_cursor_close(&c);
+    CHECK( derivatives(p,ia,got,4)==1 && id_eq(got[0],is) );
+    CHECK( derivatives(p,ib,got,4)==1 && id_eq(got[0],is) );
+    CHECK( derivatives(p,is,got,4)==0 );          /* nothing derives from the summary */
+    drop(p);
+}
+/* V-1a: derived_from is in the frame, sorted, and the edges are recomputed
+** from each frame on arrival: an edge the frame does not carry is not believed. */
+static void t_v1a(void){
+    Peer p = peer("alice"), q = peer("alice"), r = peer("alice");
+    VkId ia, ib, is, got[4], ctl; VkCursor c; VkMergeReport rep;
+    memset(&rep,0,sizeof(rep));
+    derived(p,ia,ib,is);
+    CHECK( vk_get(p.st,is,&c)==VK_OK && memcmp(c.a.derivedFrom[0],c.a.derivedFrom[1],32)<0 );   /* sorted */
+    vk_cursor_close(&c);
+    memcpy(gSrc[0],ia,32); memcpy(gSrc[1],ib,32); vk_assertion_id(&gSum,ctl);
+    CHECK( id_eq(ctl,is) );                       /* the order named does not change the id */
+    gSum.nDerivedFrom = 1; vk_assertion_id(&gSum,ctl);
+    CHECK( !id_eq(ctl,is) );                      /* the sources are in the frame */
+    CHECK( vk_merge(q.st,p.st,&rep)==VK_OK && rep.added==4 );
+    CHECK( derivatives(q,ia,got,4)==1 && id_eq(got[0],is) );
+    CHECK( sqlite3_exec(p.db,"INSERT INTO edge(parent,rel,child,child_seq)"
+                        " SELECT zeroblob(32), 1, id, seq FROM assertion WHERE akey=CAST('s' AS BLOB)",0,0,0)==SQLITE_OK );
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_merge(r.st,p.st,&rep)==VK_OK && rep.quarantined==1 && rep.added==3 );
+    memset(ctl,0,32);
+    CHECK( derivatives(r,ctl,got,4)==0 );
+    drop(p); drop(q); drop(r);
+}
+
+/* ---- V-5: what a robot writes is untrusted ---- */
+/* A body shaped like core's own syntax is text: it erases nothing, outlines
+** nothing, runs no SQL, and a query's wildcards and FTS syntax are matched as
+** the bytes they are. Meaning comes from the frame (kind, akey), never the body. */
+static void t_v5(void){
+    Peer p = peer("alice");
+    VkAssertion t = mk("alice","target",1,"the target text"), n, sql = mk("alice","s",1,"x'); DROP TABLE assertion; --");
+    VkAssertion pc = mk("alice","p",1,"100%"), pa = mk("alice","q",1,"abc"), us = mk("alice","u",1,"a_b"), ux = mk("alice","v",1,"axb");
+    VkId it, id; VkRow r; VkSearch s; char zJson[96];
+    CHECK( vk_put(p.st,&t,it)==VK_OK );
+    n = mk("alice","",1,"");                                  /* a tombstone's body and akey, as a note */
+    n.akey.p = it; n.akey.n = 32; n.body.p = it; n.body.n = 32;
+    CHECK( vk_put(p.st,&n,id)==VK_OK );
+    snprintf(zJson,sizeof zJson,"[{\"title\":\"t\",\"lo\":0,\"hi\":3,\"children\":[]}]");
+    n = mk("alice","o",1,zJson);                              /* an outline's body and reference, as a note */
+    n.reference.p = it; n.reference.n = 32; n.derivedFrom = (const VkId*)&it; n.nDerivedFrom = 1;
+    CHECK( vk_put(p.st,&n,id)==VK_OK );
+    CHECK( vk_put(p.st,&sql,id)==VK_OK );
+    CHECK( vk_put(p.st,&pc,id)==VK_OK ); CHECK( vk_put(p.st,&pa,id)==VK_OK );
+    CHECK( vk_put(p.st,&us,id)==VK_OK ); CHECK( vk_put(p.st,&ux,id)==VK_OK );
+    CHECK( vk_current(p.st,B("target"),&r)==VK_OK && r.body.n==15 && !r.erased ); vk_row_close(&r);
+    CHECK( rows(p,"SELECT count(*) FROM vk_onode")==0 );
+    CHECK( rows(p,"SELECT count(*) FROM assertion")==8 );
+    CHECK( count_hits(p,"DROP TABLE")==1 );
+    CHECK( count_hits(p,"0%")==1 );                           /* not LIKE's wildcards */
+    CHECK( count_hits(p,"a_b")==1 );                          /* LIKE would take axb too */
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    CHECK( vk_search_open(p.st,&vkBm25,B("NEAR(target text) OR body:* \""),&s)==VK_OK );   /* no FTS syntax runs */
+    while( vk_search_next(&s,id)==VK_OK ){}
+    vk_search_close(&s);
+    drop(p);
+}
+
+/* ---- Q-1: search is a projection ---- */
+/* Every hit of a method, with where it is, appended to z as text. */
+static void hit_sig(Peer p, const VkSearchMethod *m, const char *zQ, char *z, size_t n){
+    VkSearch s; VkId id; VkHit h; size_t k = strlen(z);
+    VkStatus st = vk_search_open(p.st,m,B(zQ),&s);
+    k += (size_t)snprintf(z+k, k<n ? n-k : 0, "%s:%d", m->zName, (int)st);
+    while( st==VK_OK && vk_search_next(&s,id)==VK_OK && k<n ){
+        CHECK( vk_search_hit(&s,&h)==VK_OK );
+        k += (size_t)snprintf(z+k, n-k, " %02x%02x/%d/%lld-%lld/%d", id[0], id[1], h.bNode, (long long)h.lo, (long long)h.hi, h.depth);
+    }
+    vk_search_close(&s);
+    if( k<n ) snprintf(z+k, n-k, ";");
+}
+static void search_sig(Peer p, char *z, size_t n){
+    z[0] = 0;
+    hit_sig(p,&vkGrep,"half",z,n);
+    hit_sig(p,&vkRegex,"h[a-z]+f",z,n);
+    hit_sig(p,&vkBm25,"half body",z,n);
+}
+/* Rebuilt from truth, never merged, and discarding it loses nothing: drop every
+** projection (heads, outline nodes, vectors, the bm25 index), reopen, and the
+** digest, the heads and every hit with its node are as they were. */
+static void t_q1(void){
+    static const char *azDiscard =
+        "DROP TRIGGER vk_bm25_ai; DROP TRIGGER vk_bm25_au; DROP TRIGGER vk_bm25_ad;"
+        "DROP VIEW vk_bm25_src; DROP TABLE vk_bm25;"
+        "DELETE FROM arm; DELETE FROM vk_onode; DELETE FROM vk_oseg; DELETE FROM vk_vec;"
+        "DELETE FROM meta WHERE k='grants';";
+    static const float v[2] = {1, 0};
+    static char zBody[3000], zWant[2048], zGot[2048];
+    Peer p = peer("alice"), q = peer("alice");
+    VkAssertion a1 = mk("alice","a",1,"first half"), a2 = mk("alice","a",2,"second half body"), t, o;
+    VkId i1, i2, it, key, d0, d1, par[1]; VkRow r; VkSearch s; VkMergeReport rep; int64_t bad = -1;
+    memset(&rep,0,sizeof(rep));
+    memset(zBody,' ',sizeof zBody - 1);
+    memcpy(zBody+100,"first half",10); memcpy(zBody+2000,"half body",9);
+    t = mk("alice","t",1,zBody);
+    CHECK( vk_put(p.st,&a1,i1)==VK_OK );
+    memcpy(par[0],i1,32); a2.supersedes = (const VkId*)par; a2.nSupersedes = 1;
+    CHECK( vk_put(p.st,&a2,i2)==VK_OK );
+    CHECK( vk_put(p.st,&t,it)==VK_OK );
+    o = outline_of("alice",it,zGood,key,(const VkId*)&it,1);
+    CHECK( vk_put(p.st,&o,par[0])==VK_OK );
+    CHECK( vk_vector_put(p.st,it,B("m"),0,8,v,2)==VK_OK );
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    vk_use_outlines(p.st,B("alice"));
+    search_sig(p,zWant,sizeof zWant);
+    CHECK( strstr(zWant,"/1/0-500/2")!=0 );                    /* the control: a hit lands on an outline node */
+    CHECK( strstr(strstr(zWant,"bm25:0 "),"/1/1500-2900/1")!=0 ); /* and a ranked one too */
+    digest(p,d0);
+    /* never merged: what arrives is rows; the receiver's projections are its own */
+    CHECK( vk_merge(q.st,p.st,&rep)==VK_OK );
+    CHECK( rows(q,"SELECT count(*) FROM vk_vec")==0 );
+    CHECK( vk_search_open(q.st,&vkBm25,B("half"),&s)==VK_BLIND ); vk_search_close(&s);
+    /* discarded, then rebuilt */
+    CHECK( sqlite3_exec(p.db,azDiscard,0,0,0)==SQLITE_OK );
+    vk_close(p.st);
+    CHECK( vk_open(p.db,B("alice"),gGrants,7,&p.st)==VK_OK );
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    vk_use_outlines(p.st,B("alice"));
+    digest(p,d1);
+    CHECK( id_eq(d0,d1) );
+    CHECK( vk_verify(p.st,&bad)==VK_OK && bad==0 );
+    CHECK( vk_current(p.st,B("a"),&r)==VK_OK && id_eq(r.id,i2) ); vk_row_close(&r);
+    search_sig(p,zGot,sizeof zGot);
+    if( strcmp(zWant,zGot)!=0 ){ printf("  before: %s\n  after:  %s\n",zWant,zGot); CHECK( !"same hits" ); }
+    /* vectors are the host's to make again: blind until it does, then as before */
+    vk_use_vectors(p.st,B("m"));
+    CHECK( vk_search_open(p.st,&vkVector,B(""),&s)==VK_BLIND ); vk_search_close(&s);
+    CHECK( vk_vector_put(p.st,it,B("m"),0,8,v,2)==VK_OK );
+    drop(p); drop(q);
+}
+
+/* ---- A-6: no operation changes a stored assertion ---- */
+typedef struct { VkId id; int erased; uint8_t body[32]; } Held;
+static int held_rows(Peer p, Held *a, int n){
+    VkCursor c; int k = 0;
+    CHECK( vk_cursor_open(p.st,0,&c)==VK_OK );
+    while( k<n && vk_cursor_next(&c)==VK_OK ){
+        sha256_ctx h;
+        memcpy(a[k].id,c.id,32);
+        a[k].erased = c.a.erased;
+        sha256_init(&h); sha256_update(&h,c.a.body.n ? c.a.body.p : (const unsigned char*)"",c.a.body.n);
+        sha256_final(&h,a[k].body);
+        k++;
+    }
+    vk_cursor_close(&c);
+    return k;
+}
+/* Every operation runs over a store holding a chain with a delta, an outline, a
+** vector, a log and the bm25 index. Afterwards every row held before is held
+** with the same frame and body, but the one erased (W-3: its body goes) and
+** the range forgotten (W-15: its rows go), the exceptions SHAPE-9 names. */
+static void t_a6(void){
+    static const float v[2] = {1, 0};
+    Peer p = peer("alice"), q = peer("bob");
+    VkAssertion a1 = mk("alice","a",1,"version one of a long enough body"), a2 = mk("alice","a",2,"version two of a long enough body");
+    VkAssertion b1 = mk("alice","b",1,"the b body"), c1 = mk("alice","c",1,"new"), ch = mk("alice","a",3,"by chain");
+    VkAssertion fk = mk("bob","a",4,"bob's arm"), o;
+    VkId ia1, ia2, ib1, id, key, par[1], t, dg; VkSearch s; VkMergeReport rep;
+    Held before[32], after[32]; int nb, na, i, j, nErased = 0, nGone = 0; int64_t bad = -1;
+    memset(&rep,0,sizeof(rep));
+    CHECK( vk_bm25_enable(p.st)==VK_OK );
+    CHECK( vk_put(p.st,&a1,ia1)==VK_OK );
+    memcpy(par[0],ia1,32); a2.supersedes = (const VkId*)par; a2.nSupersedes = 1;
+    CHECK( vk_put(p.st,&a2,ia2)==VK_OK );
+    CHECK( vk_put(p.st,&b1,ib1)==VK_OK );
+    o = outline_of("alice",ib1,"[{\"title\":\"t\",\"lo\":0,\"hi\":3,\"children\":[]}]",key,(const VkId*)&ib1,1);
+    CHECK( vk_put(p.st,&o,id)==VK_OK );
+    CHECK( vk_vector_put(p.st,ib1,B("m"),0,3,v,2)==VK_OK );
+    append_n(p,"alice","door",1,4,0);
+    nb = held_rows(p,before,32);
+    CHECK( nb==8 );
+    /* every operation */
+    CHECK( vk_put(p.st,&c1,id)==VK_OK );
+    CHECK( vk_put(p.st,&a1,id)==VK_EXISTS );
+    CHECK( vk_put(q.st,&fk,id)==VK_OK );
+    CHECK( vk_merge(p.st,q.st,&rep)==VK_OK && rep.added==1 );
+    CHECK( vk_merge(q.st,p.st,&rep)==VK_OK );
+    CHECK( vk_merge(p.st,q.st,&rep)==VK_OK );
+    CHECK( vk_put_chain(p.st,&ch,id)==VK_OK );
+    append_n(p,"alice","door",5,6,0);
+    CHECK( vk_erase(p.st,ia1,B("2026-11-14T00:00:00Z"),gRank0,t)==VK_OK );
+    CHECK( vk_forget(p.st,B("door"),B("alice"),1,2,B("2026-11-14T00:00:00Z"),gRank0,t)==VK_OK );
+    CHECK( vk_vector_drop(p.st,ib1,B("m"))==VK_OK );
+    vk_use_outlines(p.st,B("alice"));
+    CHECK( vk_search_open(p.st,&vkGrep,B("body"),&s)==VK_OK );  while( vk_search_next(&s,id)==VK_OK ){} vk_search_close(&s);
+    CHECK( vk_search_open(p.st,&vkRegex,B("b.dy"),&s)==VK_OK ); while( vk_search_next(&s,id)==VK_OK ){} vk_search_close(&s);
+    CHECK( vk_search_open(p.st,&vkBm25,B("body"),&s)==VK_OK );  while( vk_search_next(&s,id)==VK_OK ){} vk_search_close(&s);
+    CHECK( vk_verify(p.st,&bad)==VK_OK && bad==0 );
+    CHECK( vk_digest(p.st,dg)==VK_OK );
+    vk_close(p.st);                                               /* reopen under other grants: heads refold */
+    CHECK( vk_open(p.db,B("alice"),gGrants,2,&p.st)==VK_OK );
+    vk_close(p.st);
+    CHECK( vk_open(p.db,B("alice"),gGrants,7,&p.st)==VK_OK );
+    /* what was held is held as it was */
+    CHECK( vk_verify(p.st,&bad)==VK_OK && bad==0 );               /* each row's frame still makes its id */
+    na = held_rows(p,after,32);
+    for(i=0; i<nb; i++){
+        for(j=0; j<na && !id_eq(before[i].id,after[j].id); j++){}
+        if( j==na ){ nGone++; continue; }                         /* door 1 and 2, forgotten */
+        if( id_eq(before[i].id,ia1) ){ CHECK( after[j].erased ); nErased++; continue; }
+        CHECK( !after[j].erased && memcmp(before[i].body,after[j].body,32)==0 );
+    }
+    CHECK( nErased==1 && nGone==2 );
+    CHECK( na==nb-2+1+1+1+2+1+1 );    /* less door 1-2; c1, bob's arm, the chain, door 5-6, two tombstones */
+    drop(p); drop(q);
+}
+
 /* ---- runner ---- */
 typedef struct { const char *zId; const char *zName; void (*x)(void); } Test;
 static const Test aTest[] = {
@@ -1670,6 +2022,7 @@ static const Test aTest[] = {
     {"A-4","narrowed: bytes are hashed as given",t_a4},
     {"A-4a","arbitrary bytes round-trip",t_a4a},
     {"A-5","a repeat is a reported no-op",t_a5},
+    {"A-6","no operation changes a stored assertion",t_a6},
     {"A-7","a forged body is refused on arrival",t_a7},
     {"A-7","every stored id recomputes, erased rows included",t_a7_recompute},
     {"D-3","originate and supersede are separate rights",t_d3},
@@ -1681,6 +2034,8 @@ static const Test aTest[] = {
     {"R-4a","a row from an unentitled author is stored and ignored",t_r4a},
     {"R-5","a fork is reported",t_r5},
     {"R-7","one assertion heals a fork",t_r7},
+    {"R-6","one resolution for every kind, unknown kinds included",t_r6},
+    {"C-2","ts and seq are never substituted",t_c2},
     {"LOG-1","positions count per log; a position needs a log",t_log1},
     {"LOG-2","a row links to pos-2^j, and a wrong link count is refused",t_log2},
     {"LOG-3","append and chain cost do not follow the length",t_log3},
@@ -1691,6 +2046,7 @@ static const Test aTest[] = {
     {"E-1","a failed write reports the SQLite cause after its undo",t_e_full},
     {"R-1a","a link to another akey supersedes nothing",t_r1a},
     {"W-15","a range goes entirely and one tombstone stays",t_w15},
+    {"W-10","no table keeps the seq of a forgotten row",t_w10},
     {"W-15","the ids a tombstone carries let the log continue",t_w15_carry},
     {"W-15","an unentitled range tombstone is stored and ignored",t_w15_unentitled},
     {"W-16","a covered row is not stored, in either order",t_w16},
@@ -1704,6 +2060,10 @@ static const Test aTest[] = {
     {"M-3","an unfinished merge says so",t_m3},
     {"M-7","a bad row is quarantined and counted",t_m7},
     {"E-4","a source whose rows cannot be read as assertions is refused whole",t_e4},
+    {"V-1","a derived row names its sources, and each source finds it",t_v1},
+    {"V-1a","derivation is in the frame, sorted, and recomputed on arrival, never merged",t_v1a},
+    {"V-5","a body shaped like core's syntax is text and acts as nothing",t_v5},
+    {"Q-1","projections are never merged, and discarded they rebuild to the same answers",t_q1},
     {"Q-2","a search states its coverage",t_q2},
     {"Q-3","a method failing self-check is blind",t_q3},
     {"Q-5","erased content never appears",t_q5},

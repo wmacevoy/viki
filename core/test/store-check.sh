@@ -61,6 +61,12 @@ cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror -shared -fPIC \
    "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" "$ROOT/core/src/viki_vector.c" \
    "$ROOT/core/src/viki_regexp.c" \
    "$ROOT/core/src/sha256.c" $SQLITE -o "$OUT/libviki_store.so"
+# What a build of core contains: no clock (C-1), and a build without vectors (ENV-3).
+ROOT="$ROOT" OUT="$OUT" SQLITE="$SQLITE" sh "$ROOT/core/test/build-check.sh" > "$OUT/part.txt" 2>&1 || rc=$?
+cat "$OUT/part.txt"; cat "$OUT/part.txt" >> "$OUT/results.txt"
+# Every refusal names its requirement (E-3), read from the source.
+python3 "$ROOT/core/test/refusal-check.py" "$ROOT" > "$OUT/part.txt" 2>&1 || rc=$?
+cat "$OUT/part.txt"; cat "$OUT/part.txt" >> "$OUT/results.txt"
 VIKI_STORE_LIB="$OUT/libviki_store.so" python3 "$ROOT/core/test/test_store.py" > "$OUT/part.txt" 2>&1 || rc=$?
 cat "$OUT/part.txt"; cat "$OUT/part.txt" >> "$OUT/results.txt"
 # The first host, tools/vk.py, through the same library: REQ3/SCM. Needs git.

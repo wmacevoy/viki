@@ -251,6 +251,21 @@ def t_q6_regex(s):
     check(rc == 2 and out.startswith("refused: regex") and "Q-6" in out, "a pattern that does not compile is refused, naming why", out)
 
 
+def t_v5(s):
+    a = s.repo("alpha")
+    # A terminal runs escape sequences it is sent: OSC 52 writes the clipboard, CSI recolours,
+    # and U+202E reverses what follows. A body, a path or a title is someone else's text.
+    s.write(a, "e\x1b[31mvil.md", "payload \x1b]52;c;cm0gLXJmIH4K\x07 then ‮drow \x9b2J end\n")
+    s.commit(a, "untrusted")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("grep", "payload")
+    raw = [c for c in out if (ord(c) < 32 and c not in "\n") or 0x7f <= ord(c) < 0xa0 or c in "‪‫‬‭‮⁦⁧⁨⁩"]
+    check(rc == 0 and "payload" in out, "the hit is shown", out)
+    check(not raw, f"no control character reaches the terminal raw: {raw!r}", out.encode("unicode_escape").decode())
+    check("\\x1b]52" in out and "\\u202e" in out and "e\\x1b[31mvil.md" in out,
+          "body and path are shown with their control characters spelled out", out)
+
+
 def t_n7(s):
     a = s.repo("alpha")
     s.write(a, "x.txt", "keyed-marker text\n")
@@ -398,10 +413,11 @@ def main():
     run("Q-4", "each hit says current, superseded, or one head of a fork", t_q4)
     run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
     run("Q-6", "regex is SQLite's regexp.c dialect, exhaustive, and refuses a bad pattern", t_q6_regex)
+    run("V-5", "untrusted text reaches the terminal with its control characters spelled out", t_v5)
     run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
     run("SCM-7", "a transcript goes in as a log, once, and a range of it can be forgotten", t_scm7)
-    print(f"{failed} of 11 failed")
+    print(f"{failed} of 12 failed")
     return failed != 0
 
 
