@@ -360,10 +360,11 @@ frame: ids, frames, signatures and merge do not change (A-2 hashes the body as g
   (Q-5). *"3.43+ could be a requirement."* *"vendor sqlcipher-libressl this is the real baseline
   anyway."* — Warren, 2026-11-09.
 
-## 1.0 scope — DRAFT, not closed (FIN-4)
+## 1.0 scope — closed 2026-11-14 (FIN-4)
 
-Drafted by Claude Opus 5.5 on 2026-11-09, from ENV-1's list. **Warren closes it, and until he does
-this document still has no 1.0.** Each verb in ENV-1 maps to the v2 series that define it. Under
+Drafted by Claude Opus 5.5 on 2026-11-09, from ENV-1's list, and cut on 2026-11-14. **Closed by
+Warren, 2026-11-14: "close the 1.0 scope".** From here, adding an item names what leaves or what
+slips, in the same change (FIN-4). Each verb in ENV-1 maps to the v2 series that define it. Under
 FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red and then green.
 
 **In: named by ENV-1**
@@ -520,7 +521,8 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 4. **Engines for 1.0.** *Answered* (Warren, 2026-11-09): SQLite only. G-2 to G-6 and other
    engines are viki 2.
 5. *Withdrawn* (2026-11-09): who may give a verdict. L-4 no longer has verdicts.
-6. **The 1.0 scope list** (FIN-4). Drafted from ENV-1 under "1.0 scope"; open until Warren closes it.
+6. *Answered* (Warren, 2026-11-14, "close the 1.0 scope"): **the 1.0 scope list** (FIN-4) is the
+   "1.0 scope" section as it stood that day, 138 IDs.
 7. *Answered* (Warren, 2026-11-14, "ok"): **the regex dialect and engine** (Q-6) are SQLite's
    `ext/misc/regexp.c`, already in the vendored SQLCipher (ENV-4), public domain, so no new
    dependency. Its dialect is POSIX ERE plus `\w \d \s \b` and their negations, over UTF-8, with no
