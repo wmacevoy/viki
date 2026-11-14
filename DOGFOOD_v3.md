@@ -59,7 +59,7 @@ signatures (I), which are not built, and nothing in halves 1 and 2 waits for it.
 | forum | kind `post`. A reply is `derived_from` its parent. A thread is the closure of those links | the tribe mapping |
 | wiki | a `file` under a `wiki/` path, or a chain on one akey | free |
 | tech note / event | kind `event`. The body is jsCalendar (RFC 8984) | old core `viki_cal.c`. Not in v3 |
-| "who said this, and why" | relations (L), with quotes as byte ranges and grounds that can move (L-4a) | L-1 to L-5 written. L-2 open |
+| "who said this, and why" | relations (L), with quotes as byte ranges and grounds that can move (L-4a) | L-1 to L-5 written; L-2 decided 2026-11-14. None built |
 | search | grep (built), regex, bm25 (Q-6) | **only grep in v3** |
 | checkout, working tree | **a host, not core** (SHAPE-6, "SHAPE says no to") | see decision 1 |
 | sync | S-1 to S-11 | not built. Merge (M) is built |
@@ -83,8 +83,8 @@ signatures (I), which are not built, and nothing in halves 1 and 2 waits for it.
    it get refused.
 6. **`issue`, `post` and `event` kinds**, and a migration of each repository's QUEUE.md rows into
    issues.
-7. **L-2**, a relation's akey. Linking a decision to the commit it produced is a relation, and its
-   akey is still undecided.
+7. **Relations (L), built.** Linking a decision to the commit it produced is a relation. Its akey was
+   decided 2026-11-14 (L-2: author and the sorted pair); nothing about relations is built yet.
 
 Signatures, grants from the diary, and sync are not needed for one person on one machine. That is a
 chosen falsehood: author is unauthenticated, and it is labelled as such.

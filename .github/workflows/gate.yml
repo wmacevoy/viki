@@ -1,0 +1,62 @@
+name: gate
+
+# REQ3/FIN-3: completion is seen, not reported. One gate, run by CI, prints every 1.0 requirement as green,
+# red or not reached, and fails on any red. The command is the one run locally: core/test/store-check.sh.
+on:
+  push:
+    branches: [main, dogfood]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: store-check and gate (linux-x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # The only submodule the store needs (ENV-4). Its URL is HTTPS already; the rewrite covers a future SSH URL.
+      - name: Fetch vendor/sqlcipher-libressl
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init vendor/sqlcipher-libressl
+
+      - name: LibreSSL version pinned by the submodule
+        id: libressl
+        run: |
+          . vendor/sqlcipher-libressl/libressl.env
+          echo "version=$LIBRESSL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha256=$LIBRESSL_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached LibreSSL
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/libressl
+          key: libressl-${{ steps.libressl.outputs.version }}-${{ steps.libressl.outputs.sha256 }}-ubuntu-24.04
+
+      # As vendor/sqlcipher-libressl/check.sh does it: download to a file and check its hash before unpacking,
+      # so a changed or truncated tarball stops the build.
+      - name: Build LibreSSL
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          V: ${{ steps.libressl.outputs.version }}
+          SUM: ${{ steps.libressl.outputs.sha256 }}
+        run: |
+          w=$(mktemp -d)
+          t=libressl-$V.tar.gz
+          curl -fsSL -o "$w/$t" "https://github.com/libressl/portable/releases/download/v$V/$t"
+          echo "$SUM  $w/$t" | sha256sum -c -
+          tar xzf "$w/$t" -C "$w"
+          cmake -S "$w/libressl-$V" -B "$w/build" -DCMAKE_INSTALL_PREFIX="$HOME/libressl" \
+            -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF >/dev/null
+          cmake --build "$w/build" -j"$(nproc)" >/dev/null
+          cmake --install "$w/build" >/dev/null
+
+      # Exits nonzero on a failing test or any red requirement; the last lines are the gate.
+      - name: core/test/store-check.sh
+        run: sh core/test/store-check.sh

@@ -207,7 +207,8 @@ v2 excluded retrieval. v3 brings it into scope as a projection, under rules that
   content is gone from every projection (W-3). Search requires `r` (D-3a0).
 - **Q-6** *(since v3)* **1.0 has four methods:**
   - **grep** — exact substring over every readable assertion's text, exhaustive.
-  - **regex** — a regular expression over the same text, exhaustive, in one stated dialect.
+  - **regex** — a regular expression over the same text, exhaustive, in one stated dialect: that of
+    SQLite's `ext/misc/regexp.c` (Not yet answered 7), the same on every platform.
   - **bm25** — ranked full-text search over the same text.
   - **vector** — **optional.** Nearest neighbours by embedding, under one pinned model per diary.
     The model is identified by its bytes, and the embedding is a deterministic function of (content
@@ -343,8 +344,8 @@ frame: ids, frames, signatures and merge do not change (A-2 hashes the body as g
 
 ## ENV — Where viki runs (new series)
 
-- **ENV-1** *(since v3)* **In 1.0** (Warren, 2026-11-09): viki runs on an ESP32 — which variant,
-  and whether PSRAM is required, is not yet stated (an S3 with PSRAM is *invented*) — with everything
+- **ENV-1** *(since v3)* **In 1.0** (Warren, 2026-11-09): viki runs on an ESP32 — the puck's
+  ESP32-P4 with 32 MB of PSRAM (Warren, 2026-11-14: "yes"; Not yet answered 10) — with everything
   in 1.0 except vector search: store, resolve, sign, verify, merge,
   sync, withdraw, grep, regex and bm25.
 - **ENV-2** *(since v3)* Every operation runs in **bounded memory**, stated per operation and
@@ -371,12 +372,12 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | --- | --- | --- |
 | store | A-1 to A-7; D-1 to D-3e, with D-3 and D-3a as changed in v3, and D-3f; E-1, E-3; N-7 | A comes first (Not yet answered 9). N-7 (a raw database key) is the "encrypted" in MISSION-1 |
 | resolve | R-1 to R-9; C-1 to C-4; C-6, C-7 | |
-| sign | I-1, I-2, I-5, I-6; N-1 to N-6 | grants and identities, as far as a root |
+| sign | I-1, I-2, I-5, I-6; N-1 to N-6, N-9, N-17 | grants and identities, as far as a root. N-9: anyone holding the database key can add a root; N-17: removing a device is a re-key (both kept 2026-11-14) |
 | verify | I-3, I-7; A-7; R-4 to R-4b; S-11 | |
 | merge | M-1 to M-8; G-1a, G-1b; E-4 | |
-| sync | S-1 to S-11; D-4, D-6 | S-3 and S-8 are where ENV-2 bites first |
-| withdraw | W-1 to W-11, W-13 | **including `erase`**: MISSION-1 requires forgetting, and W-1 has three tiers, not one |
-| grep, regex, bm25 | Q-1 to Q-7, without vector; E-2 | the regex dialect is still open (Not yet answered 7) |
+| sync | S-1 to S-3, S-7, S-8, S-10, S-11; D-6 | peer to peer, by manifest diff. S-3 and S-8 are where ENV-2 bites first |
+| withdraw | W-1 to W-3, W-5, W-6, W-9 to W-11, W-13 | **including `erase`**: MISSION-1 requires forgetting. W-1 has two tiers in 1.0, `withdraw` and `erase`; `seal` is out |
+| grep, regex, bm25 | Q-1 to Q-7, without vector; E-2 | regex: SQLite's regexp.c (Not yet answered 7, answered 2026-11-14) |
 | (on an ESP32) | ENV-1, ENV-2, ENV-3 | |
 | (one SQLite) | ENV-4 | Warren, 2026-11-09 |
 | (the process) | FIN-1 to FIN-7; C-8 | |
@@ -388,7 +389,6 @@ FIN-5a, a v2 ID listed here binds only once it has moved with a test seen red an
 | references and the cache | X-1 to X-8; W-12, W-14 | serves AS-1 (data ingress) |
 | relations | L-1 to L-5 | no relation outranks another (L-4), so nothing needs a grant to judge |
 | a robot's output is untrusted | V-5 | serves AS-1 |
-| password-wrapped keys | N-8 to N-17, with their lettered parts | a person on a phone or a chip needs a way in. The largest single part of v2 |
 | one engine: SQLite | G-1a, G-1b (in the merge row) | Warren: SQLite only for 1.0. Other engines are viki 2 |
 | logs and range tombstones | LOG-1 to LOG-4; R-1a; W-15 to W-17 | Warren, 2026-11-09 |
 | reverse-delta storage | DS-1 to DS-4 | Warren, 2026-11-10: "build the DS storage" |
@@ -404,6 +404,16 @@ D-1, D-3 and I-7. All but V-1, V-1a and V-4a are already in a row above, so the 
   but no gate requires it.
 - **v2's "Recursion" note**, which v2 itself marks as not built.
 - **G-2 to G-6, engines other than SQLite** (Warren, 2026-11-09): viki 2.
+- **Password-wrapped keys, v2's N-8 and N-10 to N-16** (Warren, 2026-11-14: "drop the
+  password-wrapped keys"): the largest single part of v2. In 1.0 a diary opens with a raw key only
+  (N-7), and the host keeps it; a passphrase stays refused. N-9 and N-17 are not about passwords and
+  stay in (Warren, 2026-11-14: "restore N-9 and N-17").
+- **The seal tier: W-1's `seal`, W-4, W-7 and W-8** (Warren, 2026-11-14: "cut seal"). Withdraw is
+  reversible and erase destroys; the delayed, custodian-recoverable middle tier waits for viki 2.
+- **Relays: D-4 and S-9** (Warren, 2026-11-14: "cut ... relays"). In 1.0 only peers, who hold the key,
+  carry a diary.
+- **Watermarks: S-4 to S-6** (Warren, 2026-11-14: "cut ... watermarks"). v2 calls them an optimization
+  over the manifest diff, never a substitute; adding one later changes no meaning (FIN-1).
 - **V-2 to V-4 and V-6, publication** (Warren, 2026-11-09): deferred. Since 1.x adds no new meaning
   (FIN-1), deferred past 1.0 means viki 2.
 
@@ -415,8 +425,12 @@ or contradict each other is useful when its claims are checkable.
 - **L-1** *(since v3)* A **relation** is an assertion of kind `relation` about two assertions:
   `corrects` (directed), `same`, `contradicts`, or `none`. It is **never a supersession**: no
   relation changes `current()` of either assertion it names. Only an author with `s` supersedes.
-- **L-2** *(since v3)* *(undecided: Not yet answered 11)* A relation's akey, and so who may
-  supersede a relation and whether two authors who disagree on a pair form a fork.
+- **L-2** *(since v3, decided 2026-11-14)* **A relation's akey is made from its author and the sorted
+  pair of ids it names.** So an author's newer relation on a pair supersedes that author's older one,
+  and two authors who disagree on a pair stand side by side rather than forking (L-4). As with
+  outlines (OL-2), which one a reader believes is the reader's choice, by author, outside viki. Who
+  may supersede is R-7's rule, unchanged: no exception restricts it to the author. *Warren,
+  2026-11-14: "yes, option 2".*
 - **L-3** *(since v3)* A relation names both assertions in `derived_from` (V-1) and carries its
   evidence as quotes, each a byte range into the assertion it cites. A reader re-checks every range;
   one that no longer matches makes the relation stale, and one into erased content flags it (W-13).
@@ -486,6 +500,7 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 | --- | --- | --- |
 | A range tombstone arriving by merge orphans nothing | W-17 | W-17 is checked only by the writer. A peer holding a superseding row in the range that the writer never saw can show its superseded row as current again |
 | Erased means physically gone | W-3, ENV-1 | On flash, wear levelling can leave erased pages readable to someone with the chip. "Erased" means unreadable through the database; re-keying the diary is what makes old pages useless |
+| Erasing a short or guessable value hides it | A-1, W-3 | Anyone holding the diary key, including someone granted after the erasure, can recover an erased "yes" or a date by hashing guesses until an id matches. A host that cares adds a nonce to that body (Not yet answered 2) |
 | A peer's clock is roughly right | C-6, C-3a | A device with no RTC writes plausible wrong times, signed. They are claims (C-7), and are shown as such |
 
 ## Not yet answered
@@ -494,8 +509,11 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
    `all-MiniLM-L6-v2` (qint8 ONNX, ~25 MB) under D-11, run by ONNX Runtime; `core/` takes the model
    in as ordinary blobs and names it by its bytes. The runtime is a dependency, and the design says
    how it is pinned and shipped.
-2. **Guessable content.** The id of an erased "yes" or a date can be recovered by hashing guesses.
-   A per-domain salted id hides it but breaks A-1 across domains. Undecided.
+2. *Answered* (Warren, 2026-11-14, "keep ids unsalted"): **guessable content.** Ids stay
+   deterministic, because merge as union, sync by manifest diff, proofs that survive erasure and
+   references across diaries all rest on them (A-1). The leak is a chosen falsehood (K4, below). A
+   host that writes a value worth hiding may put a random nonce in that one body, which makes its id
+   unguessable at the cost of that assertion's deduplication; core needs no change for it.
 3. **What source control means.** *Answered* (Warren, 2026-11-09, on `DOGFOOD_v3.md`: "yes to the
    rest"): core keeps content history and merge only (AS-3). Checkout and working trees belong to a
    host. Git keeps the working trees while viki mirrors them (SCM).
@@ -503,17 +521,21 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
    engines are viki 2.
 5. *Withdrawn* (2026-11-09): who may give a verdict. L-4 no longer has verdicts.
 6. **The 1.0 scope list** (FIN-4). Drafted from ENV-1 under "1.0 scope"; open until Warren closes it.
-7. **The regex dialect and engine** (Q-6): POSIX ERE, as `src/`'s `viki grep` used, or another. On
-   ENV-1, an engine has to come from somewhere: the platform's libc, if it has one, or a small
-   vendored engine, which is a dependency.
+7. *Answered* (Warren, 2026-11-14, "ok"): **the regex dialect and engine** (Q-6) are SQLite's
+   `ext/misc/regexp.c`, already in the vendored SQLCipher (ENV-4), public domain, so no new
+   dependency. Its dialect is POSIX ERE plus `\w \d \s \b` and their negations, over UTF-8, with no
+   back-references. It is an NFA, O(pattern × input) and capped in size, so it fits ENV-2. Not
+   taken: the platform libc's `regcomp`. ESP-IDF 5 has it in newlib; IDF 6 moved to picolibc,
+   where it is unconfirmed; glibc on the host adds GNU extensions, so host and chip would differ.
 8. **v2's open questions 2 to 6** become questions here only if the part they belong to moves.
-9. **What moves first.** Proposed: A (identity and framing) and R-1 to R-5 (resolution), with
-   their tests from `reboot/tests/`, because every other series stands on them.
-10. **The ESP32 variant** (ENV-1): in 1.0, decided; which variant and how much PSRAM, not yet.
-11. **A relation's akey** (L-2). Left undecided by Warren, 2026-11-09. Drafted so far: the sorted
-    pair of ids, so disagreeing judgments fork (R-5); or the author and the sorted pair, so they
-    stand side by side, optionally with only that author allowed to supersede, an exception to
-    v2's R-7.
+9. *Answered* (Warren, 2026-11-14, "done"): **what moves first.** A (identity and framing) and R-1
+   to R-5 (resolution) moved first, as proposed (see "Moved so far").
+10. *Answered* (Warren, 2026-11-14, "yes"): **the ESP32 variant** (ENV-1) is the puck's ESP32-P4
+    with 32 MB of PSRAM, so ENV-2's bounds are measured on that board.
+11. *Answered* (Warren, 2026-11-14, "yes, option 2"): **a relation's akey** (L-2) is made from its
+    author and the sorted pair, so disagreeing judgments stand side by side. Not taken: the sorted
+    pair alone, which made disagreement a fork (R-5); and restricting supersession to the author,
+    which would have been an exception to v2's R-7.
 12. *Answered* (Warren, 2026-11-10, taking the draft): **an outline's akey** (OL-2) is made from the
     target's id and the author. So one author's newer outline of a target supersedes that author's
     older one, and two authors' outlines stand side by side. *(invented, then confirmed)*
@@ -521,7 +543,8 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
     (OL-5). W-13 stands: viki flags an outline of an erased target and leaves the decision to a
     person. A host that erases a target also erases the bodies of that target's outlines, as its
     stated policy, because the titles describe the erased text.
-14. **Which judge, and for which content** (OL-2). Measured on three files: Sonnet under the
+14. *Closed as design* (Warren, 2026-11-14, "done"): **which judge, and for which content** (OL-2).
+    Which judge to use is the librarian's design, in `../viki-agent`. Measured on three files: Sonnet under the
     keep-the-outline protocol passed on code and prose, and Haiku passed on prose only. A file the
     size of FINDINGS.md (237 KB) does not fit two whole versions in one call, so a large file needs
     a protocol that sends only the changed regions. Both of these are design, not requirement;

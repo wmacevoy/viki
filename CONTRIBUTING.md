@@ -30,9 +30,11 @@ scratch corpus, so the retrieval eval's paths did not move.
 
 ## Check it
 
-- **The full check:** `sh core/build.sh && ./core/build/core-probe && sh core/test/core-probe.sh` *(inferred)*
-- **Success prints:** not yet confirmed -- it has not been run since adoption, because the
-  build needs SQLCipher-LibreSSL (see the table below). CI does not run it.
+- **The full check (core v3):** `git submodule update --init vendor/sqlcipher-libressl && sh core/test/store-check.sh`,
+  with LibreSSL at `$LIBRESSL_PREFIX` (default `~/libressl`), the version in that submodule's `libressl.env`.
+- **Success prints:** `0 of N failed` for each suite, then `gate: N green, 0 red, N not reached, of N in scope`;
+  it exits nonzero on any red. CI runs it (`.github/workflows/gate.yml`). The old core's
+  `core/build.sh` and probes are not part of it.
 
 ## What SE1's AGENTS.md names, in this repository
 
@@ -41,8 +43,8 @@ scratch corpus, so the retrieval eval's paths did not move.
 | the repository guide           | `CONTRIBUTING.md` (this file) |
 | the queue                      | `QUEUE.md` (root, not `docs/`) |
 | findings                       | `FINDINGS.md` (root, not `docs/`) |
-| the check command              | *(inferred)* `sh core/build.sh && ./core/build/core-probe && sh core/test/core-probe.sh`; success line not yet confirmed. **Does not run on a fresh checkout**: `core/build.sh` needs SQLCipher-LibreSSL from `vendor/fossil-see` (uninitialised by default) or `VIKI_FOSSILSEE_DIR`/`VIKI_SQLITE_DIR` |
-| CI runs the check              | **no** -- CI runs `test/m1.sh` (legacy `src/`), not core's probes |
+| the check command              | `sh core/test/store-check.sh` (see *Check it*), seen passing from a fresh clone on 2026-11-14 |
+| CI runs the check              | `sh core/test/store-check.sh` and its gate (REQ3/FIN-3), on linux-x86_64, by `.github/workflows/gate.yml` (2026-11-14). `build.yml` still runs `test/m1.sh` for legacy `src/` |
 | the handoff check              | none yet (`./se --hook --write` would add one) |
 | `Non-goals`, `Scope decisions` | none yet as such. Nearest: `SCOPES.md` (where things go), `USER_STORIES.md` D-1..D-12 (settled decisions), the DIRECTION section below |
 | requirements / design          | none in SE1 form. Nearest: `USER_STORIES.md`, `core/README.md`, `SCOPES.md` |
