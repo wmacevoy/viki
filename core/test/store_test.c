@@ -808,6 +808,48 @@ static void t_m7(void){
     drop(p);
 }
 
+/* E-4: a source whose stored rows cannot be read as assertions is refused whole,
+** before anything is ingested: no row of it is added, the good ones included. */
+static void t_e4(void){
+    static const char *azBreak[] = {
+        "UPDATE assertion SET id=x'0102' WHERE seq=2",
+        "UPDATE assertion SET id=CAST(hex(randomblob(16)) AS TEXT) WHERE seq=2",
+        "UPDATE assertion SET rank=x'000102' WHERE seq=2",
+        "UPDATE assertion SET body_hash=x'0102030405' WHERE seq=2",
+        "UPDATE assertion SET skip=zeroblob(33) WHERE seq=2",
+        "UPDATE edge SET parent=x'01'",
+        "UPDATE edge SET rel=7",
+    };
+    unsigned i;
+    for(i=0; i<sizeof(azBreak)/sizeof(azBreak[0]); i++){
+        Peer s = peer("alice"), d = peer("alice");
+        VkAssertion a = mk("alice","k",1,"one"), b = mk("alice","k",2,"two");
+        VkId ia, ib, par[1]; VkMergeReport rep;
+        memset(&rep,0,sizeof(rep));
+        CHECK( vk_put(s.st,&a,ia)==VK_OK );
+        memcpy(par[0],ia,32); b.supersedes = (const VkId*)par; b.nSupersedes = 1;
+        CHECK( vk_put(s.st,&b,ib)==VK_OK );
+        CHECK( vk_merge(d.st,s.st,&rep)==VK_OK && rep.added==2 );   /* the control: whole, it merges */
+        drop(d); d = peer("alice"); memset(&rep,0,sizeof(rep));
+        CHECK( sqlite3_exec(s.db,azBreak[i],0,0,0)==SQLITE_OK );
+        if( vk_merge(d.st,s.st,&rep)!=VK_EINVAL ){ printf("  case %u: %s\n", i, azBreak[i]); CHECK( !"refused" ); }
+        CHECK( strstr(vk_errmsg(d.st),"E-4")!=0 || strstr(vk_errmsg(s.st),"E-4")!=0 );
+        CHECK( rep.added==0 && rep.quarantined==0 );
+        CHECK( rows(d,"SELECT count(*) FROM assertion")==0 );
+        /* The cursor itself refuses a row it cannot read whole (rel 7 it skips:
+        ** the frame then does not recompute, which A-7 counts). */
+        if( strstr(azBreak[i],"rel=") ){
+            int64_t bad = -1;
+            CHECK( vk_verify(s.st,&bad)==VK_OK && bad==1 );
+        }else{
+            int64_t bad = -1;
+            CHECK( vk_verify(s.st,&bad)==VK_EINVAL );
+            CHECK( strstr(vk_errmsg(s.st),"E-4")!=0 );
+        }
+        drop(s); drop(d);
+    }
+}
+
 /* ---- Q: search ---- */
 static int count_hits(Peer p, const char *zQ){
     VkSearch s; VkId id; int n = 0;
@@ -1661,6 +1703,7 @@ static const Test aTest[] = {
     {"M-2","self-merge changes nothing",t_m2},
     {"M-3","an unfinished merge says so",t_m3},
     {"M-7","a bad row is quarantined and counted",t_m7},
+    {"E-4","a source whose rows cannot be read as assertions is refused whole",t_e4},
     {"Q-2","a search states its coverage",t_q2},
     {"Q-3","a method failing self-check is blind",t_q3},
     {"Q-5","erased content never appears",t_q5},

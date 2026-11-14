@@ -132,6 +132,13 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   probed with an anchor that must refuse. A pattern that does not compile is refused at open.
   The build needs `-I vendor/sqlcipher-libressl/ext/misc -I vendor/sqlcipher-libressl/src`.
 - **`vk_standing` answers Q-4 from `arm`**: whether a row is a head, and how many heads its akey has.
+- **A merge source of the wrong shape is refused whole (E-4), before anything is ingested.** One
+  pass over the source checks that every stored id, rank, body hash, skip list and link has the
+  width and type a frame needs, so a tampered or foreign database adds nothing rather than part of
+  itself. Until 2026-11-14 the cursor copied those columns by their fixed widths without looking, so
+  a short id was read past (inside SQLite's page buffer, where ASan does not see it). The cursor now
+  refuses such a row too, which is what `vk_verify` and `vk_get` meet on a tampered store. A row of
+  the right shape whose frame does not make its id is still quarantined, row by row (M-7).
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
 

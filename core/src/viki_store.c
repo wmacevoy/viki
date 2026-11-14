@@ -1568,12 +1568,23 @@ VkStatus vk_get(VkStore *p, const VkId id, VkCursor *c){
     return st==VK_DONE ? VK_NOTFOUND : st;
 }
 
+/* E-4: the fixed-width columns are copied whole, so a row whose stored widths
+** are wrong (a tampered or foreign database) is refused rather than over-read. */
+static int row_shape_ok(sqlite3_stmt *pRow){
+    return sqlite3_column_type(pRow, 1)==SQLITE_BLOB && sqlite3_column_bytes(pRow, 1)==VK_ID_BYTES
+        && sqlite3_column_type(pRow, 6)==SQLITE_BLOB && sqlite3_column_bytes(pRow, 6)==VK_RANK_BYTES
+        && sqlite3_column_type(pRow, 8)==SQLITE_BLOB && sqlite3_column_bytes(pRow, 8)==VK_ID_BYTES
+        && sqlite3_column_bytes(pRow, 12)%VK_ID_BYTES==0
+        && sqlite3_column_bytes(pRow, 12)<=VK_MAX_SKIP*VK_ID_BYTES;
+}
+
 VkStatus vk_cursor_next(VkCursor *c){
     uint32_t an[2] = {0, 0};
     VkBytes b;
     int rc = vk_step(c->pRow);
     if( rc==SQLITE_DONE ) return VK_DONE;
     if( rc!=SQLITE_ROW ) return vk_sql_status(c->p, rc);
+    if( !row_shape_ok(c->pRow) ) return vk_refuse(c->p, VK_EINVAL, "E-4: a stored row is not the shape of an assertion");
     c->seq = sqlite3_column_int64(c->pRow, 0);
     memcpy(c->id, sqlite3_column_blob(c->pRow, 1), VK_ID_BYTES);
     c->a.author    = column_bytes(c->pRow, 2);
@@ -1599,6 +1610,9 @@ VkStatus vk_cursor_next(VkCursor *c){
     sqlite3_bind_blob(c->pEdge, 1, c->id, VK_ID_BYTES, SQLITE_STATIC);
     while( (rc = vk_step(c->pEdge))==SQLITE_ROW ){
         int rel = sqlite3_column_int(c->pEdge, 0);
+        if( sqlite3_column_bytes(c->pEdge, 1)!=VK_ID_BYTES ){
+            return vk_refuse(c->p, VK_EINVAL, "E-4: a stored link is not the shape of an id");
+        }
         if( rel<0 || rel>1 || an[rel]==VK_MAX_LINKS ) continue;
         memcpy(c->links[rel][an[rel]++], sqlite3_column_blob(c->pEdge, 1), VK_ID_BYTES);
     }
@@ -1673,9 +1687,33 @@ VkStatus vk_ingest(VkStore *dst, const VkAssertion *a, const VkId id, VkMergeRep
     return VK_OK;
 }
 
+/* E-4: one pass over the source before anything is ingested, so a source of
+** the wrong shape is refused whole rather than part-merged. Its link table is
+** its own claim about the frames, so it is checked too. */
+static VkStatus source_shape(VkStore *dst, VkStore *src){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(src,
+        "SELECT 1 FROM assertion WHERE typeof(id)<>'blob' OR length(id)<>32"
+        " OR typeof(rank)<>'blob' OR length(rank)<>16"
+        " OR typeof(body_hash)<>'blob' OR length(body_hash)<>32"
+        " OR typeof(skip)<>'blob' OR length(skip)%32<>0 OR length(skip)>32*32"   /* VK_MAX_SKIP ids */
+        " UNION ALL SELECT 1 FROM edge WHERE rel NOT IN (0,1)"
+        " OR typeof(parent)<>'blob' OR length(parent)<>32 OR typeof(child)<>'blob' OR length(child)<>32"
+        " LIMIT 1", &pSt);
+    if( rc!=SQLITE_OK ) return vk_sql_status(dst, rc);
+    rc = vk_step(pSt);
+    sqlite3_finalize(pSt);
+    if( rc==SQLITE_ROW ) return vk_refuse(dst, VK_EINVAL, "E-4: the merge source is not the shape of a diary");
+    if( rc!=SQLITE_DONE ) return vk_sql_status(dst, rc);
+    return VK_OK;
+}
+
 VkStatus vk_merge(VkStore *dst, VkStore *src, VkMergeReport *rep){
     VkCursor c;
-    VkStatus st = vk_cursor_open(src, 0, &c);
+    VkStatus st;
+    if( !vk_has_right(src, VK_READ) ) return vk_refuse(src, VK_EDENIED, "D-3a0: every read path requires r");
+    st = source_shape(dst, src);
+    if( st==VK_OK ) st = vk_cursor_open(src, 0, &c);
     if( st==VK_OK ){
         while( (st = vk_cursor_next(&c))==VK_OK ){
             st = vk_ingest(dst, &c.a, c.id, rep);
