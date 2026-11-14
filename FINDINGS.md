@@ -11,6 +11,34 @@ expectation -- re-run the command before quoting the number. Where a later
 measurement contradicts an entry outright, the correction is inserted into
 that entry as a dated block quote rather than by rewriting it.
 
+## A project had no way to name its diary that was not global (2026-11-13)
+
+Found from `../gosh`, by the agent working there with the `vk` skill (`~/.claude/skills/vk/SKILL.md`). The skill
+finds the diary from `$VIKI_STORE` and `$VIKI_KEYFILE` and does not say how a project sets them. The agent's
+first answer was two `export` lines in `~/.bashrc`. Warren: "that is too global --- every project would have
+them." One machine holds several diaries, one per project, so a shell-wide setting points every project's `/vk`
+at whichever diary was exported last.
+
+What was done there instead, for Claude Code: the project's `.claude/settings.local.json` with
+
+```json
+{ "env": { "VIKI_STORE": "/abs/path/store", "VIKI_KEYFILE": "/abs/path/key" } }
+```
+
+- It applies only to sessions started in that project.
+- It is not committed (`.claude/settings.local.json` is in the user's global git ignore here), which is right:
+  the paths are this machine's. The committed `.claude/settings.json` is the wrong place for them.
+- The keyfile is named by path and its contents are in neither file. The key itself was put outside every
+  repository (`~/.viki/<project>/key`, mode 600, in a mode-700 directory), so it cannot be committed by accident.
+- Paths were written absolute. Whether a settings value expands `$HOME` or `~` was not tried.
+- **Not yet seen working.** A session reads its settings at start, so the session that wrote the file could not
+  observe it; the check is a new session in the project running `/vk coverage` with no paths. A plain terminal
+  in the project directory does not get the variables at all: this is Claude Code's mechanism, not the shell's.
+
+**What it changed:** the skill's *Find the diary* now says where the two variables are set per project (the
+settings file above), not to put them in a shell profile, and where a new diary's key lives. The skill's source
+moved to `../viki-agent/skills/vk/SKILL.md` (Warren, 2026-11-14: "yes"), and `~/.claude/skills/vk` links to it.
+
 ## The librarian moves to ../viki-agent; viki keeps the store and the host (2026-11-10)
 
 Warren: "i think we found viki -> the librarian armed with viki the tool"; "move the librarian code to viki-agent".
