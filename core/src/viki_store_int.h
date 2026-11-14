@@ -47,6 +47,7 @@ VkBytes vk_outline_author(const VkStore *p);
 VkBytes vk_vector_model(const VkStore *p);
 /* vk_cosine(a, b): the cosine of two float32 vectors; NULL if their lengths differ. */
 void vk_cosine_func(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+int vk_regexp_register(sqlite3 *db);   /* vk_regexp(pattern, body): viki_regexp.c */
 int vk_has_held_body(VkStore *p, const uint8_t *id, sqlite3_int64 *pSeq, sqlite3_int64 *pLen);
 int vk_bm25_on(VkStore *p, int *pb);   /* *pb is 1 if the bm25 index exists */
 

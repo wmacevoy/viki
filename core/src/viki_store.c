@@ -699,6 +699,7 @@ VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
     if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_body", 2, SQLITE_UTF8, p, body_func, 0, 0);
     if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_cosine", 2, SQLITE_UTF8|SQLITE_DETERMINISTIC, 0,
                                                      vk_cosine_func, 0, 0);
+    if( rc==SQLITE_OK ) rc = vk_regexp_register(db);
     if( rc==SQLITE_OK ) rc = exec_schema(p);
     if( rc==SQLITE_OK ) rc = ensure_dbase(p);
     if( rc==SQLITE_OK ) rc = vk_prepare(p, "SELECT body, dbase FROM assertion WHERE seq=?1", &p->pBody);

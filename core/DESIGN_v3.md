@@ -109,6 +109,9 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   - **The reader chooses** whose outlines a search uses (`vk_use_outlines`). The default is none,
     which is the old behaviour.
   - **Grep** returns the smallest node holding the first match.
+  - **Regex** cannot say where a match is (the engine returns only yes or no), so it returns the
+    deepest node whose span matches by itself. There `^` and `$` mean the span's ends, so a node can
+    be chosen for an anchored match the body as a whole does not have.
   - **bm25** indexes each node's own text in the same FTS table as whole bodies, under negative
     rowids. It ranks the reader's author's nodes together with the whole bodies of targets that
     author has not outlined, so their scores compare. The triggers keep node text right when a
@@ -119,6 +122,15 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   - **Limits:** outlines of logged targets get no searchable node text. A node's text is rebuilt
     from the target's body once per segment, which is slow for a delta-stored target with many
     segments.
+- **Regex is SQLite's `ext/misc/regexp.c`** (REQUIREMENTS_v3 Not yet answered 7), included whole by
+  `src/viki_regexp.c`, so the vendored file is unedited and nothing is copied. viki registers its
+  own `vk_regexp(pattern, body)` and not the file's `regexp()`, for two measured reasons: `regexp()`
+  reads its input as a C string, and the matcher takes a zero byte as end of input. Either would end
+  a body at its first NUL, and regex would stop being exhaustive without saying so. `vk_regexp` passes
+  the length, and matches a body holding a NUL as a same-length copy with each NUL as 0x80, which
+  the matcher reads as U+FFFD. The self-check's planted body has a NUL before its match and is also
+  probed with an anchor that must refuse. A pattern that does not compile is refused at open.
+  The build needs `-I vendor/sqlcipher-libressl/ext/misc -I vendor/sqlcipher-libressl/src`.
 - **`vk_standing` answers Q-4 from `arm`**: whether a row is a head, and how many heads its akey has.
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
@@ -198,8 +210,8 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 ## Not done
 
 Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
-sync, regex, Q-4's relations (L is not built), OL-5's flag, a host command that asks a judge for
+sync, Q-4's relations (L is not built), OL-5's flag, a host command that asks a judge for
 an outline, compressing deltas or whole bodies, measuring the DS
-thresholds, the withdraw and seal tiers, keys, references, relations, an ESP32 build.
+thresholds, the withdraw tier, keys, references, relations, an ESP32 build.
 Reporting two rows at one log position. Merging range tombstones that one range contains. Proving a
 row against a range tombstone or walking skip links: nothing reads them yet except the next append.

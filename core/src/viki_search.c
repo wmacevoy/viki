@@ -56,6 +56,69 @@ static VkStatus grep_selfcheck(VkStore *p){
 
 const VkSearchMethod vkGrep = { "grep", 1, grep_open, grep_selfcheck };
 
+/* ---- regex (Q-6) ----
+** vk_regexp (viki_regexp.c) over every readable body, exhaustive like grep. The
+** engine cannot say where a match is, so a hit's node is the deepest node of the
+** reader's outline whose span matches on its own. */
+static VkStatus regex_open(VkStore *p, VkBytes q, sqlite3_stmt **ppOut){
+    sqlite3_stmt *pSt = 0;
+    int rc;
+    if( q.n==0 ) return vk_refuse(p, VK_EINVAL, "Q-6: regex needs a non-empty pattern");
+    /* A pattern that does not compile is the caller's error, said now, not a
+    ** failed step in the middle of the hits. */
+    rc = vk_prepare(p, "SELECT vk_regexp(?1, '')", &pSt);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    vk_bind_bytes(pSt, 1, q);
+    rc = vk_step(pSt);
+    if( rc!=SQLITE_ROW ){
+        VkStatus st = rc==SQLITE_ERROR
+            ? vk_refuse(p, VK_EINVAL, "Q-6: the regex does not compile") : vk_sql_status(p, rc);
+        sqlite3_finalize(pSt);
+        return st;
+    }
+    sqlite3_finalize(pSt);
+    rc = vk_prepare(p,
+        "SELECT h.id, (SELECT n.rowid FROM vk_onode n WHERE n.target=h.id AND n.author=?2"
+        "  AND vk_regexp(?1, substr(h.b, n.lo+1, n.hi-n.lo)) ORDER BY n.depth DESC LIMIT 1)"
+        " FROM (SELECT a.id, " VK_BODY("a.") " AS b FROM assertion a"
+        "  WHERE a.body IS NOT NULL AND " VK_VALID("a") ") h WHERE vk_regexp(?1, h.b)", ppOut);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    vk_bind_bytes(*ppOut, 1, q);
+    vk_bind_bytes(*ppOut, 2, vk_outline_author(p));
+    return VK_OK;
+}
+
+static VkStatus regex_probe(VkStore *p, const char *zPattern, int *pnHit){
+    sqlite3_stmt *pSt = 0;
+    int rc = vk_prepare(p, "SELECT vk_regexp(?1, x'61200020706c616e74656420776f7264')", &pSt);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    sqlite3_bind_text(pSt, 1, zPattern, -1, SQLITE_STATIC);
+    rc = vk_step(pSt);
+    if( rc!=SQLITE_ROW ){
+        VkStatus st = vk_sql_status(p, rc);
+        sqlite3_finalize(pSt);
+        return st;
+    }
+    *pnHit = sqlite3_column_int(pSt, 0);
+    sqlite3_finalize(pSt);
+    return VK_OK;
+}
+
+/* The planted body is "a \0 planted word": a match past a NUL byte, and an
+** anchor that must refuse, so an engine that stops at the NUL or ignores "^"
+** reads as blind. */
+static VkStatus regex_selfcheck(VkStore *p){
+    int nHit = 0;
+    VkStatus st = regex_probe(p, "pl[a-z]+ed\\b", &nHit);
+    if( st!=VK_OK ) return st;
+    if( !nHit ) return VK_BLIND;
+    st = regex_probe(p, "^planted", &nHit);
+    if( st!=VK_OK ) return st;
+    return nHit ? VK_BLIND : VK_OK;
+}
+
+const VkSearchMethod vkRegex = { "regex", 1, regex_open, regex_selfcheck };
+
 VkStatus vk_search_open(VkStore *p, const VkSearchMethod *m, VkBytes q, VkSearch *s){
     VkStatus st;
     s->p = p; s->pMethod = m; s->pSt = 0; s->pNode = 0;

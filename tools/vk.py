@@ -8,13 +8,15 @@
   vk.py --store DIARY --plaintext ingest-git REPO_DIR [--name NAME]
   vk.py --store DIARY --plaintext grep TEXT [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext find WORDS [--repo NAME] [--all] [--k N]
+  vk.py --store DIARY --plaintext regex PATTERN [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --keyfile KEY ingest-transcript TRANSCRIPT.jsonl [--session ID] [--hook]
   vk.py --store DIARY --keyfile KEY forget-chat SESSION [--from N] [--to M]
   vk.py --store DIARY --plaintext coverage
   vk.py --store DIARY --plaintext heads NAME
 
 Exit status: 0 found or done, 1 searched and not found, 3 blind (Q-2), 2 error.
-grep is exact bytes and exhaustive; find is bm25, ranked, best first. Each hit
+grep is exact bytes and exhaustive; regex is SQLite's regexp.c dialect (POSIX ERE
+plus \w \d \s \b), exhaustive; find is bm25, ranked, best first. Each hit
 is marked current, superseded, or one head of a fork (Q-4), and superseded
 versions are hidden unless --all, with the count hidden said.
 
@@ -422,11 +424,20 @@ def ingested(store):
     return out
 
 
-def snippet(body, words):
-    """The first line holding any of the words, compared without case."""
-    low = body.lower()
-    hits = [i for i in (low.find(w.lower()) for w in words) if i >= 0]
-    at = min(hits) if hits else 0
+def snippet(body, words, pattern=None):
+    """The first line holding any of the words, compared without case. For regex, the first line
+    Python's re matches: display only, since its dialect is close to regexp.c's but not the same."""
+    if pattern is not None:
+        import re
+        try:
+            m = re.search(pattern, body)
+        except re.error:
+            m = None
+        at = m.start() if m else 0
+    else:
+        low = body.lower()
+        hits = [i for i in (low.find(w.lower()) for w in words) if i >= 0]
+        at = min(hits) if hits else 0
     start = body.rfind(b"\n", 0, at) + 1
     end = body.find(b"\n", at)
     line = body[start:end if end >= 0 else len(body)]
@@ -450,13 +461,18 @@ def cmd_search(store, text, repo, method, show_all, k):
     if repo is not None and repo not in seen:
         print(f"blind: repository {repo!r} was not ingested; ingested: {', '.join(sorted(seen)) or 'none'}")
         return 3
-    method = "grep" if method == "grep" else "bm25"
-    ids, cov = store.grep(text.encode()) if method == "grep" else store.bm25(text.encode())
+    method = {"grep": "grep", "regex": "regex"}.get(method, "bm25")
+    try:
+        ids, cov = {"grep": store.grep, "regex": store.regex, "bm25": store.bm25}[method](text.encode())
+    except vk.VkError as e:
+        print(f"refused: {method}: {e}")
+        return 2
     if ids is None:
-        why = "it failed its self-check (Q-3)" if method == "grep" else "the diary has no bm25 index yet, or it failed its self-check (Q-3)"
+        why = "the diary has no bm25 index yet, or it failed its self-check (Q-3)" if method == "bm25" else "it failed its self-check (Q-3)"
         print(f"blind: {method}: {why}")
         return 3
-    words = [text.encode()] if method == "grep" else [w for w in text.encode().split() if w]
+    words = [text.encode()] if method != "bm25" else [w for w in text.encode().split() if w]
+    pattern = text.encode() if method == "regex" else None
     shown = matched = hidden = 0
     for i, node in ids:
         r = store.get(i)
@@ -479,7 +495,7 @@ def cmd_search(store, text, repo, method, show_all, k):
             path, lo, hi, _ = node
             print(f"    in: {' > '.join(path) or '(outside every section)'}  bytes {lo}-{min(hi, len(body))}")
             body = body[lo:hi]
-        print(f"    {snippet(body, words)}")
+        print(f"    {snippet(body, words, pattern)}")
     scope = [repo] if repo is not None else sorted(seen)
     reach = "exhaustive" if cov["exhaustive"] else f"ranked, so not-found covers only these {matched} matches"
     whole = f", {cov['whole']} of them searched whole" if store_outlines(store) else ""
@@ -527,12 +543,13 @@ def main(argv):
     g = sub.add_parser("ingest-git")
     g.add_argument("dir")
     g.add_argument("--name")
-    for name, help_ in (("grep", "exact bytes, exhaustive"), ("find", "bm25, ranked")):
+    for name, help_ in (("grep", "exact bytes, exhaustive"), ("regex", "SQLite regexp.c dialect, exhaustive"),
+                        ("find", "bm25, ranked")):
         s = sub.add_parser(name, help=help_)
         s.add_argument("text")
         s.add_argument("--repo")
         s.add_argument("--all", action="store_true", help="also show superseded versions")
-        s.add_argument("--k", type=int, default=None if name == "grep" else 10)
+        s.add_argument("--k", type=int, default=10 if name == "find" else None)
         s.add_argument("--outlines", metavar="AUTHOR", help="return the nodes of this author's outlines (OL-4)")
     it = sub.add_parser("ingest-transcript", help="a conversation's messages into its log (SCM-7)")
     it.add_argument("path", nargs="?")
@@ -575,7 +592,7 @@ def main(argv):
             print(f"{name}: {stats['commits']} commits read, {stats['added']} assertions added, "
                   f"{rec['refused_holdout']} holdout paths refused, {rec['ignored']} ignored")
             return 0
-        if args.cmd in ("grep", "find"):
+        if args.cmd in ("grep", "regex", "find"):
             if args.outlines:
                 store.use_outlines(args.outlines.encode())
             return cmd_search(store, args.text, args.repo, args.cmd, args.all, args.k)

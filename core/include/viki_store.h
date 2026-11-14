@@ -173,6 +173,13 @@ typedef struct VkSearchMethod {
 } VkSearchMethod;
 
 extern const VkSearchMethod vkGrep;
+/* regex: a regular expression over every readable body, exhaustive (Q-6), in
+** the dialect of SQLite's ext/misc/regexp.c: POSIX ERE plus \w \d \s \b and
+** their negations, over UTF-8, no back-references, unanchored unless ^ or $
+** say so. A NUL byte in a body reads as U+FFFD. A pattern that does not compile
+** is refused, VK_EINVAL. A hit's node is the deepest node of the reader's
+** outline whose span matches by itself, so there ^ and $ mean the span's ends. */
+extern const VkSearchMethod vkRegex;
 /* bm25: ranked full-text over bodies (Q-6). The query's words are each
 ** quoted and OR'd; no query syntax runs. Its index is a projection the host
 ** turns on once per diary with vk_bm25_enable, which back-fills it; until

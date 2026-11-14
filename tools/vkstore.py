@@ -98,6 +98,7 @@ for name, args, res in [
     fn.argtypes, fn.restype = args, res
 GREP = C.addressof(C.c_void_p.in_dll(LIB, "vkGrep"))
 BM25 = C.addressof(C.c_void_p.in_dll(LIB, "vkBm25"))
+REGEX = C.addressof(C.c_void_p.in_dll(LIB, "vkRegex"))
 VECTOR = C.addressof(C.c_void_p.in_dll(LIB, "vkVector"))
 
 
@@ -318,6 +319,10 @@ class Store:
     def grep(self, text):
         """(hits, coverage) for an exact substring of any readable body."""
         return self.search(GREP, text)
+
+    def regex(self, pattern):
+        """(hits, coverage) for a regular expression, in SQLite's regexp.c dialect (Q-6)."""
+        return self.search(REGEX, pattern)
 
     def bm25(self, text):
         """(hits, coverage), best first; (None, None) if blind (not indexed)."""

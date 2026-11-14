@@ -826,6 +826,51 @@ static void t_q6_grep(void){
     CHECK( count_hits(p,"absent")==0 );
     drop(p);
 }
+/* Q-6 regex: SQLite's regexp.c dialect (Not yet answered 7), exhaustive. */
+static int regex_hits(Peer p, const char *zQ){
+    VkSearch s; VkId id; int n = 0;
+    if( vk_search_open(p.st,&vkRegex,B(zQ),&s)!=VK_OK ){ vk_search_close(&s); return -1; }
+    while( vk_search_next(&s,id)==VK_OK ) n++;
+    vk_search_close(&s);
+    return n;
+}
+static void t_q6_regex(void){
+    static const uint8_t raw[] = "head\0tail-marker 42";
+    Peer p = peer("alice");
+    VkId id;
+    VkSearch s;
+    VkAssertion a = mk("alice","a",1,"the Needle here"), b = mk("alice","b",1,"needle again 42"),
+                c = mk("alice","c",1,"nothing"), d = mk("alice","d",1,"");
+    d.body.p = raw; d.body.n = sizeof raw - 1;
+    vk_put(p.st,&a,id); vk_put(p.st,&b,id); vk_put(p.st,&c,id); vk_put(p.st,&d,id);
+    CHECK( regex_hits(p,"needle")==1 );                  /* case-sensitive */
+    CHECK( regex_hits(p,"[Nn]eedle (here|again)")==2 );  /* sets and alternation */
+    CHECK( regex_hits(p,"\\d\\d$")==2 );                 /* \d and $; every hit, not just the first */
+    CHECK( regex_hits(p,"^needle")==1 );                 /* ^ anchors at the body's start */
+    CHECK( regex_hits(p,"tail-marker")==1 );             /* past a NUL byte: still exhaustive */
+    CHECK( regex_hits(p,"head.tail")==1 );               /* the NUL reads as one character */
+    CHECK( regex_hits(p,"absent|missing")==0 );
+    CHECK( regex_hits(p,"(unclosed")==-1 && strstr(vk_errmsg(p.st),"Q-6")!=0 );   /* refused, naming why */
+    CHECK( vk_search_open(p.st,&vkRegex,B(""),&s)==VK_EINVAL ); vk_search_close(&s);
+    CHECK( vk_search_open(p.st,&vkRegex,B("x"),&s)==VK_OK );
+    {   VkCoverage cov;
+        CHECK( vk_search_coverage(&s,&cov)==VK_OK );
+        CHECK( cov.bExhaustive==1 && cov.nSearched==4 && strcmp(cov.zMethod,"regex")==0 );   /* Q-2 */
+    }
+    vk_search_close(&s);
+    CHECK( vkRegex.selfcheck(p.st)==VK_OK );             /* Q-3: it finds the planted case */
+    drop(p);
+}
+static void t_q5_regex(void){
+    Peer p = peer("alice");
+    VkAssertion a = mk("alice","k",1,"secret word");
+    VkId i, t;
+    CHECK( vk_put(p.st,&a,i)==VK_OK );
+    CHECK( regex_hits(p,"sec.et")==1 );
+    CHECK( vk_erase(p.st,i,B("t"),gRank0,t)==VK_OK );
+    CHECK( regex_hits(p,"sec.et")==0 );
+    drop(p);
+}
 static void t_q8(void){
     Peer p = peer("alice"), ro = peer("mallory");
     VkId first, second, logged, missing, again; VkCursor c; char key[40];
@@ -1351,6 +1396,13 @@ static void t_ol4(void){
     n = hits_of(p,&vkGrep,"steady",h,16,&cov);
     CHECK( n==2 && (i = find_hit(h,n,oid))>=0 && h[i].bNode==0 );          /* no outline: returned whole */
     CHECK( cov.nWhole==cov.nSearched-1 );                                   /* only the target had one */
+    /* regex: the deepest node whose span matches, as grep's */
+    CHECK( hits_of(p,&vkRegex,"uniq[0-9]z",h,16,0)==1 && h[0].bNode==1 && h[0].depth==2
+           && strcmp(h[0].path,"[\"first half\",\"opening\"]")==0 );
+    CHECK( hits_of(p,&vkRegex,"line 3[5]:",h,16,0)==1 && h[0].depth==1 && strcmp(h[0].path,"[\"second half\"]")==0 );
+    CHECK( hits_of(p,&vkRegex,"line 55:",h,16,0)==1 && h[0].depth==0 && strcmp(h[0].path,"[]")==0 );
+    n = hits_of(p,&vkRegex,"orphanw.rd",h,16,0);
+    CHECK( n==1 && h[0].bNode==0 && id_eq(h[0].id,oid) );                  /* no outline: returned whole */
 
     CHECK( vk_bm25_enable(p.st)==VK_OK );
     CHECK( hits_of(p,&vkBm25,"uniq0z",h,16,0)==1 && h[0].bNode==1 && strcmp(h[0].path,"[\"first half\",\"opening\"]")==0 );
@@ -1516,10 +1568,16 @@ static VkStatus script_step(Script *s, int k){
     case 16: { VkId key; VkAssertion o = outline_of("alice",s->b0,"[{\"title\":\"top\",\"lo\":0,\"hi\":100}]",
                                                 key,(const VkId*)&s->b0,1);
                return vk_put(s->p.st,&o,id); }
+    /* Q-6 regex over a body holding a NUL, so the engine's copy is failed in turn too */
+    case 17: { static const uint8_t raw[] = "head\0tail"; VkAssertion x = mk("alice","nul",1,"");
+               x.body.p = raw; x.body.n = sizeof raw - 1; return vk_put(s->p.st,&x,id); }
+    case 18: st = vk_search_open(s->p.st,&vkRegex,B("ta[i]l$"),&q);
+             if(st==VK_OK){ while((st=vk_search_next(&q,id))==VK_OK){} vk_search_close(&q); if(st==VK_DONE) st=VK_OK; }
+             return st;
     }
     return VK_OK;
 }
-#define NSCRIPT 17
+#define NSCRIPT 19
 
 /* Runs the script once, failing the k-th tick; 0 means no fault. A step that
 ** fails must succeed when retried, and the store must end up the same. */
@@ -1607,6 +1665,8 @@ static const Test aTest[] = {
     {"Q-3","a method failing self-check is blind",t_q3},
     {"Q-5","erased content never appears",t_q5},
     {"Q-6","grep is exact and exhaustive",t_q6_grep},
+    {"Q-6","regex is regexp.c's dialect, exhaustive past a NUL, and refuses a bad pattern",t_q6_regex},
+    {"Q-5","erased content never matches regex",t_q5_regex},
     {"Q-8","a hit's id reads back as its whole assertion",t_q8},
     {"Q-4","a hit says whether it is current, superseded, or one head of a fork",t_q4},
     {"OL-1","an outline's shape and frame are checked on write and on merge",t_ol1},

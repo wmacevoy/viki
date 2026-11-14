@@ -235,6 +235,22 @@ def t_q6(s):
     check(len([ln for ln in out.splitlines() if ln.startswith("file  ")]) == 1 and "shown 1 of" in out, "--k truncates and says so", out)
 
 
+def t_q6_regex(s):
+    a = s.repo("alpha")
+    s.write(a, "a.md", "sensor 42 went silent\n")
+    s.write(a, "b.md", "the sensor log\n")
+    s.commit(a, "notes")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("regex", "sensor [0-9]+ went")
+    files = [ln for ln in out.splitlines() if ln.startswith("file  ")]
+    check(rc == 0 and len(files) == 1 and ":a.md" in files[0], "a pattern finds only what it matches", out)
+    check("coverage: regex, exhaustive" in out, "regex is exhaustive and says so", out)
+    rc, out = s.vk("regex", "^the sensor")
+    check(rc == 0 and ":b.md" in out and ":a.md" not in out, "^ anchors at the body's start", out)
+    rc, out = s.vk("regex", "(unclosed")
+    check(rc == 2 and out.startswith("refused: regex") and "Q-6" in out, "a pattern that does not compile is refused, naming why", out)
+
+
 def t_n7(s):
     a = s.repo("alpha")
     s.write(a, "x.txt", "keyed-marker text\n")
@@ -381,10 +397,11 @@ def main():
     run("SCM-5", "holdout paths are refused whatever the rules; ignored paths stay out", t_scm5)
     run("Q-4", "each hit says current, superseded, or one head of a fork", t_q4)
     run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
+    run("Q-6", "regex is SQLite's regexp.c dialect, exhaustive, and refuses a bad pattern", t_q6_regex)
     run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
     run("SCM-7", "a transcript goes in as a log, once, and a range of it can be forgotten", t_scm7)
-    print(f"{failed} of 10 failed")
+    print(f"{failed} of 11 failed")
     return failed != 0
 
 

@@ -491,7 +491,7 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
   forgotten, and merges none. The host's embedder is `src/`'s, built by `tools/build-embed.sh` against the pinned
   ONNX Runtime and MiniLM, which run on x86 too (the selftest's cosines reproduce exactly).
 - **LIB-1** moved, with the librarian, to `../viki-agent` (2026-11-10).
-- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, bm25 and vector, not yet for regex; ENV-2 is measured for
+- **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, regex (built 2026-11-14), bm25 and vector; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.
 

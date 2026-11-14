@@ -35,6 +35,8 @@ if [ "$(cat "$OUT/sqlcipher/stamp" 2>/dev/null)" != "$want" ]; then
   echo "$want" > "$OUT/sqlcipher/stamp"
 fi
 SQLITE="-I$OUT/sqlcipher $OUT/sqlcipher/sqlite3.o $LIBRESSL_PREFIX/lib/libcrypto.a -lpthread -lm"
+# The regex engine is SQLite's ext/misc/regexp.c, included by core/src/viki_regexp.c (Q-6).
+SQLITE="$SQLITE -I$SC/ext/misc -I$SC/src"
 echo "SQLite: $(sed -n 's/^#define SQLITE_VERSION *"\(.*\)"/\1/p' "$OUT/sqlcipher/sqlite3.h"), SQLCipher-LibreSSL $(git -C "$SC" describe --tags)"
 
 cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror \
@@ -42,6 +44,7 @@ cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror \
    -DVK_TEST_FAULTS -D_POSIX_C_SOURCE=200809L \
    -I"$ROOT/core/include" -I"$ROOT/core/src" \
    "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" "$ROOT/core/src/viki_vector.c" \
+   "$ROOT/core/src/viki_regexp.c" \
    "$ROOT/core/src/sha256.c" "$ROOT/core/test/store_test.c" \
    $SQLITE -o "$OUT/store_test"
 rc=0
@@ -56,6 +59,7 @@ cat "$OUT/results.txt"
 cc -std=c99 -g -O1 -Wall -Wextra -Wpedantic -Werror -shared -fPIC \
    -I"$ROOT/core/include" -I"$ROOT/core/src" \
    "$ROOT/core/src/viki_store.c" "$ROOT/core/src/viki_search.c" "$ROOT/core/src/viki_delta.c" "$ROOT/core/src/viki_vector.c" \
+   "$ROOT/core/src/viki_regexp.c" \
    "$ROOT/core/src/sha256.c" $SQLITE -o "$OUT/libviki_store.so"
 VIKI_STORE_LIB="$OUT/libviki_store.so" python3 "$ROOT/core/test/test_store.py" > "$OUT/part.txt" 2>&1 || rc=$?
 cat "$OUT/part.txt"; cat "$OUT/part.txt" >> "$OUT/results.txt"
