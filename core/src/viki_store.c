@@ -19,6 +19,8 @@ struct VkStore {
     sqlite3_stmt *pBody;   /* one stored row's body and delta base, for vk_body */
     VkBytes outlines;      /* OL-4: whose outlines searches use; empty is none */
     VkBytes vectors;       /* Q-6: which model the vector method uses; empty is none */
+    const VkClock *clock;      /* C-3: the host's, borrowed */
+    const VkSyncPolicy *policy; /* D-1: declared by the host, borrowed */
 };
 
 /* DS: when a superseded body is stored as a delta. invented, until measured. */
@@ -685,16 +687,19 @@ static int ensure_dbase(VkStore *p){
 }
 
 VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
-                 uint32_t nGrants, VkStore **ppOut){
+                 uint32_t nGrants, const VkClock *clock, const VkSyncPolicy *policy, VkStore **ppOut){
     VkStore *p;
     int rc;
     VkStatus st;
     *ppOut = 0;
+    if( !clock || !clock->xNow || !policy || policy->sync<VK_SYNC_NEVER || policy->sync>VK_SYNC_PUBLISHED
+     || (policy->nNames && !policy->names) ) return VK_EINVAL;
     p = (VkStore*)sqlite3_malloc(sizeof(*p));
     if( !p ) return VK_ENOMEM;
     memset(p, 0, sizeof(*p));
     p->db = db; p->principal = principal;
     p->grants = grants; p->nGrants = nGrants;
+    p->clock = clock; p->policy = policy;
     rc = sqlite3_create_function(db, "vk_rights", 1, SQLITE_UTF8, p, rights_func, 0, 0);
     if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "vk_body", 2, SQLITE_UTF8, p, body_func, 0, 0);
 #ifndef VK_OMIT_VECTOR   /* ENV-3: built without core/src/viki_vector.c */
@@ -1261,6 +1266,55 @@ static int outline_error(VkStore *p, const VkAssertion *a, int bWrite, const cha
 
 /* ---- write ---- */
 
+/* C-3: RFC 3339 in UTC -- YYYY-MM-DDTHH:MM:SS, an optional fraction of 1 to 9
+** digits, then Z or +00:00 (the spelling Python's isoformat gives UTC). The
+** shape is checked here; the calendar is checked by SQLite printing it back. */
+static int ts_shape_ok(VkBytes ts){
+    static const char zPat[] = "dddd-dd-ddTdd:dd:dd";
+    const uint8_t *z = ts.p;
+    uint32_t i, j;
+    if( ts.n<20 ) return 0;
+    for(i=0; i<19; i++){
+        int bDigit = z[i]>='0' && z[i]<='9';
+        if( zPat[i]=='d' ? !bDigit : z[i]!=(uint8_t)zPat[i] ) return 0;
+    }
+    if( z[i]=='.' ){
+        j = ++i;
+        while( i<ts.n && z[i]>='0' && z[i]<='9' ) i++;
+        if( i==j || i-j>9 ) return 0;
+    }
+    if( ts.n-i==1 ) return z[i]=='Z';
+    return ts.n-i==6 && memcmp(z+i, "+00:00", 6)==0;
+}
+
+/* C-3, C-3a: *pzBad is set if ts is not a real UTC moment, or is more than 24
+** hours ahead of the host's clock. The past is unbounded. An empty ts is a
+** writer with no wall clock (a device with no RTC) saying so, and is allowed. */
+static int ts_error(VkStore *p, VkBytes ts, const char **pzBad){
+    sqlite3_stmt *pSt = 0;
+    int rc;
+    *pzBad = 0;
+    if( ts.n==0 ) return SQLITE_OK;
+    if( !ts_shape_ok(ts) ){
+        *pzBad = "C-3: a timestamp is RFC 3339 in UTC, YYYY-MM-DDTHH:MM:SS[.fraction] then Z or +00:00";
+        return SQLITE_OK;
+    }
+    /* Through the epoch and back: a day that does not exist (02-30) or an hour 24
+    ** comes back as another moment. strftime alone prints both as given. */
+    rc = vk_prepare(p, "SELECT strftime('%Y-%m-%dT%H:%M:%S', unixepoch(?1), 'unixepoch')=?1, unixepoch(?1)-?2", &pSt);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_bind_text(pSt, 1, (const char*)ts.p, 19, SQLITE_STATIC);
+    sqlite3_bind_int64(pSt, 2, p->clock->xNow(p->clock->pCtx));
+    rc = vk_step(pSt);
+    if( rc==SQLITE_ROW ){
+        if( sqlite3_column_int(pSt, 0)!=1 ) *pzBad = "C-3: a timestamp names no real moment";
+        else if( sqlite3_column_int64(pSt, 1)>24*60*60 ) *pzBad = "C-3a: a timestamp more than 24 hours ahead of this peer's clock";
+        rc = SQLITE_OK;
+    }
+    sqlite3_finalize(pSt);
+    return rc;
+}
+
 static int needed_right(const VkAssertion *a){
     if( bytes_is(a->kind, VK_TOMBSTONE) || bytes_is(a->kind, VK_RANGE) ) return VK_ERASE;
     return a->nSupersedes ? VK_SUPERSEDE : VK_ORIGINATE;
@@ -1277,6 +1331,9 @@ VkStatus vk_put(VkStore *p, const VkAssertion *a, VkId idOut){
         return vk_refuse(p, VK_EDENIED, "I-1: the author must be this store's principal");
     if( !vk_has_right(p, needed_right(a)) )
         return vk_refuse(p, VK_EDENIED, "D-3: the principal lacks the right this write needs");
+    rc = ts_error(p, a->ts, &zBad);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
+    if( zBad ) return vk_refuse(p, VK_EINVAL, zBad);
     rc = outline_error(p, a, 1, &zBad);
     if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
     if( zBad ) return vk_refuse(p, VK_EINVAL, zBad);
@@ -1441,6 +1498,9 @@ VkStatus vk_append(VkStore *p, const VkAssertion *a, VkId idOut){
     }
     b.skip = (const VkId*)aSkip;
     zBad = shape_error(&b);
+    if( zBad ) return vk_refuse(p, VK_EINVAL, zBad);
+    rc = ts_error(p, b.ts, &zBad);
+    if( rc!=SQLITE_OK ) return vk_sql_status(p, rc);
     if( zBad ) return vk_refuse(p, VK_EINVAL, zBad);
     vk_assertion_id(&b, idOut);
     rc = store_row(p, &b, idOut, &bAdded);
@@ -1680,6 +1740,10 @@ VkStatus vk_ingest(VkStore *dst, const VkAssertion *a, const VkId id, VkMergeRep
         vk_assertion_id(a, aCheck);
         if( memcmp(aCheck, id, VK_ID_BYTES)!=0 ) zBad = "A-7: the id does not match the content";
     }
+    if( !zBad ){   /* C-3c: on merge a bad or future ts is quarantined, not refused */
+        rc = ts_error(dst, a->ts, &zBad);
+        if( rc!=SQLITE_OK ) return vk_sql_status(dst, rc);
+    }
     if( !zBad ){
         rc = outline_error(dst, a, 0, &zBad);
         if( rc!=SQLITE_OK ) return vk_sql_status(dst, rc);
@@ -1719,11 +1783,23 @@ static VkStatus source_shape(VkStore *dst, VkStore *src){
     return VK_OK;
 }
 
+/* D-1, D-2: the source's declared policy decides; a never diary is no
+** merge's source, and any other goes only to a store whose principal it names. */
+static VkStatus sync_allowed(VkStore *dst, VkStore *src){
+    uint32_t i;
+    if( src->policy->sync==VK_SYNC_NEVER ) return vk_refuse(dst, VK_EDENIED, "D-2: a never diary has no sync path");
+    for(i=0; i<src->policy->nNames; i++){
+        if( bytes_eq(src->policy->names[i], dst->principal) ) return VK_OK;
+    }
+    return vk_refuse(dst, VK_EDENIED, "D-1: the source's policy does not name this store's principal");
+}
+
 VkStatus vk_merge(VkStore *dst, VkStore *src, VkMergeReport *rep){
     VkCursor c;
     VkStatus st;
     if( !vk_has_right(src, VK_READ) ) return vk_refuse(src, VK_EDENIED, "D-3a0: every read path requires r");
-    st = source_shape(dst, src);
+    st = sync_allowed(dst, src);
+    if( st==VK_OK ) st = source_shape(dst, src);
     if( st==VK_OK ) st = vk_cursor_open(src, 0, &c);
     if( st==VK_OK ){
         while( (st = vk_cursor_next(&c))==VK_OK ){

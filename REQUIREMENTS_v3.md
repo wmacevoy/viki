@@ -159,8 +159,8 @@ but no origination or read privliges)"* — Warren, 2026-11-09.
 
 ## C — Time: viki's own signed timestamps (additions)
 
-Assumes v2's C-1 to C-5, which are not yet moved. C-1 above all: **the layer calls no clock**; the
-host's clock port supplies `ts`.
+Assumes v2's C-5, which is not yet moved; C-1 to C-4 have moved (see "Moved so far"). C-1 above all:
+**the layer calls no clock**. The host supplies `ts`, and its clock port bounds `ts` on arrival (C-3).
 
 - **C-6** *(since v3)* A timestamp is **the author's signed claim**: `ts` is inside the frame, so the
   author's signature covers it, and no one can move an assertion's time without breaking that
@@ -504,6 +504,33 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
 - **Q-1 and ENV-3** (new in v3, tested 2026-11-14): every projection discarded and rebuilt gives the same
   digest, heads and hits, and none is merged. A build with `VK_OMIT_VECTOR` and without
   `core/src/viki_vector.c` stores and searches by every other method.
+- **Decided 2026-11-14** (Warren: *"commit and push both. all your recommendations."*), and moved:
+  - **C-3** *(changed in v3)*: a present `ts` is RFC 3339 in UTC: `YYYY-MM-DDTHH:MM:SS`, then an
+    optional fraction of 1 to 9 digits, then `Z` or `+00:00`. It must name a real moment, at most 24
+    hours ahead of the receiving peer's clock (C-3a, as written), and the past is unbounded. A write
+    refuses any other ts. A merge quarantines it (C-3c, as written, here applied to a bad format as
+    well as to the bound).
+    - An **absent** `ts` is allowed, and says the writer has no wall clock. The puck has no RTC, and
+      keeps its boot count and uptime in akey and rank (K4 *A peer's clock is roughly right*; C-8).
+    - The host's clock reaches core as a port passed to `vk_open`. C-1 still holds: core calls the
+      port, never a clock.
+    - v2 named neither these spellings nor absence. `+00:00` is accepted because Python's
+      `isoformat` writes UTC that way, and both hosts already did.
+  - **C-4** *(changed in v3)*: rank is the author's 16 bytes, in the frame, compared as an unsigned
+    big-endian number. v2 declared it per kind, and v3 has no code per kind (R-6). A row whose rank
+    has another width is refused (E-4).
+  - **D-1 and D-2**, for a policy the host supplies at open, as it supplies grants (R-4a). A `never`
+    diary is no merge's source. A `domain` or `published` diary merges only into a store whose
+    principal it names. There is no default policy.
+    - Not built: reading the policy from the diary, which waits on signing (I).
+    - Not closed: a host can still read a `never` diary and write its rows elsewhere one by one,
+      since `vk_ingest` takes rows, not a store. Per SYNC.md 0b that is a guardrail, not a boundary.
+  - **E-2**, partly: a search reports how many readable assertions it could not search. *Uncached*
+    waits for references (X), which are not built.
+  - **V-4a**, as written: a verdict is an ordinary row, derived from what it judged and written
+    under the judge's grant. Core imports nothing that could call a judge.
+  - **Q-7** (new in v3) is built in the first host as `vk.py ask`: bm25 and grep together, with each
+    one's coverage on its own line.
 - **Partly:** Q-2, Q-3, Q-5 and Q-6 hold for grep, regex (built 2026-11-14), bm25 and vector; ENV-2 is measured for
   merge alone. Q-4 holds for whether a hit is current, superseded or one head of a fork; relations
   (L) are not built, so it says nothing about them yet.
@@ -565,3 +592,15 @@ code (`core/test/store-check.sh`, design in `core/DESIGN_v3.md`). Ids not listed
     a protocol that sends only the changed regions. Both of these are design, not requirement;
     recorded here until a design note holds them. *Partly answered* (Warren, 2026-11-10): "do not split large files; that's
     the librarians task." A file goes to the judge whole, and how it divides is the judge's to say.
+
+15. **A tombstone's reason codes** (W-9). Proposed: one byte after the target's id in the
+    tombstone's body. The byte is absent when no reason is given, so every tombstone held today
+    reads as "unstated" and keeps its id. The list is closed, and nothing propagates but the code:
+    free text stays local. *Proposed list, for Warren to name or replace:*
+    - 1 `mistaken`: written in error;
+    - 2 `requested`: the person it is about asked;
+    - 3 `legal`: a legal order or obligation;
+    - 4 `secret`: it held a secret by mistake;
+    - 5 `harmful`: judged harmful, by a judge outside viki (V-4a).
+
+    Not built until the list is named, because a code written into a diary stays there.

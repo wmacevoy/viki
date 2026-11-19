@@ -17,7 +17,11 @@ static int hits(VkStore *st, const VkSearchMethod *m, const char *zQ){
     return n;
 }
 
+static int64_t fixed_now(void *pCtx){ (void)pCtx; return 1798761600; }   /* 2027-01-01T00:00:00Z */
+
 int main(void){
+    static const VkClock clock = { fixed_now, 0 };
+    static const VkSyncPolicy never = { VK_SYNC_NEVER, 0, 0 };
     sqlite3 *db = 0;
     VkStore *st = 0;
     VkGrant g;
@@ -25,7 +29,7 @@ int main(void){
     VkId id;
     int ok;
     g.principal = B("alice"); g.rights = VK_ERASE|VK_READ|VK_SUPERSEDE|VK_ORIGINATE;
-    if( sqlite3_open(":memory:", &db)!=SQLITE_OK || vk_open(db, B("alice"), &g, 1, &st)!=VK_OK ){
+    if( sqlite3_open(":memory:", &db)!=SQLITE_OK || vk_open(db, B("alice"), &g, 1, &clock, &never, &st)!=VK_OK ){
         printf("FAIL ENV-3 a store opens without vectors\n");
         return 1;
     }

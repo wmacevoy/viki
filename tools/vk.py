@@ -8,6 +8,7 @@
   vk.py --store DIARY --plaintext ingest-git REPO_DIR [--name NAME]
   vk.py --store DIARY --plaintext grep TEXT [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext find WORDS [--repo NAME] [--all] [--k N]
+  vk.py --store DIARY --plaintext ask WORDS [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --plaintext regex PATTERN [--repo NAME] [--all] [--k N]
   vk.py --store DIARY --keyfile KEY ingest-transcript TRANSCRIPT.jsonl [--session ID] [--hook]
   vk.py --store DIARY --keyfile KEY forget-chat SESSION [--from N] [--to M]
@@ -16,7 +17,9 @@
 
 Exit status: 0 found or done, 1 searched and not found, 3 blind (Q-2), 2 error.
 grep is exact bytes and exhaustive; regex is SQLite's regexp.c dialect (POSIX ERE
-plus \w \d \s \b), exhaustive; find is bm25, ranked, best first. Each hit
+plus \w \d \s \b), exhaustive; find is bm25, ranked, best first; ask runs find and
+grep together, says which found each hit, and states each one's coverage on
+its own line (Q-7). Each hit
 is marked current, superseded, or one head of a fork (Q-4), and superseded
 versions are hidden unless --all, with the count hidden said.
 
@@ -276,7 +279,9 @@ def ingest_commit(store, repo, name, c, blobs, rules, maps, checkins, stats):
     paths = set(kept)
     for m in parents:
         paths.update(m)
-    ts, rank = c["committed"].encode(), rank_of(c["ctime"])
+    # C-3: ts is UTC, the same moment as git's %cI, which carries the committer's own offset.
+    ts = datetime.datetime.fromtimestamp(c["ctime"], datetime.timezone.utc).isoformat().encode()
+    rank = rank_of(c["ctime"])
     new_map, changes = {}, {}
     for path in sorted(paths):
         blob = kept.get(path)
@@ -469,6 +474,64 @@ def store_outlines(store):
     return getattr(store, "_outlines", b"")
 
 
+def print_hit(r, i, node, where, words, pattern, found_by=""):
+    akey = r.akey.decode("utf-8", "replace")
+    print(f"{printable(r.kind)}  {printable(r.reference) or printable(akey)}  {i.hex()[:12]}  [{where}]{found_by}")
+    body = r.body
+    if node:   # OL-4: the smallest node of the chosen outline holding the match
+        path, lo, hi, _ = node
+        print(f"    in: {printable(' > '.join(path)) or '(outside every section)'}  bytes {lo}-{min(hi, len(body))}")
+        body = body[lo:hi]
+    print(f"    {snippet(body, words, pattern)}")
+
+
+def cmd_ask(store, text, repo, show_all, k):
+    """Q-7: bm25 and grep together. Each hit says which methods found it, and each method's
+    coverage is stated on its own line: one method being blind or ranked does not become a
+    coverage for the whole answer."""
+    legs, order, found = [], [], {}
+    for method, run in (("bm25", store.bm25), ("grep", store.grep)):
+        try:
+            ids, cov = run(text.encode())
+        except vk.VkError as e:
+            print(f"refused: {method}: {e}")
+            return 2
+        legs.append((method, cov))
+        for i, node in ids or ():
+            if i not in found:
+                order.append((i, node))
+                found[i] = []
+            found[i].append(method)
+    words = [w for w in text.encode().split() if w]
+    shown = matched = hidden = 0
+    for i, node in order:
+        r = store.get(i)
+        if r is None or r.kind in (b"ingest", b"label"):
+            continue
+        akey = r.akey.decode("utf-8", "replace")
+        if repo is not None and not (akey == repo or akey.startswith(repo + "/")):
+            continue
+        matched += 1
+        where = standing_of(store, r)
+        if where == "superseded" and not show_all:
+            hidden += 1
+            continue
+        if k is not None and shown >= k:
+            continue
+        shown += 1
+        print_hit(r, i, node, where, words, None, f"  by {'+'.join(found[i])}")
+    for method, cov in legs:
+        if cov is None:
+            print(f"coverage: {method}: blind (no index yet, or it failed its self-check, Q-3)")
+            continue
+        reach = "exhaustive" if cov["exhaustive"] else "ranked, so its not-found covers only what it returned"
+        blind = f"; partly blind: {cov['unread']} readable assertions not searched" if cov["unread"] else ""
+        print(f"coverage: {method}: {reach}, over {cov['searched']} assertions{blind}")
+    print(f"shown {shown} of {matched} matches; {hidden} superseded versions hidden"
+          + ("" if show_all else " (--all shows them)"))
+    return 0 if matched else 1
+
+
 def cmd_search(store, text, repo, method, show_all, k):
     seen = ingested(store)
     if repo is not None and repo not in seen:
@@ -502,16 +565,12 @@ def cmd_search(store, text, repo, method, show_all, k):
         if k is not None and shown >= k:
             continue
         shown += 1
-        print(f"{printable(r.kind)}  {printable(r.reference) or printable(akey)}  {i.hex()[:12]}  [{where}]")
-        body = r.body
-        if node:   # OL-4: the smallest node of the chosen outline holding the match
-            path, lo, hi, _ = node
-            print(f"    in: {printable(' > '.join(path)) or '(outside every section)'}  bytes {lo}-{min(hi, len(body))}")
-            body = body[lo:hi]
-        print(f"    {snippet(body, words, pattern)}")
+        print_hit(r, i, node, where, words, pattern)
     scope = [repo] if repo is not None else sorted(seen)
     reach = "exhaustive" if cov["exhaustive"] else f"ranked, so not-found covers only these {matched} matches"
     whole = f", {cov['whole']} of them searched whole" if store_outlines(store) else ""
+    if cov["unread"]:   # E-2: partly blind, and said
+        whole += f"; partly blind: {cov['unread']} readable assertions not searched"
     print(f"coverage: {cov['method']}, {reach}, over {cov['searched']} assertions{whole}; repositories: "
           + ", ".join(f"{printable(n)} ({len(seen[n]['refs'])} refs)" for n in scope))
     print(f"shown {shown} of {matched} matches; {hidden} superseded versions hidden"
@@ -557,12 +616,12 @@ def main(argv):
     g.add_argument("dir")
     g.add_argument("--name")
     for name, help_ in (("grep", "exact bytes, exhaustive"), ("regex", "SQLite regexp.c dialect, exhaustive"),
-                        ("find", "bm25, ranked")):
+                        ("find", "bm25, ranked"), ("ask", "bm25 and grep together, each one's coverage stated (Q-7)")):
         s = sub.add_parser(name, help=help_)
         s.add_argument("text")
         s.add_argument("--repo")
         s.add_argument("--all", action="store_true", help="also show superseded versions")
-        s.add_argument("--k", type=int, default=10 if name == "find" else None)
+        s.add_argument("--k", type=int, default=10 if name in ("find", "ask") else None)
         s.add_argument("--outlines", metavar="AUTHOR", help="return the nodes of this author's outlines (OL-4)")
     it = sub.add_parser("ingest-transcript", help="a conversation's messages into its log (SCM-7)")
     it.add_argument("path", nargs="?")
@@ -609,6 +668,10 @@ def main(argv):
             if args.outlines:
                 store.use_outlines(args.outlines.encode())
             return cmd_search(store, args.text, args.repo, args.cmd, args.all, args.k)
+        if args.cmd == "ask":
+            if args.outlines:
+                store.use_outlines(args.outlines.encode())
+            return cmd_ask(store, args.text, args.repo, args.all, args.k)
         if args.cmd == "coverage":
             return cmd_coverage(store)
         if args.cmd == "ingest-transcript":

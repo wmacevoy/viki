@@ -7,6 +7,7 @@ store always share one SQLite (a SQLCipher build supplies sqlite3_key too).
 import ctypes as C
 import json
 import os
+import time
 
 OK, EXISTS, DONE, NOTFOUND, FORKED, BLIND, EINVAL, EDENIED, ENOMEM, ESQL = range(10)
 ERASE, READ, SUPERSEDE, ORIGINATE = 1, 2, 4, 8
@@ -47,7 +48,23 @@ class Search(C.Structure):
 
 class Coverage(C.Structure):
     _fields_ = [("zMethod", C.c_char_p), ("bExhaustive", C.c_int), ("nSearched", C.c_int64),
-                ("nWhole", C.c_int64)]
+                ("nWhole", C.c_int64), ("nUnread", C.c_int64)]
+
+
+# C-3: the host's clock, which core calls to bound a timestamp as it arrives.
+NOW = C.CFUNCTYPE(C.c_int64, C.c_void_p)
+_now = NOW(lambda _ctx: int(time.time()))
+
+
+class Clock(C.Structure):
+    _fields_ = [("xNow", NOW), ("pCtx", C.c_void_p)]
+
+
+SYNC_NEVER, SYNC_DOMAIN, SYNC_PUBLISHED = 1, 2, 3   # D-1
+
+
+class Policy(C.Structure):
+    _fields_ = [("sync", C.c_int), ("names", C.POINTER(Bytes)), ("nNames", C.c_uint32)]
 
 
 class Hit(C.Structure):
@@ -63,7 +80,7 @@ def _default_lib():
 LIB = C.CDLL(os.environ.get("VIKI_STORE_LIB") or _default_lib())
 P = C.c_void_p
 for name, args, res in [
-    ("vk_open", [P, Bytes, C.POINTER(Grant), C.c_uint32, C.POINTER(P)], C.c_int),
+    ("vk_open", [P, Bytes, C.POINTER(Grant), C.c_uint32, C.POINTER(Clock), C.POINTER(Policy), C.POINTER(P)], C.c_int),
     ("vk_close", [P], C.c_int),
     ("vk_errmsg", [P], C.c_char_p),
     ("vk_put", [P, C.POINTER(Assertion), C.POINTER(Id)], C.c_int),
@@ -151,6 +168,11 @@ class Store:
         self._names = [principal] + [o for o, _ in others]
         grants = [(principal, rights)] + list(others)
         self._grant = (Grant * len(grants))(*[Grant(_b(n), r) for n, r in grants])
+        # D-1, this host's declaration: a diary merges only into a store of a principal
+        # it entitles, which is to say into the owner's own copies.
+        self._sync = (Bytes * len(self._names))(*[_b(n) for n in self._names])
+        self._policy = Policy(SYNC_DOMAIN, self._sync, len(self._names))
+        self._clock = Clock(_now, None)
         if LIB.sqlite3_open(path.encode(), C.byref(self.db)) != 0:
             raise VkError(f"cannot open {path}")
         if key is not None:
@@ -165,7 +187,8 @@ class Store:
         # only sets the cipher context.
         if LIB.sqlite3_exec(self.db, b"SELECT count(*) FROM sqlite_schema", None, None, None) != 0:
             self._fail(f"{path} is not readable: wrong key, or not a diary")
-        if LIB.vk_open(self.db, _b(principal), self._grant, len(grants), C.byref(self.st)) != OK:
+        if LIB.vk_open(self.db, _b(principal), self._grant, len(grants), C.byref(self._clock),
+                       C.byref(self._policy), C.byref(self.st)) != OK:
             self._fail(f"vk_open: {self.errmsg()}")
 
     def _fail(self, why):
@@ -352,6 +375,6 @@ class Store:
                 raise VkError(f"search: {self.errmsg()}")   # a cut-short list must not read as complete
             LIB.vk_search_coverage(C.byref(s), C.byref(cov))
             return ids, {"method": cov.zMethod.decode(), "exhaustive": bool(cov.bExhaustive),
-                         "searched": cov.nSearched, "whole": cov.nWhole}
+                         "searched": cov.nSearched, "whole": cov.nWhole, "unread": cov.nUnread}
         finally:
             LIB.vk_search_close(C.byref(s))

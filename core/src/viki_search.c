@@ -167,16 +167,24 @@ VkStatus vk_search_hit(VkSearch *s, VkHit *out){
 VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out){
     sqlite3_stmt *pSt = 0;
     VkStatus st = VK_OK;
+    /* E-2: what the method actually holds for each readable row. grep and regex
+    ** read the bodies themselves; bm25 holds what its index holds; vector holds
+    ** a row only with a vector under the chosen model. */
+    const char *zHeld = "1";
 #ifndef VK_OMIT_VECTOR   /* ENV-3 */
     int bVec = s->pMethod==&vkVector;
 #else
     int bVec = 0;
 #endif
-    int rc = vk_prepare(s->p, bVec
-        ? "SELECT count(*), 0 FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a")
-          " AND EXISTS(SELECT 1 FROM vk_vec v WHERE v.seq=a.seq AND v.model=?1)"
-        : "SELECT count(*), coalesce(sum(NOT EXISTS(SELECT 1 FROM vk_onode o WHERE o.target=a.id AND o.author=?1)),0)"
-          " FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a"), &pSt);
+    char zSql[600];
+    int rc;
+    if( bVec ) zHeld = "EXISTS(SELECT 1 FROM vk_vec v WHERE v.seq=a.seq AND v.model=?1)";
+    else if( s->pMethod==&vkBm25 ) zHeld = "EXISTS(SELECT 1 FROM vk_bm25_docsize d WHERE d.id=a.seq)";
+    sqlite3_snprintf(sizeof zSql, zSql,
+        "SELECT coalesce(sum(%s),0), %s, count(*) FROM assertion a WHERE a.body IS NOT NULL AND " VK_VALID("a"),
+        zHeld, bVec ? "0"
+          : "coalesce(sum(NOT EXISTS(SELECT 1 FROM vk_onode o WHERE o.target=a.id AND o.author=?1)),0)");
+    rc = vk_prepare(s->p, zSql, &pSt);
     if( rc!=SQLITE_OK ) return vk_sql_status(s->p, rc);
     vk_bind_bytes(pSt, 1, bVec ? vk_vector_model(s->p) : vk_outline_author(s->p));
     rc = vk_step(pSt);
@@ -185,6 +193,7 @@ VkStatus vk_search_coverage(VkSearch *s, VkCoverage *out){
         out->bExhaustive = s->pMethod->bExhaustive;
         out->nSearched = sqlite3_column_int64(pSt, 0);
         out->nWhole = sqlite3_column_int64(pSt, 1);
+        out->nUnread = sqlite3_column_int64(pSt, 2) - out->nSearched;
     }else{
         st = vk_sql_status(s->p, rc);
     }

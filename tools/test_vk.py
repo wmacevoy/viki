@@ -251,6 +251,35 @@ def t_q6_regex(s):
     check(rc == 2 and out.startswith("refused: regex") and "Q-6" in out, "a pattern that does not compile is refused, naming why", out)
 
 
+def t_q7(s):
+    a = s.repo("alpha")
+    s.write(a, "a.md", "the sensor went silent\n")
+    s.write(a, "b.md", "the lotsensor log\n")      # grep's substring; bm25 has no such word
+    s.write(a, "c.md", "nothing here\n")
+    s.commit(a, "notes")
+    s.vk("ingest-git", a)
+    rc, out = s.vk("ask", "sensor")
+    hits = [ln for ln in out.splitlines() if ln.startswith("file  ")]
+    check(rc == 0 and len(hits) == 2, "the union of both methods, each hit once", out)
+    check(any(":a.md" in h and h.endswith("by bm25+grep") for h in hits)
+          and any(":b.md" in h and h.endswith("by grep") for h in hits), "each hit says which methods found it", out)
+    cov = [ln for ln in out.splitlines() if ln.startswith("coverage: ")]
+    check(len(cov) == 2 and cov[0].startswith("coverage: bm25: ranked") and cov[1].startswith("coverage: grep: exhaustive"),
+          "each method's coverage is stated separately, never one for the whole", out)
+
+
+def t_c3(s):
+    a = s.repo("alpha")
+    s.write(a, "a.md", "written west of Greenwich\n")
+    e = dict(s.env(), GIT_COMMITTER_DATE="2026-11-09T10:00:00-07:00", GIT_AUTHOR_DATE="2026-11-09T10:00:00-07:00")
+    subprocess.run(["git", "-C", a, "add", "-A"], check=True, capture_output=True, env=e)
+    subprocess.run(["git", "-C", a, "commit", "-q", "-m", "local time"], check=True, capture_output=True, env=e)
+    rc, out = s.vk("ingest-git", a)
+    check(rc == 0 and "1 commits read" in out, "a commit in a local zone goes in, its ts in UTC", out)
+    rc, out = s.vk("grep", "Greenwich")
+    check(rc == 0 and ":a.md" in out, "and is found", out)
+
+
 def t_v5(s):
     a = s.repo("alpha")
     # A terminal runs escape sequences it is sent: OSC 52 writes the clipboard, CSI recolours,
@@ -324,7 +353,8 @@ def t_ol4(s):
         cut = body.index(b"# Beta")
         outline = json.dumps([{"title": "Alpha", "lo": 0, "hi": cut},
                               {"title": "Beta", "lo": cut, "hi": len(body)}]).encode()
-        st.put(b"outline", vk.outline_key(tid, b"vk.ingest.git"), outline, reference=tid, derived_from=[tid])
+        st.put(b"outline", vk.outline_key(tid, b"vk.ingest.git"), outline, ts=b"2026-11-09T11:00:00+00:00",
+               reference=tid, derived_from=[tid])
     finally:
         st.close()
     rc, out = s.vk("grep", "marker-ol4", "--outlines", "vk.ingest.git")
@@ -413,11 +443,13 @@ def main():
     run("Q-4", "each hit says current, superseded, or one head of a fork", t_q4)
     run("Q-6", "find is bm25: ranked, OR'd, blind without an index", t_q6)
     run("Q-6", "regex is SQLite's regexp.c dialect, exhaustive, and refuses a bad pattern", t_q6_regex)
+    run("C-3", "the host writes every ts in UTC, a local-zone commit included", t_c3)
+    run("Q-7", "ask combines bm25 and grep and states each one's coverage", t_q7)
     run("V-5", "untrusted text reaches the terminal with its control characters spelled out", t_v5)
     run("N-7", "the diary is keyed with a raw key from a mode-600 file", t_n7)
     run("OL-4", "vk.py shows the section of the chosen outline a hit is in", t_ol4)
     run("SCM-7", "a transcript goes in as a log, once, and a range of it can be forgotten", t_scm7)
-    print(f"{failed} of 12 failed")
+    print(f"{failed} of 14 failed")
     return failed != 0
 
 

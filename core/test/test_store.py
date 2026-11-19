@@ -5,6 +5,7 @@ requirements, so a framing or resolution bug has to be made twice to pass.
 Histories are random but seeded. Prints the lines gate.py reads.
 """
 import ctypes as C
+import datetime
 import hashlib
 import os
 import random
@@ -46,7 +47,20 @@ class Search(C.Structure):
     _fields_ = [("p", C.c_void_p), ("m", C.c_void_p), ("pSt", C.c_void_p)]
 
 
-LIB.vk_open.argtypes = [C.c_void_p, Bytes, C.POINTER(Grant), C.c_uint32, C.POINTER(C.c_void_p)]
+NOW = C.CFUNCTYPE(C.c_int64, C.c_void_p)
+
+
+class Clock(C.Structure):
+    _fields_ = [("xNow", NOW), ("pCtx", C.c_void_p)]
+
+
+class Policy(C.Structure):
+    _fields_ = [("sync", C.c_int), ("names", C.POINTER(Bytes)), ("nNames", C.c_uint32)]
+
+
+LIB.vk_open.argtypes = [C.c_void_p, Bytes, C.POINTER(Grant), C.c_uint32, C.POINTER(Clock), C.POINTER(Policy),
+                        C.POINTER(C.c_void_p)]
+_fixed_now = NOW(lambda _ctx: 1798761600)   # C-3: 2027-01-01T00:00:00Z, after every ts below
 LIB.vk_close.argtypes = [C.c_void_p]
 LIB.vk_ingest.argtypes = [C.c_void_p, C.POINTER(Assertion), C.POINTER(Id), C.POINTER(Report)]
 LIB.vk_merge.argtypes = [C.c_void_p, C.c_void_p, C.POINTER(Report)]
@@ -66,6 +80,13 @@ RANGE = b"tombstone.range"
 
 def b(v):
     return Bytes(v, len(v))
+
+
+def ts_of(kind, n):
+    """A distinct C-3 timestamp per row: n seconds into 2026, the kind of row as the fraction."""
+    s = 1767225600 + n   # 2026-01-01T00:00:00Z
+    d = datetime.datetime.fromtimestamp(s, datetime.timezone.utc)
+    return d.strftime("%Y-%m-%dT%H:%M:%S").encode() + b".%dZ" % kind
 
 
 def field(v):
@@ -88,7 +109,11 @@ class Peer:
         assert SQL.sqlite3_open(b":memory:", C.byref(self.db)) == 0
         self.names = [b"alice", b"bob"]
         self.grants = (Grant * 2)(*[Grant(b(n), ALL) for n in self.names])
-        assert LIB.vk_open(self.db, b(b"alice"), self.grants, 2, C.byref(self.st)) == OK
+        self.clock = Clock(_fixed_now, None)
+        self.sync = (Bytes * 2)(*[b(n) for n in self.names])
+        self.policy = Policy(2, self.sync, 2)   # D-1 domain: alice and bob
+        assert LIB.vk_open(self.db, b(b"alice"), self.grants, 2, C.byref(self.clock), C.byref(self.policy),
+                           C.byref(self.st)) == OK
 
     def close(self):
         LIB.vk_close(self.st)
@@ -183,7 +208,7 @@ def new_row(rng, n, known):
     akey = rng.choice([b"a", b"b", b"c"])
     same = [i for i, k in known if k == akey]
     k = rng.randint(0, min(3, len(same)))
-    r = dict(log=b"", pos=0, skip=[], author=author, kind=b"note", akey=akey, ts=b"t%d" % n, ref=b"",
+    r = dict(log=b"", pos=0, skip=[], author=author, kind=b"note", akey=akey, ts=ts_of(1, n), ref=b"",
              rank=bytes(15) + bytes([rng.randint(0, 3)]), sup=rng.sample(same, k), der=[],
              body=(b"tok%d \0\xff " % rng.randint(0, 5)) + b"x" * rng.randint(0, 9))
     r["id"] = frame_id(r)
@@ -192,7 +217,7 @@ def new_row(rng, n, known):
 
 def tombstone(rng, n, target):
     r = dict(log=b"", pos=0, skip=[], author=rng.choice([b"alice", b"mallory"]), kind=b"tombstone", akey=target,
-             ts=b"e%d" % n, ref=b"",
+             ts=ts_of(2, n), ref=b"",
              rank=bytes(16), sup=[], der=[], body=target)
     r["id"] = frame_id(r)
     return r
@@ -207,7 +232,7 @@ def skips(pos):
 def logged(n, author, ids):
     pos = len(ids) + 1
     r = dict(log=b"L", pos=pos, skip=[ids[t] for t in skips(pos)], author=author, kind=b"reading", akey=b"l%d" % n,
-             ts=b"l%d" % n, ref=b"", rank=bytes(16), sup=[], der=[], body=b"tok%d" % (n % 6))
+             ts=ts_of(3, n), ref=b"", rank=bytes(16), sup=[], der=[], body=b"tok%d" % (n % 6))
     r["id"] = frame_id(r)
     ids[pos] = r["id"]
     return r
@@ -221,7 +246,7 @@ def range_tomb(rng, n, target, ids):
         q &= q - 1
     akey = hashlib.sha256(b"viki.log.v3\0" + field(target) + field(b"L")).digest()
     r = dict(log=b"L", pos=to, skip=[], author=rng.choice([b"alice", b"mallory"]), kind=RANGE, akey=akey,
-             ts=b"r%d" % n, ref=target, rank=bytes(16), sup=[], der=[], body=start.to_bytes(8, "big") + b"".join(carried))
+             ts=ts_of(4, n), ref=target, rank=bytes(16), sup=[], der=[], body=start.to_bytes(8, "big") + b"".join(carried))
     r["id"] = frame_id(r)
     return r
 

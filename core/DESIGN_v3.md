@@ -146,6 +146,19 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 - **`vk_derivatives` reads V-1's other direction**: the rows whose `derived_from` names an id, by the
   `edge` key `(parent, rel)`. `edge` is filled from each frame as it is stored, never copied from a
   source (V-1a).
+- **The host passes two ports to `vk_open`: a clock (C-3) and a sync policy (D-1).** Neither has a
+  default, and a missing one fails the open. Core calls the clock only to bound a `ts` as it
+  arrives, and keeps nothing it returns. The policy is checked in `vk_merge` against the *source*:
+  a `never` source is refused, and any other merges only into a store whose principal it names.
+  Both are host-supplied for now, as grants are, until the diary carries them under signatures.
+- **A `ts` is checked in two steps.** A fixed-shape check in C covers 19 positions, an optional
+  fraction, and `Z` or `+00:00`. SQLite then confirms it is a real moment, by a round trip through
+  the epoch, and checks the bound. `strftime` alone prints `02-30` and hour 24 back as given (seen
+  on 3.40 and on 3.53). A leap second (`:60`) is refused. An empty `ts` is allowed: a writer with
+  no wall clock says so. Writes refuse a bad `ts`; merge quarantines it (C-3c).
+- **Coverage counts what it could not read (E-2).** `nUnread` is the readable assertions with a
+  body that the method holds nothing for. For vector, that is a row with no vector under the
+  chosen model; for bm25, a row the index lacks. grep and regex read the bodies, so theirs is 0.
 
 ## The first host: `tools/vk.py` (REQ3/SCM, `DOGFOOD_v3.md`)
 
@@ -172,6 +185,12 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
   timing are visible.
 - **Superseded versions are hidden by default, and the number hidden is said.** Without that, a phrase
   that lived through ten commits returned ten rows. `--all` shows them, each marked (Q-4).
+- **`ask` combines bm25 and grep (Q-7).** Hits are merged by id in bm25's order, then grep's. Each
+  hit names the methods that found it, and each method's coverage gets its own line, because a
+  ranked "not found" and an exhaustive one are different claims.
+- **The host's ports** (`tools/vkstore.py`): the clock is `time.time()`. The policy is `domain`,
+  naming the principals the host entitles, which in practice are the owner's own copies. A git
+  commit's `ts` is its commit time in UTC; the offset git reports is not kept.
 - **Everything printed from the diary goes through `printable()`** (V-5): bodies, paths, outline
   titles, refs and names are someone else's text, and a terminal runs the escape sequences it is sent
   (OSC 52 writes the clipboard). Control characters and the bidi overrides are spelled out as `\xNN`
@@ -224,7 +243,8 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 - `tools/test_vk.py`: the host against scratch git repositories, with fixed names and dates. It is
   run by the same check.
 - `test/build-check.sh`: what a build contains, read from its objects. C-1: core imports no clock
-  function and its SQL asks SQLite for no time. ENV-3: core links without vectors into a program
+  function and its SQL asks SQLite for no time. V-4a: core imports no socket, process or loader
+  function, so it cannot call a judge. ENV-3: core links without vectors into a program
   that stores and searches (`test/novector.c`), and no object references an embedding runtime.
 - `test/refusal-check.py`: E-3, read from the source. Every literal that can reach `vk_refuse` begins
   with a requirement ID, and `vk_refuse` is given nothing but a literal or `zBad`.
@@ -232,7 +252,8 @@ their databases unkeyed, so encryption at rest (N-7) is not exercised here.
 
 ## Not done
 
-Signatures (so `author` is unauthenticated), grants read from the diary, the wire format,
+Signatures (so `author` is unauthenticated), grants and the sync policy read from the diary,
+W-9's reason codes (the list is not yet named), the wire format,
 sync, Q-4's relations (L is not built), OL-5's flag, a host command that asks a judge for
 an outline, compressing deltas or whole bodies, measuring the DS
 thresholds, the withdraw tier, keys, references, relations, an ESP32 build.

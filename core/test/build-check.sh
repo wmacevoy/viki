@@ -1,6 +1,7 @@
 #!/bin/sh
 # build-check.sh -- what a build of core contains, checked from its objects:
 #   C-1    the layer calls no clock
+#   V-4a   core imports nothing that could call a judge: no socket, process or loader
 #   ENV-3  a build without vectors links no vector code and no embedding runtime
 # Run by store-check.sh, which sets ROOT, OUT and SQLITE; prints PASS/FAIL lines
 # for the gate and exits nonzero on any FAIL.
@@ -24,6 +25,17 @@ sql=$(cd "$ROOT/core/src" && grep -lE "'now'|CURRENT_(TIME|DATE|TIMESTAMP)" $(fo
 [ -n "$sql" ] && bad="$bad sql:$sql"
 if [ -z "$bad" ]; then say "PASS C-1 core imports no clock function and asks SQLite for no time"
 else say "FAIL C-1 core reads a clock:$bad"; fi
+
+# V-4a. Judging is a connector's, behind its own API: core has no way to reach
+# one. Its objects import no socket, process or loader function.
+calls='^(socket|connect|bind|listen|accept|getaddrinfo|gethostbyname|send|sendto|recv|recvfrom|fork|vfork|execl|execlp|execle|execv|execve|execvp|execvpe|posix_spawn|posix_spawnp|system|popen|dlopen|dlsym)$'
+bad=""
+for f in $CORE; do
+  [ -f "$OUT/obj/$f.o" ] || { bad="$bad $f(build)"; continue; }
+  for s in $(nm -u "$OUT/obj/$f.o" | awk '{print $NF}' | grep -E "$calls"); do bad="$bad $f:$s"; done
+done
+if [ -z "$bad" ]; then say "PASS V-4a core imports no network, process or loader function, so it cannot call a judge"
+else say "FAIL V-4a core can reach outside itself:$bad"; fi
 
 # ENV-3. Without viki_vector.c and with VK_OMIT_VECTOR, core links into a static
 # program that stores and searches; nothing in it is vector code or a model runtime.

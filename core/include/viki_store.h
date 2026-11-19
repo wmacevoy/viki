@@ -80,10 +80,24 @@ void vk_outline_key(const VkId target, VkBytes author, VkId out);
 /* The id of an assertion: pure, and needs no store. */
 void vk_assertion_id(const VkAssertion *a, VkId out);
 
-/* grants and principal are borrowed for the life of the store. A later
-** version reads grants from the diary; for now the host supplies them. */
+/* C-3: the host's clock, in seconds since 1970-01-01T00:00:00Z. Core calls it
+** only to bound a timestamp as it arrives (C-3a), and keeps nothing it returns. */
+typedef struct { int64_t (*xNow)(void *pCtx); void *pCtx; } VkClock;
+
+/* D-1: what a diary may sync with. NEVER: no merge takes it as a source (D-2).
+** DOMAIN: merges only into a store whose principal is one of names. PUBLISHED:
+** the same, where names are the hub's; that a hub serves whoever reaches it is
+** the host's to know. A later version reads this from the diary. */
+enum { VK_SYNC_NEVER = 1, VK_SYNC_DOMAIN = 2, VK_SYNC_PUBLISHED = 3 };
+typedef struct { int sync; const VkBytes *names; uint32_t nNames; } VkSyncPolicy;
+
+/* grants, principal, clock and policy are borrowed for the life of the store.
+** A later version reads grants and policy from the diary; for now the host
+** supplies them. VK_EINVAL, with no store to name why, if the clock or the
+** policy is missing or the policy is not one of the three: neither has a default. */
 VkStatus vk_open(sqlite3 *db, VkBytes principal, const VkGrant *grants,
-                 uint32_t nGrants, VkStore **ppOut);
+                 uint32_t nGrants, const VkClock *clock, const VkSyncPolicy *policy,
+                 VkStore **ppOut);
 int  vk_close(VkStore *p);              /* the sqlite3_finalize-style rc */
 const char *vk_errmsg(const VkStore *p); /* names the requirement refused */
 int vk_sqlite_code(const VkStore *p);    /* the SQLite code behind the last VK_ESQL */
@@ -241,12 +255,16 @@ typedef struct {
 
 /* What a search covered (Q-2). nWhole: how many of those were searched whole,
 ** with no outline by the reader's chosen author (OL-4). For vector, nSearched
-** counts the assertions with a vector under the chosen model, and nWhole is 0. */
+** counts the assertions with a vector under the chosen model, and nWhole is 0.
+** nUnread (E-2): readable assertions this method could not search -- for vector,
+** those with no vector under the model; for bm25, those its index does not hold.
+** More than 0 means the answer is partly blind. */
 typedef struct {
     const char *zMethod;
     int bExhaustive;
     int64_t nSearched;
     int64_t nWhole;
+    int64_t nUnread;
 } VkCoverage;
 
 /* VK_BLIND if the method fails its self-check. */

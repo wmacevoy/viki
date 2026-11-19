@@ -14,6 +14,10 @@ same discipline `FINDINGS.md` uses.
 Read `§21` first: it records that stored data is disposable pre-alpha, which
 un-gates roughly half of what follows.
 
+**PRIORITY as of 2026-11-19, ahead of everything below: §58, adopt strong
+domains for core's boundaries.** Warren: *"add a priority note about adopting
+the strong-domain-based-design for this."*
+
 Priority as of 2026-08-20, per Warren's framing (primary consumer is an agent
 working online; his own access is secondary and may be offline):
   1. §24 capture/structure loop -- the PDA spec, and the best-specified need here
@@ -2357,3 +2361,27 @@ Two candidate fixes, and the second is required whichever is chosen:
 
 Until then, **anything that writes a memoir must `reindex` after**, and that
 is a workaround, not the fix.
+
+## §58 PRIORITY: adopt strong domains for core's boundaries (Warren, 2026-11-19)
+
+*"add a priority note about adopting the strong-domain-based-design for this."* -- Warren,
+2026-11-19, in the session that built C-3, C-4, D-1/D-2, E-2, Q-7 and V-4a.
+
+**"This"** *(inferred; confirm)*: viki core's boundaries, where bytes another party wrote come
+in: a merge source's rows (E-4, M-7 quarantine), a timestamp (C-3), the sync policy and clock the
+host passes to `vk_open` (D-1, D-2, C-1), an outline's shape (OL-1), a delta (DS-1), a regex
+pattern (Q-6). Each is checked today by hand-written C and by tests, which show the inputs tried.
+
+**The approach** is Warren's strong-domain-driven design, in his own repository (private;
+nothing of it is copied here): a domain is a type whose state is all private, and each holds a
+machine-checked proof that no method commits a memory error, every loop ends, and its invariant
+always holds, derived from the shipped source rather than a hand copy.
+
+**The first collision, to decide before any code:** that prover reads C++ classes; viki core is
+C99, by SHAPE-9 ("one person can read the whole core") and the C style CONTRIBUTING names. Either
+the prover learns C (structs with opaque state behind a header), or core's boundary types move to
+C++, which is a fundamental-shape change (SE1/W14). Not decided.
+
+**Done when** *(proposed)*: a map of core's boundaries, in the form that repository uses,
+lists each place outside bytes come in, and the first one (recommended: `ts_shape_ok`/`ts_error`,
+small and fresh) is proved, with what is assumed named.
